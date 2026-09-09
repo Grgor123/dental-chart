@@ -1,4 +1,4 @@
-import type { ToothStatus } from '../types/dental';
+import type { ToothStatus, EndoStage } from '../types/dental';
 
 export interface StatusStyle {
   /** Slovene label shown in the legend and detail panel */
@@ -99,28 +99,6 @@ export const STATUS_STYLES: Record<ToothStatus, StatusStyle> = {
   caries_treated: { label: 'Plomba', fill: 'none' },
   filling: { label: 'Plomba (obstoječa)', fill: 'none' },
   crown: { label: 'Prevleka / krona', fill: '#9FE1CB' },
-  // Endodontic treatment is now marked with a symbol — a plain circle
-  // drawn inside the tooth's own tloris square (`endo-circle`, sized in
-  // ToothTopView.tsx to match the same central ~16×16 area other special
-  // symbols use), not a flat whole-tooth fill (was green, #C0DD97) —
-  // per the doctor's revised spec, replacing the flat-fill approach the
-  // same way extracted/missing/prosthesis already forgo a fill in favor
-  // of a symbol. Blue circle = treatment done. Square outline itself
-  // stays the default dark (`border` unset), same as an ordinary tooth —
-  // only the circle carries the status color.
-  endo: { label: 'Endodontsko zdravljenje (dokončano)', fill: 'none', symbol: 'endo-circle', symbolColor: DONE_COLOR },
-  // The "not yet done / in progress" counterpart to `endo` above — same
-  // circle-in-square symbol, red instead of blue. Two separate status
-  // values (rather than one `endo` status plus a boolean flag, the
-  // approach the earlier — since-removed — root-canal-line feature used)
-  // because that's the same pattern already established for other
-  // two-state pairs in this file (extracted/missing).
-  endo_planned: { label: 'Endodontsko zdravljenje (potrebno / v teku)', fill: 'none', symbol: 'endo-circle', symbolColor: ENDO_PLANNED_COLOR },
-  // Third state of the same pair: a root canal done before this practice
-  // started tracking the tooth — grey instead of red/blue, per Monika's
-  // explicit request to extend the missing/extraction "status vs.
-  // to-be-done vs. done" pattern to the other treatment pairs on the chart.
-  endo_existing: { label: 'Endodontsko zdravljenje (obstoječe)', fill: 'none', symbol: 'endo-circle', symbolColor: STATUS_COLOR },
   // Border unified to the same dark #1f1e20 every ordinary tooth's own
   // outline uses (was a saturated purple, #534AB7, paired with the fill)
   // — per Monika's explicit request extending the same square-outline
@@ -161,6 +139,25 @@ export const STATUS_STYLES: Record<ToothStatus, StatusStyle> = {
   // practice started tracking the tooth, same reasoning as endo_existing
   // above.
   overlay_existing: { label: 'Overlay (obstoječ)', fill: 'none', symbolColor: STATUS_COLOR },
+  // Fissure sealant (zalitje fisur) — used to be its own independent field
+  // (ToothData.sealant, a SealantStage) rather than a real status, on the
+  // reasoning that it needed to combine freely with whatever else was going
+  // on for a tooth (e.g. an implant with sealant planned on top, both at
+  // once). Per Monika's explicit clinical correction, that reasoning was
+  // wrong — sealant and a status like implant are not compliant services on
+  // the same tooth, so there was never a real case for combining them.
+  // Converted to a real three-state ToothStatus set instead, same
+  // planned/done/existing pattern and same shared TODO_COLOR/DONE_COLOR/
+  // STATUS_COLOR as endo/overlay above — presented in the same status
+  // picker/toolbar as everything else, rather than a separate mechanism.
+  // Same "no fill/symbol of its own, marked entirely by BridgeRow's own
+  // tilde" shape as overlay's cap — symbolColor is BridgeRow.tsx's own
+  // source of truth for the tilde's color (sealantColorFor() there), read
+  // straight off `statuses` (surfaces.all) now instead of a separate
+  // sealantByFdi prop.
+  sealant_planned: { label: 'Zalitje fisur (predvideno)', fill: 'none', symbolColor: TODO_COLOR },
+  sealant: { label: 'Zalitje fisur', fill: 'none', symbolColor: DONE_COLOR },
+  sealant_existing: { label: 'Zalitje fisur (obstoječe)', fill: 'none', symbolColor: STATUS_COLOR },
   // Still physically present — a real tooth with its normal fill/border/
   // detail — flagged for removal with a red X on top. No fill override
   // (stays 'none' so per-surface findings underneath still show normally,
@@ -215,6 +212,54 @@ export const STATUS_STYLES: Record<ToothStatus, StatusStyle> = {
   // next to a removable-denture tooth still gets joined to it by the same
   // line, unlike a plain bridge-anchor `crown` (visually identical but
   // belongs to `BridgeRow`'s separate bracket-over-a-run mechanism
-  // instead — see `isBridgeAnchorStatus()` there).
+  // instead — see `isAnchorStatus()` there).
   prosthesis_crown: { label: 'Krona (nosilec proteze)', fill: '#9FE1CB' },
 };
+
+// Canonical display order for every UI that lists all statuses —
+// StatusLegend.tsx and the click-to-edit StatusPicker (ToothDetailPanel.tsx)
+// both read this rather than keeping their own separate lists, so the two
+// can't silently drift apart. `bridge_anchor`, `planned`, `granuloma`,
+// `diastema`, and `root_only` are gone from ToothStatus entirely (see
+// CLAUDE.md's "Status color palette" for the reasoning behind each) so they
+// were never candidates for this list in the first place.
+//
+// This is the FULL set — StatusLegend.tsx filters `prosthesis_crown` back
+// out for its own display (it renders identically to `crown` in a bare
+// swatch with no room for a label to disambiguate them), but a picker shows
+// each option's label right next to its swatch, so the two are perfectly
+// distinguishable there — excluding it from this canonical list would make
+// the status unreachable through the UI entirely, which filtering it in one
+// specific *consumer* doesn't risk.
+export const STATUS_ORDER: ToothStatus[] = [
+  'healthy', 'caries', 'caries_treated', 'filling', 'crown', 'prosthesis_crown',
+  'implant',
+  'bridge_pontic', 'abrasion', 'overlay_planned', 'overlay', 'overlay_existing',
+  'sealant_planned', 'sealant', 'sealant_existing',
+  'impacted', 'extraction_planned', 'extracted', 'missing', 'prosthesis',
+];
+
+// Endodontic treatment (kanal) — no longer a ToothStatus (see EndoStage in
+// types/dental.ts for why: it needs to combine freely with whatever other
+// status a tooth already has, e.g. a filling AND a completed root canal at
+// once, which competing for the single surfaces.all slot couldn't support).
+// Labels/colors kept here, next to every other shared status color, since
+// EndoSwatch.tsx/StatusToolbar.tsx/StatusLegend.tsx all need them the same
+// way they'd need a StatusStyle entry — just addressed by EndoStage instead
+// of ToothStatus.
+export const ENDO_STAGE_LABELS: Record<EndoStage, string> = {
+  done: 'Endodontsko zdravljenje (dokončano)',
+  planned: 'Endodontsko zdravljenje (potrebno / v teku)',
+  existing: 'Endodontsko zdravljenje (obstoječe)',
+};
+
+// Same red-todo/blue-done/grey-existing pattern as every other three-state
+// marker on the chart — `planned` reads from ENDO_PLANNED_COLOR rather than
+// the shared TODO_COLOR, same as it did when endo was still a ToothStatus
+// (see ENDO_PLANNED_COLOR's own comment above for why this one symbol needs
+// its own slightly more saturated red).
+export function endoColorFor(stage: EndoStage): string {
+  if (stage === 'done') return DONE_COLOR;
+  if (stage === 'existing') return STATUS_COLOR;
+  return ENDO_PLANNED_COLOR;
+}

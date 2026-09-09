@@ -1,7 +1,13 @@
-import type { ToothType, SurfaceMap, ToothStatus, Surface } from '../../types/dental';
+import type { MouseEvent } from 'react';
+import type { ToothType, SurfaceMap, ToothStatus, Surface, EndoStage } from '../../types/dental';
 import type { Arch } from '../../data/toothMeta';
-import { STATUS_STYLES, TODO_COLOR, DONE_COLOR, STATUS_COLOR } from '../../data/statusStyles';
+import { STATUS_STYLES, TODO_COLOR, DONE_COLOR, STATUS_COLOR, endoColorFor } from '../../data/statusStyles';
 import { StatusSymbol } from '../ui/StatusSymbol';
+
+// Same selection-highlight color TlorisRow's own outline already uses for
+// selectedFdi, reused here so a selected surface/whole-tooth target reads as
+// the same kind of "selected" everywhere on the chart, not a different color.
+const SELECTED_COLOR = 'var(--tooth-selected, #2e6e62)';
 
 const BORDER = '#1f1e20';
 const BAND_W = 10;
@@ -21,8 +27,9 @@ const ABRASION_MARK = '#9D1616';
 // explicit request to unify them; the stroke width no longer depends on
 // which status's bounding box happens to be passed in (see LINE_WIDTH
 // below, passed explicitly rather than left to StatusSymbol's own
-// box-relative default formula). endo/endo_planned's circle is the one
-// deliberate exception, at 3px — see its own comment below.
+// box-relative default formula). The endo-circle (drawn independently of
+// this generic symbol block — see endoStage below) is the one deliberate
+// exception, at 3px.
 const PROSTHESIS_X_SIZE = 16;
 const LINE_WIDTH = 1;
 // These five also skip the per-surface triangle subdivisions, joining
@@ -37,7 +44,7 @@ const LINE_WIDTH = 1;
 // present, so it keeps its normal per-surface subdivisions/findings, with
 // just a red X drawn over the top (see the symbol block below). A bridge
 // anchor is just a plain `crown` (there's no separate `bridge_anchor`
-// status anymore — see `isBridgeAnchorStatus()` in BridgeRow.tsx), so it
+// status anymore — see `isBridgeMemberStatus()` in BridgeRow.tsx), so it
 // already gets this same flat treatment via `crown` itself.
 // prosthesis_crown is included specifically so it keeps rendering exactly
 // like `crown` (its whole point, per statusStyles.ts) now that `crown`
@@ -45,13 +52,27 @@ const LINE_WIDTH = 1;
 // existing entry here should be added alongside it, not left to silently
 // diverge.
 const FLAT_INNER_STATUSES: ToothStatus[] = ['crown', 'implant', 'missing', 'extracted', 'prosthesis_crown'];
+// Whole-tooth statuses that render with NO per-surface detail at all — every
+// FLAT_INNER_STATUSES entry (flat square, no triangles/dots), plus
+// bridge_pontic/prosthesis (skip subdivision the same way, via
+// isBridgeMember/isProsthesis above) and impacted (ToothTopView returns an
+// empty <svg> before any of this runs at all). Exported so
+// ToothDetailPanel.tsx can warn when a surface-level edit on one of these
+// teeth would have no visible effect on the chart — without this, tapping a
+// surface chip under e.g. `implant` silently does nothing, which reads as a
+// broken tap rather than "no effect by design." Kept as one predicate here,
+// next to FLAT_INNER_STATUSES itself, rather than a second hand-maintained
+// list elsewhere that could drift out of sync with this one.
+export function hidesSurfaceDetail(status: ToothStatus | undefined): boolean {
+  return status === 'bridge_pontic' || status === 'prosthesis' || status === 'impacted' || (!!status && FLAT_INNER_STATUSES.includes(status));
+}
 // Caries dot: 3px across (radius 1.5), drawn at the center of whichever
 // individual surface (zone triangle, or the occlusal rectangle) resolves
 // to 'caries'/'caries_treated' — see cariesDotColor() and its call sites
 // below. Not tied to LINE_WIDTH: this is a filled marker, not a stroked
 // line, so it has its own size independent of the line-width convention.
 const CARIES_DOT_RADIUS = 1.5;
-// Dental post (zobni kolček/zatič): started as a plain 10px vertical line
+// Dental post (zobni zatiček): started as a plain 10px vertical line
 // touching the square's own top/bottom edge and extending outward past it
 // — swapped for a sharp filled triangle instead, per Monika's explicit
 // follow-up, same base-at-the-edge/tip-10-units-out footprint the line
@@ -72,8 +93,25 @@ interface ToothTopViewProps {
   type: ToothType;
   arch: Arch;
   surfaces?: SurfaceMap;
-  /** Dental post (zobni kolček) — see ToothData.post. */
+  /** Dental post (zobni zatiček) — see ToothData.post. */
   hasPost?: boolean;
+  /**
+   * Endodontic treatment (kanal) — independent of `surfaces`, same reasoning
+   * as `hasPost` above: it needs to coexist with whatever ToothStatus the
+   * tooth already has (a filling and a completed root canal at once, say),
+   * not compete for the single surfaces.all slot. See EndoStage in
+   * types/dental.ts.
+   */
+  endoStage?: EndoStage;
+  /**
+   * Direct-click targeting for the new selection/paint flow (PatientChart.tsx)
+   * — fired per zone (or 'all' for a flat/skip-subdivision/impacted tooth,
+   * which has no individual zones to click). fdi isn't passed back here;
+   * TlorisRow.tsx already has it in scope and wraps this closure with it.
+   */
+  onTargetClick?: (target: Surface | 'all', e: MouseEvent) => void;
+  /** Whether the given target is currently in the active selection — drives the highlight overlay drawn on top of that zone/square. */
+  isTargetSelected?: (target: Surface | 'all') => boolean;
 }
 
 type Zone = 'top' | 'right' | 'bottom' | 'left' | 'center';
@@ -149,8 +187,12 @@ function dotPositionFor(zone: Exclude<Zone, 'center'>, anterior: boolean, points
   return [cx + (dx / dist) * SIDE_DOT_INWARD_SHIFT, cy + (dy / dist) * SIDE_DOT_INWARD_SHIFT];
 }
 
-function statusFor(surfaces: SurfaceMap | undefined, surface: Surface | 'o'): ToothStatus {
-  return (surfaces?.[surface as Surface] ?? surfaces?.all ?? 'healthy') as ToothStatus;
+// Exported so ToothDetailPanel.tsx (surface chips) reuses this exact
+// resolution rule — surface override, else surfaces.all, else 'healthy' —
+// instead of reimplementing it. The old `Surface | 'o'` parameter type was
+// redundant: 'o' is already a member of Surface via PostSurface.
+export function statusFor(surfaces: SurfaceMap | undefined, surface: Surface): ToothStatus {
+  return (surfaces?.[surface] ?? surfaces?.all ?? 'healthy') as ToothStatus;
 }
 
 function fillFor(status: ToothStatus): string {
@@ -171,7 +213,7 @@ function regionFillFor(status: ToothStatus): string {
 // (okluzalna); anterior teeth get 4 regions meeting at a short collapsed
 // line instead of a point (no okluzalna) — geometry traced against
 // dental chart template.jpg.
-export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopViewProps) {
+export function ToothTopView({ fdi, type, arch, surfaces, hasPost, endoStage, onTargetClick, isTargetSelected }: ToothTopViewProps) {
   const anterior = type === 'ant';
   const zones = zoneSurfaces(fdi, arch);
 
@@ -184,9 +226,20 @@ export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopVie
   // and clipped against the perio ruler's own last horizontal line — see
   // CLAUDE.md's "Impacted tooth" section. The 28×28 viewBox is kept (not an
   // empty fragment) purely so this still behaves like every other tooth's
-  // <svg> as a layout element inside TlorisRow's fixed-size button.
+  // <svg> as a layout element inside TlorisRow's fixed-size button. Still
+  // targetable as a whole (onTargetClick('all', …)) even though nothing is
+  // drawn — consistent with hidesSurfaceDetail() treating impacted as
+  // whole-tooth-only.
   if (wholeToothStatus === 'impacted') {
-    return <svg viewBox="0 0 28 28" role="img" aria-label={`Top view ${fdi}`} />;
+    return (
+      <svg
+        viewBox="0 0 28 28"
+        role="img"
+        aria-label={`Top view ${fdi}`}
+        onClick={(e) => onTargetClick?.('all', e)}
+        style={{ pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined }}
+      />
+    );
   }
 
   const wholeStyle = wholeToothStatus ? STATUS_STYLES[wholeToothStatus] : undefined;
@@ -242,12 +295,6 @@ export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopVie
   // symbol: 'x-cross', same as missing/extracted.
   const isProsthesis = wholeToothStatus === 'prosthesis';
   const isPontic = wholeToothStatus === 'bridge_pontic';
-  // Endodontic treatment (done, still needed, or pre-existing) — a real
-  // natural tooth, so it keeps the normal square, subdivisions, and
-  // per-surface fills (all 'none' for these three statuses, so the zones
-  // just stay blank); only its symbol (a circle, not an x-cross) is
-  // special-cased below.
-  const isEndo = wholeToothStatus === 'endo' || wholeToothStatus === 'endo_planned' || wholeToothStatus === 'endo_existing';
   // Extraction pair — like abrasion/endo, its X-cross is drawn at 3px, the
   // same deliberate exception to this view's usual 1px line weight, per
   // Monika's explicit request.
@@ -264,16 +311,84 @@ export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopVie
       {!skipSubdivision && (
         <>
           {(['top', 'right', 'bottom', 'left'] as const).map((zone) => (
-            <path key={zone} d={polygon(zonePolygons[zone])} fill={regionFillFor(statusFor(surfaces, zones[zone]))} stroke="none" />
+            <path
+              key={zone}
+              d={polygon(zonePolygons[zone])}
+              fill={regionFillFor(statusFor(surfaces, zones[zone]))}
+              stroke="none"
+              // pointerEvents: 'all' is needed because a transparent/'none'
+              // fill doesn't receive pointer events by default in SVG (the
+              // default 'visiblePainted' only counts actually-painted
+              // areas) — without this, clicking a healthy (unfilled) zone
+              // would silently miss.
+              style={{ pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined }}
+              onClick={(e) => onTargetClick?.(zones[zone], e)}
+            />
           ))}
+          {(['top', 'right', 'bottom', 'left'] as const).map(
+            (zone) =>
+              isTargetSelected?.(zones[zone]) && (
+                <path
+                  key={`sel-${zone}`}
+                  d={polygon(zonePolygons[zone])}
+                  fill={SELECTED_COLOR}
+                  fillOpacity={0.28}
+                  stroke="none"
+                  style={{ pointerEvents: 'none' }}
+                />
+              ),
+          )}
           {!anterior && (
-            <rect x={BAND_X} y={BAND_Y} width={BAND_W} height={BAND_H} fill={regionFillFor(occlusalStatus!)} stroke="none" />
+            <>
+              <rect
+                x={BAND_X}
+                y={BAND_Y}
+                width={BAND_W}
+                height={BAND_H}
+                fill={regionFillFor(occlusalStatus!)}
+                stroke="none"
+                style={{ pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined }}
+                onClick={(e) => onTargetClick?.('o', e)}
+              />
+              {isTargetSelected?.('o') && (
+                <rect
+                  x={BAND_X}
+                  y={BAND_Y}
+                  width={BAND_W}
+                  height={BAND_H}
+                  fill={SELECTED_COLOR}
+                  fillOpacity={0.28}
+                  stroke="none"
+                  style={{ pointerEvents: 'none' }}
+                />
+              )}
+            </>
           )}
         </>
       )}
 
+      {/* skipSubdivision teeth (bridge_pontic/prosthesis/FLAT_INNER_STATUSES)
+          have no zone paths to click individually — the whole shape below
+          is the only target, so it gets onTargetClick('all', …) directly.
+          pointerEvents: 'all' is needed unconditionally here too: several of
+          these statuses (bridge_pontic, and the prosthesis circle always)
+          fill 'none'/'transparent', which wouldn't otherwise register a
+          click across the shape's interior, only its stroke. Non-flat
+          (normal, subdivided) teeth don't get a click handler here at all —
+          their zone paths above already cover the whole square between
+          them, and the outer border/circle is just decoration. */}
       {isProsthesis ? (
-        <circle cx={14} cy={14} r={13} fill="none" stroke={outerStroke} strokeWidth={LINE_WIDTH} strokeDasharray={outerDash} />
+        <circle
+          cx={14}
+          cy={14}
+          r={13}
+          fill="none"
+          stroke={outerStroke}
+          strokeWidth={LINE_WIDTH}
+          strokeDasharray={outerDash}
+          style={skipSubdivision ? { pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined } : undefined}
+          onClick={skipSubdivision ? (e) => onTargetClick?.('all', e) : undefined}
+        />
       ) : (
         <rect
           x={1}
@@ -284,7 +399,16 @@ export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopVie
           stroke={isAbsentSilhouette ? 'none' : outerStroke}
           strokeWidth={LINE_WIDTH}
           strokeDasharray={outerDash}
+          style={skipSubdivision ? { pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined } : undefined}
+          onClick={skipSubdivision ? (e) => onTargetClick?.('all', e) : undefined}
         />
+      )}
+      {skipSubdivision && isTargetSelected?.('all') && (
+        isProsthesis ? (
+          <circle cx={14} cy={14} r={13} fill={SELECTED_COLOR} fillOpacity={0.28} stroke="none" style={{ pointerEvents: 'none' }} />
+        ) : (
+          <rect x={1} y={1} width={26} height={26} fill={SELECTED_COLOR} fillOpacity={0.28} stroke="none" style={{ pointerEvents: 'none' }} />
+        )
       )}
       {!skipSubdivision &&
         (anterior ? (
@@ -351,36 +475,47 @@ export function ToothTopView({ fdi, type, arch, surfaces, hasPost }: ToothTopVie
         //    the cross's corners (radius ~11.3) inside the prosthesis
         //    circle (radius 13); the generic x=3,y=3,w=22,h=22 box below
         //    would poke past it (corners at radius ~15.6).
-        //  - bridge_pontic / endo / endo_planned: reach the square's own
-        //    corners exactly — x=1,y=1 matching the outer <rect>'s own
-        //    corner, w=h=26 matching its own size. For endo/endo_planned
-        //    this is per Monika's explicit request that the circle touch
-        //    the square's outer edges (`StatusSymbol`'s endo-circle branch
-        //    inscribes it: r = min(width,height)/2 = 13, centered at
-        //    (14,14) — exactly the square's own center, same as
-        //    prosthesis's circle).
+        //  - bridge_pontic: reaches the square's own corners exactly —
+        //    x=1,y=1 matching the outer <rect>'s own corner, w=h=26
+        //    matching its own size.
         //  - everything else (extracted, extraction_planned): the original
         //    inset box. `missing` has no symbol at all anymore
         //    (STATUS_STYLES.missing sets none), so it never reaches this
         //    block in the first place — per Monika's explicit request, the
         //    tloris square no longer crosses out a missing tooth, matching
         //    the side view's own light-silhouette-only treatment.
-        // Stroke width is LINE_WIDTH (1px) for every status except
-        // endo/endo_planned and the extraction pair, which use 3px — the
-        // same weight as abrasion's own mark, per Monika's explicit
-        // request — rather than StatusSymbol's own default (box-size-
-        // relative) formula, which is exactly why these differently-sized
-        // boxes used to produce differently-thick crosses before that was
-        // unified.
+        // Stroke width is LINE_WIDTH (1px) for every status except the
+        // extraction pair, which uses 3px — the same weight as abrasion's
+        // own mark (and the endo-circle's own, drawn separately below), per
+        // Monika's explicit request — rather than StatusSymbol's own
+        // default (box-size-relative) formula, which is exactly why these
+        // differently-sized boxes used to produce differently-thick crosses
+        // before that was unified.
         <StatusSymbol
           symbol={wholeStyle.symbol}
-          x={isProsthesis ? 6 : isEndo || isPontic ? 1 : 3}
-          y={isProsthesis ? 6 : isEndo || isPontic ? 1 : 3}
-          width={isProsthesis ? PROSTHESIS_X_SIZE : isEndo || isPontic ? 26 : 22}
-          height={isProsthesis ? PROSTHESIS_X_SIZE : isEndo || isPontic ? 26 : 22}
-          strokeWidth={isEndo || isExtractionPair ? 3 : LINE_WIDTH}
+          x={isProsthesis ? 6 : isPontic ? 1 : 3}
+          y={isProsthesis ? 6 : isPontic ? 1 : 3}
+          width={isProsthesis ? PROSTHESIS_X_SIZE : isPontic ? 26 : 22}
+          height={isProsthesis ? PROSTHESIS_X_SIZE : isPontic ? 26 : 22}
+          strokeWidth={isExtractionPair ? 3 : LINE_WIDTH}
           color={wholeStyle.symbolColor ?? wholeStyle.border ?? '#D4537E'}
         />
+      )}
+      {/* Endodontic treatment (kanal) — independent of `surfaces`/
+          `wholeStyle` (see endoStage above), so unlike every other symbol
+          in this file it's drawn in its own unconditional block rather
+          than through the generic wholeStyle.symbol dispatch above — it
+          needs to show up regardless of whatever real ToothStatus the
+          tooth also has (a filling, a crown, plain caries...), not just
+          when surfaces.all happens to be unset. Same circle-in-square
+          geometry the old endo/endo_planned/endo_existing statuses used —
+          touching the square's own outer corners (x=1,y=1,w=h=26 →
+          StatusSymbol's endo-circle branch inscribes r=13 centered at
+          (14,14), the square's own center) at the same 3px stroke weight —
+          just colored via endoColorFor(endoStage) instead of a
+          STATUS_STYLES entry. */}
+      {endoStage && (
+        <StatusSymbol symbol="endo-circle" x={1} y={1} width={26} height={26} strokeWidth={3} color={endoColorFor(endoStage)} />
       )}
       {/* Dental post — drawn last so it stays visible over any fill/symbol
           underneath. A sharp hollow (outline-only) triangle: its base sits

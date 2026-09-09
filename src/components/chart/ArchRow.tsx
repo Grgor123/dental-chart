@@ -1,6 +1,8 @@
+import type { MouseEvent } from 'react';
 import type { Arch } from '../../data/toothMeta';
 import { COLUMN_WIDTH, COLUMN_GAP } from '../../data/toothProfiles';
-import type { SurfaceMap, PocketDepths, GumMargin, BleedingPoints, ToothStatus, SealantStage } from '../../types/dental';
+import type { Surface, SurfaceMap, PocketDepths, GumMargin, BleedingPoints, ToothStatus, EndoStage } from '../../types/dental';
+import type { PerioPoint } from './perioStyle';
 import { PerioGraphRow } from './PerioGraphRow';
 import { PocketDepthRow } from './PocketDepthRow';
 import { BridgeRow, BRIDGE_ROW_HEIGHT } from './BridgeRow';
@@ -8,12 +10,12 @@ import { TlorisRow, isProsthesisLink } from './TlorisRow';
 import { NumberRow } from './NumberRow';
 
 interface ArchRowProps {
-  label: string;
+  /** Omit (or pass undefined) to skip the label entirely — see DentalChart.tsx's own hideArchLabels prop. */
+  label?: string;
   arch: Arch;
   leftQuadrant: readonly string[];
   rightQuadrant: readonly string[];
   onSelect?: (fdi: string) => void;
-  selectedFdi?: string;
   surfacesByFdi?: Record<string, SurfaceMap>;
   pocketsBuccal?: Record<string, PocketDepths>;
   pocketsLingual?: Record<string, PocketDepths>;
@@ -21,8 +23,17 @@ interface ArchRowProps {
   bleedingBuccal?: Record<string, BleedingPoints>;
   bleedingLingual?: Record<string, BleedingPoints>;
   postByFdi?: Record<string, boolean>;
-  /** Which teeth show the fissure-sealant tilde in the bridge row. */
-  sealantByFdi?: Record<string, SealantStage>;
+  /** Endodontic treatment (kanal) per tooth — independent of surfaces, see EndoStage. */
+  endoByFdi?: Record<string, EndoStage>;
+  /** Explicit fdi → bridge-group-id map — see BridgeRow.tsx's own prop comment. Pure pass-through. */
+  bridgeGroupByFdi?: Record<string, string>;
+  /** Direct surface/whole-tooth click targeting — see TlorisRow.tsx/NumberRow.tsx. Pure pass-through, same pattern as every other prop here. */
+  onTargetClick?: (fdi: string, target: Surface | 'all', e: MouseEvent) => void;
+  isTargetSelected?: (fdi: string, target: Surface | 'all') => boolean;
+  isFdiSelected?: (fdi: string) => boolean;
+  /** Pocket-depth/gum-margin click-to-focus entry — see PerioPoint (perioStyle.ts) and PatientChart.tsx. Pure pass-through, same pattern as onTargetClick above. */
+  onPerioPointClick?: (point: PerioPoint) => void;
+  focusedPerioPoint?: PerioPoint | null;
 }
 
 export function ArchRow({
@@ -31,7 +42,6 @@ export function ArchRow({
   leftQuadrant,
   rightQuadrant,
   onSelect,
-  selectedFdi,
   surfacesByFdi,
   pocketsBuccal,
   pocketsLingual,
@@ -39,7 +49,13 @@ export function ArchRow({
   bleedingBuccal,
   bleedingLingual,
   postByFdi,
-  sealantByFdi,
+  endoByFdi,
+  bridgeGroupByFdi,
+  onTargetClick,
+  isTargetSelected,
+  isFdiSelected,
+  onPerioPointClick,
+  focusedPerioPoint,
 }: ArchRowProps) {
   const statuses: Record<string, ToothStatus> = {};
   if (surfacesByFdi) {
@@ -57,6 +73,19 @@ export function ArchRow({
   const firstRightFdi = rightQuadrant[0];
   const crossesMidline = isProsthesisLink(statuses[lastLeftFdi]) && isProsthesisLink(statuses[firstRightFdi]);
 
+  // A bridge can cross the same midline too — a real clinical case (e.g.
+  // an anterior bridge spanning 44 all the way to 31), per Monika's
+  // explicit request that the earlier same-quadrant-only restriction on
+  // handleCreateBridge (PatientChart.tsx) was wrong. Unlike the prosthesis
+  // check above, which only cares whether the two boundary teeth carry a
+  // linking *status*, a bridge crossing is about whether the two boundary
+  // teeth belong to the same EXPLICIT bridge group — `bridgeGroupByFdi[fdi]`
+  // equality, not adjacency of any particular status. `bridgeGroupByFdi`
+  // is the whole mouth's map (like `statuses` above), so both sides of the
+  // boundary are visible here regardless of which quadrant they're in.
+  const bridgeCrossesMidline =
+    !!bridgeGroupByFdi?.[lastLeftFdi] && bridgeGroupByFdi[lastLeftFdi] === bridgeGroupByFdi[firstRightFdi];
+
   // Pixel offset of the divider from the row's own left edge, computed from
   // the same COLUMN_WIDTH/COLUMN_GAP constants every row's own width is
   // built from — deliberately *not* CSS `left-1/2`. Percentage centering
@@ -73,9 +102,11 @@ export function ArchRow({
 
   return (
     <div>
-      <p className="mb-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--muted,#6f7c79)]">
-        {label}
-      </p>
+      {label && (
+        <p className="mb-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--muted,#6f7c79)]">
+          {label}
+        </p>
+      )}
       {/* The divider is positioned via an explicit pixel offset
           (dividerLeftPx, computed above) rather than as a third flex item —
           keeps the gap between quadrants the same COLUMN_GAP width as every
@@ -91,7 +122,6 @@ export function ArchRow({
           fdis={leftQuadrant}
           arch={arch}
           onSelect={onSelect}
-          selectedFdi={selectedFdi}
           surfacesByFdi={surfacesByFdi}
           pocketsBuccal={pocketsBuccal}
           pocketsLingual={pocketsLingual}
@@ -100,8 +130,15 @@ export function ArchRow({
           bleedingLingual={bleedingLingual}
           statuses={statuses}
           connectToNext={crossesMidline}
+          bridgeCrossesToNext={bridgeCrossesMidline}
           postByFdi={postByFdi}
-          sealantByFdi={sealantByFdi}
+          endoByFdi={endoByFdi}
+          bridgeGroupByFdi={bridgeGroupByFdi}
+          onTargetClick={onTargetClick}
+          isTargetSelected={isTargetSelected}
+          isFdiSelected={isFdiSelected}
+          onPerioPointClick={onPerioPointClick}
+          focusedPerioPoint={focusedPerioPoint}
         />
         <div
           className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-[var(--ink,#1c2624)] opacity-60"
@@ -111,7 +148,6 @@ export function ArchRow({
           fdis={rightQuadrant}
           arch={arch}
           onSelect={onSelect}
-          selectedFdi={selectedFdi}
           surfacesByFdi={surfacesByFdi}
           pocketsBuccal={pocketsBuccal}
           pocketsLingual={pocketsLingual}
@@ -120,8 +156,15 @@ export function ArchRow({
           bleedingLingual={bleedingLingual}
           statuses={statuses}
           connectToPrev={crossesMidline}
+          bridgeCrossesToPrev={bridgeCrossesMidline}
           postByFdi={postByFdi}
-          sealantByFdi={sealantByFdi}
+          endoByFdi={endoByFdi}
+          bridgeGroupByFdi={bridgeGroupByFdi}
+          onTargetClick={onTargetClick}
+          isTargetSelected={isTargetSelected}
+          isFdiSelected={isFdiSelected}
+          onPerioPointClick={onPerioPointClick}
+          focusedPerioPoint={focusedPerioPoint}
         />
       </div>
     </div>
@@ -132,7 +175,6 @@ interface QuadrantBlockProps {
   fdis: readonly string[];
   arch: Arch;
   onSelect?: (fdi: string) => void;
-  selectedFdi?: string;
   surfacesByFdi?: Record<string, SurfaceMap>;
   pocketsBuccal?: Record<string, PocketDepths>;
   pocketsLingual?: Record<string, PocketDepths>;
@@ -142,8 +184,18 @@ interface QuadrantBlockProps {
   statuses: Record<string, ToothStatus>;
   connectToPrev?: boolean;
   connectToNext?: boolean;
+  /** Does this quadrant's bridge bracket continue into the PREVIOUS quadrant (across the arch's midline)? See BridgeRow.tsx's own prop comment. */
+  bridgeCrossesToPrev?: boolean;
+  /** Same, but continuing into the NEXT quadrant. */
+  bridgeCrossesToNext?: boolean;
   postByFdi?: Record<string, boolean>;
-  sealantByFdi?: Record<string, SealantStage>;
+  endoByFdi?: Record<string, EndoStage>;
+  bridgeGroupByFdi?: Record<string, string>;
+  onTargetClick?: (fdi: string, target: Surface | 'all', e: MouseEvent) => void;
+  isTargetSelected?: (fdi: string, target: Surface | 'all') => boolean;
+  isFdiSelected?: (fdi: string) => boolean;
+  onPerioPointClick?: (point: PerioPoint) => void;
+  focusedPerioPoint?: PerioPoint | null;
 }
 
 // Both views for a whole quadrant. Per Monika's request, pocket depth needs
@@ -154,16 +206,23 @@ interface QuadrantBlockProps {
 // squares' own surface zones (see ToothTopView's zoneSurfaces), so a
 // reading's position here means the same thing it means there.
 //
-// Stack order differs by arch: upper keeps the silhouette/gumline graph at
-// the very top (roots pointing up, away from the tloris block) with the
-// tooth number innermost, closest to the tloris squares. Lower puts the
-// number outermost instead — below the tooth artwork — per feedback that
-// it reads better there than sandwiched above the roots.
+// Stack order is now a true top-to-bottom mirror between the two arches —
+// flip the page across a horizontal line and the upper arch's stack lines
+// up exactly with the lower arch's, per Monika's explicit request (echoing
+// how the two arches actually meet at the bite line anatomically). Lower,
+// unchanged: tnum outermost, below the tooth artwork (crown at the
+// bottom, roots pointing down) — pdAndTloris, then the silhouette/gumline
+// graph, then the number. Upper is exactly that sequence reversed: tnum
+// now sits outermost at the *top* instead, above the silhouette/gumline
+// graph (crown at the bottom of that graph, roots pointing up), which is
+// itself above pdAndTloris. This moved tnum off the tloris-adjacent
+// position it used to sit in for the upper arch (immediately below the
+// last pocket-depth row) — that positioning predates this mirror request
+// and is no longer accurate if referenced elsewhere as "innermost."
 function QuadrantBlock({
   fdis,
   arch,
   onSelect,
-  selectedFdi,
   surfacesByFdi,
   pocketsBuccal,
   pocketsLingual,
@@ -173,24 +232,49 @@ function QuadrantBlock({
   statuses,
   connectToPrev,
   connectToNext,
+  bridgeCrossesToPrev,
+  bridgeCrossesToNext,
   postByFdi,
-  sealantByFdi,
+  endoByFdi,
+  bridgeGroupByFdi,
+  onTargetClick,
+  isTargetSelected,
+  isFdiSelected,
+  onPerioPointClick,
+  focusedPerioPoint,
 }: QuadrantBlockProps) {
   const topPockets = arch === 'upper' ? pocketsBuccal : pocketsLingual;
   const bottomPockets = arch === 'upper' ? pocketsLingual : pocketsBuccal;
   const topBleeding = arch === 'upper' ? bleedingBuccal : bleedingLingual;
   const bottomBleeding = arch === 'upper' ? bleedingLingual : bleedingBuccal;
+  // Same top=buccal/bottom=lingual (upper arch) or top=lingual/bottom=buccal
+  // (lower arch) convention topPockets/bottomPockets above already follow —
+  // needed here too so PocketDepthRow can build correct point identities.
+  const topSurface: 'buccal' | 'lingual' = arch === 'upper' ? 'buccal' : 'lingual';
+  const bottomSurface: 'buccal' | 'lingual' = arch === 'upper' ? 'lingual' : 'buccal';
 
-  const graph = <PerioGraphRow fdis={fdis} arch={arch} gumMargin={gumMargin} statuses={statuses} />;
+  const graph = (
+    <PerioGraphRow
+      fdis={fdis}
+      arch={arch}
+      gumMargin={gumMargin}
+      statuses={statuses}
+      onPointClick={onPerioPointClick}
+      focusedPoint={focusedPerioPoint}
+    />
+  );
   const tloris = (
     <TlorisRow
       fdis={fdis}
       onSelect={onSelect}
-      selectedFdi={selectedFdi}
       surfacesByFdi={surfacesByFdi}
       connectToPrev={connectToPrev}
       connectToNext={connectToNext}
       postByFdi={postByFdi}
+      endoByFdi={endoByFdi}
+      onTargetClick={onTargetClick}
+      isTargetSelected={isTargetSelected}
+      isFdiSelected={isFdiSelected}
     />
   );
   // The dental post triangle points outward from the tloris square's own
@@ -206,7 +290,16 @@ function QuadrantBlock({
   // was added — above tloris on the lower arch, below it on the upper —
   // so sealant needed no positioning logic of its own beyond sharing this
   // same `flip`.
-  const bridge = <BridgeRow fdis={fdis} statuses={statuses} sealantByFdi={sealantByFdi} flip={arch === 'upper'} />;
+  const bridge = (
+    <BridgeRow
+      fdis={fdis}
+      statuses={statuses}
+      bridgeGroupByFdi={bridgeGroupByFdi}
+      crossesToPrev={bridgeCrossesToPrev}
+      crossesToNext={bridgeCrossesToNext}
+      flip={arch === 'upper'}
+    />
+  );
   // Whichever pocket-depth row ends up on the *same* side as BridgeRow gets
   // BRIDGE_ROW_HEIGHT of extra margin, pushing it out to match the natural
   // gap on the side without a bridge row — BridgeRow always renders at
@@ -221,31 +314,63 @@ function QuadrantBlock({
     arch === 'upper' ? (
       <>
         <div style={{ marginBottom: `${BRIDGE_ROW_HEIGHT}px` }}>
-          <PocketDepthRow fdis={fdis} pockets={topPockets} bleeding={topBleeding} />
+          <PocketDepthRow
+            fdis={fdis}
+            surface={topSurface}
+            pockets={topPockets}
+            bleeding={topBleeding}
+            statuses={statuses}
+            onPointClick={onPerioPointClick}
+            focusedPoint={focusedPerioPoint}
+          />
         </div>
         {tloris}
         {bridge}
-        <PocketDepthRow fdis={fdis} pockets={bottomPockets} bleeding={bottomBleeding} />
+        <PocketDepthRow
+          fdis={fdis}
+          surface={bottomSurface}
+          pockets={bottomPockets}
+          bleeding={bottomBleeding}
+          statuses={statuses}
+          onPointClick={onPerioPointClick}
+          focusedPoint={focusedPerioPoint}
+        />
       </>
     ) : (
       <>
-        <PocketDepthRow fdis={fdis} pockets={topPockets} bleeding={topBleeding} />
+        <PocketDepthRow
+          fdis={fdis}
+          surface={topSurface}
+          pockets={topPockets}
+          bleeding={topBleeding}
+          statuses={statuses}
+          onPointClick={onPerioPointClick}
+          focusedPoint={focusedPerioPoint}
+        />
         {bridge}
         {tloris}
         <div style={{ marginTop: `${BRIDGE_ROW_HEIGHT}px` }}>
-          <PocketDepthRow fdis={fdis} pockets={bottomPockets} bleeding={bottomBleeding} />
+          <PocketDepthRow
+            fdis={fdis}
+            surface={bottomSurface}
+            pockets={bottomPockets}
+            bleeding={bottomBleeding}
+            statuses={statuses}
+            onPointClick={onPerioPointClick}
+            focusedPoint={focusedPerioPoint}
+          />
         </div>
       </>
     );
-  const number = <NumberRow fdis={fdis} />;
+  const number = <NumberRow fdis={fdis} onTargetClick={onTargetClick} isFdiSelected={isFdiSelected} />;
 
   return (
     <div className="flex flex-col items-start gap-1">
       {arch === 'upper' ? (
         <>
+          {number}
           {graph}
           {pdAndTloris}
-          {number}
         </>
       ) : (
         <>

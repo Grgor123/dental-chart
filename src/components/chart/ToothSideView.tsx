@@ -104,6 +104,10 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
   // symbol of its own here, so without this it would fall through to the
   // see-through-grey look.
   const isOverlayStatus = status === 'overlay_planned' || status === 'overlay' || status === 'overlay_existing';
+  // Fissure sealant (sealant_planned/sealant/sealant_existing) — same
+  // reasoning as isOverlayStatus above: marked entirely by BridgeRow's own
+  // tilde, fill: 'none' with no symbol here, so it needs the same fix.
+  const isSealantStatus = status === 'sealant_planned' || status === 'sealant' || status === 'sealant_existing';
 
   // Healthy crowns get an explicit white fill (distinct from the root's
   // grey) rather than falling through to 'none'. No current status relies
@@ -113,20 +117,16 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
   // Monika's explicit request); the ternary below still needs to handle
   // the fallback case for any future status that might.
   const isHealthy = !status || status === 'healthy';
-  // endo/endo_planned also fill 'none' (their tloris-view symbol replaced
-  // a flat color fill there — see statusStyles.ts), but that's a tloris
-  // view change only; the side view has no symbol for these statuses at
-  // all, so falling through to 'none' here left the crown transparent
-  // with nothing painted over the root-grey base fill underneath —
-  // reading as the *entire* tooth (crown included) filled solid grey
-  // (ROOT_COLOR), not just the root, since there's no fill to distinguish
-  // them. Endodontic treatment doesn't change a tooth's outward
-  // appearance, so it gets the same white-crown treatment as `healthy`
-  // rather than the "no fill" statuses' deliberate see-through-to-grey.
-  // `extraction_planned` needs the exact same fix for the exact same
-  // reason — a tooth flagged for extraction is still fully present and
-  // should look ordinary apart from its red X.
-  const isEndoStatus = status === 'endo' || status === 'endo_planned' || status === 'endo_existing';
+  // `extraction_planned` needs the same white-crown fix `healthy` gets by
+  // default — a tooth flagged for extraction is still fully present and
+  // should look ordinary apart from its red X, not fall through to the
+  // "no fill" statuses' deliberate see-through-to-grey. (Endodontic
+  // treatment used to need this same fix too, back when it was a
+  // ToothStatus with fill: 'none' and no side-view symbol of its own — now
+  // that it's an independent field (EndoStage, threaded separately as
+  // `endoStage` in ToothTopView.tsx) it's never part of `status` here at
+  // all, so it can't trip this trap in the first place. Endo has no
+  // side-view rendering by design — see CLAUDE.md's "Canal display".)
   // caries/caries_treated/filling fall into the exact same trap — fill:
   // 'none' in statusStyles.ts, with no side-view symbol of their own (the
   // dot marker is drawn in ToothTopView.tsx only) — so a whole-tooth
@@ -136,7 +136,7 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
   // bug Monika originally caught on endo. `filling` joined this list once
   // it switched from a flat white fill to the same grey-dot mechanism.
   const isCariesStatus = status === 'caries' || status === 'caries_treated' || status === 'filling';
-  const crownFill = isHealthy || isEndoStatus || isAbrasion || isExtractionPlanned || isOverlayStatus || isCariesStatus
+  const crownFill = isHealthy || isAbrasion || isExtractionPlanned || isOverlayStatus || isSealantStatus || isCariesStatus
     ? '#FFFFFF'
     : style?.fill && style.fill !== 'none'
       ? style.fill

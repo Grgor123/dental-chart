@@ -1,6 +1,13 @@
 -- Dental Practice Management App — Phase 1 schema
 -- Paste this whole file into the Supabase SQL Editor (Project → SQL Editor →
--- New query) and click Run. Safe to run once on a fresh project.
+-- New query) and click Run. Safe to run once on a fresh project — this
+-- already includes everything from migrations 001-009 baked in directly
+-- (gum margin, bleeding surfaces, dental post, endo, visit lifecycle,
+-- bridge grouping, restricting sex to M/F, patient contact fields, split
+-- address fields), so a brand-new project only needs this ONE file, not
+-- this file plus nine migrations run afterward in order. The migrations/
+-- folder stays as-is for a project that already has an OLDER version of
+-- these tables and needs to catch up incrementally instead.
 -- Source of truth: CLAUDE.md "Supabase Schema" section — keep both in sync.
 
 -- Patients
@@ -9,7 +16,13 @@ create table patients (
   first_name text not null,
   last_name text not null,
   dob date not null,
-  sex text check (sex in ('M','F','other')),
+  sex text check (sex in ('M','F')),  -- only two options offered, per Monika's explicit request — see migrations/007_restrict_sex_to_mf.sql for a project that already has the older 'other' value allowed
+  phone text,
+  email text,
+  address text,        -- street + house number only — see postal_code/city below for the rest, per Monika's explicit request to split these
+  postal_code text,
+  city text,
+  health_card_number text,  -- št. zdravstvene kartice (ZZZS) — captured for future use, not read anywhere in the app yet (eZdravje/ZZZS integration is a later phase — see CLAUDE.md's "Out of Scope for Phase 1")
   diagnoses text[] default '{}',
   created_at timestamptz default now()
 );
@@ -20,10 +33,18 @@ create table visits (
   patient_id uuid references patients(id) on delete cascade,
   date date not null,
   notes text,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  closed_at timestamptz  -- null = still open (dentist may still be actively working in it — see CLAUDE.md's "Visit lifecycle"); set once, never un-set
 );
 
--- Tooth records per visit
+-- Tooth records per visit — ONE ROW PER TOOTH PER VISIT, not one shared row
+-- per tooth overall. See CLAUDE.md's "Visit lifecycle" section: this is
+-- what gives per-tooth chronological history for free (every row for one
+-- tooth_id, ordered by its visit's date, IS that tooth's history) with no
+-- separate event-log table. While a visit is open, the app upserts THIS
+-- SAME row on every autosave flush (on the unique constraint below) rather
+-- than inserting a new one each time; once the visit closes, its rows are
+-- never written to again.
 create table tooth_records (
   id uuid primary key default gen_random_uuid(),
   visit_id uuid references visits(id) on delete cascade,
@@ -37,12 +58,18 @@ create table tooth_records (
   bleeding_lingual boolean[] default '{false,false,false}',
   furcation smallint default 0,
   mobility smallint default 0,
-  canal boolean default false,
-  post boolean default false,       -- zobni kolček (zatič) — see ToothData.post
-  sealant text check (sealant in ('planned','done','existing')),  -- zalitje fisur — see ToothData.sealant / SealantStage
+  endo text check (endo in ('planned','done','existing')),  -- endodontsko zdravljenje (kanal) — see ToothData.endo / EndoStage — supersedes the older unused `canal boolean` column
+  post boolean default false,       -- zobni zatiček — see ToothData.post
+  bridge_group_id text,             -- which explicit bridge this tooth belongs to, if any — see CLAUDE.md's "Bridge display" (bridgeGroupByFdi); not a foreign key, the id itself has no meaning beyond "these rows share the same value"
   notes text,
   created_at timestamptz default now()
 );
+
+-- Unique INDEX (not an inline `unique` column constraint) so this stays
+-- consistent with migration 005_add_visit_lifecycle.sql's own `create
+-- unique index if not exists` — see that file's comment for why.
+create unique index if not exists tooth_records_visit_tooth_unique
+  on tooth_records (visit_id, tooth_id);
 
 -- Treatment plan entries
 create table treatment_entries (

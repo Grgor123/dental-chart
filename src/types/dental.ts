@@ -18,14 +18,14 @@ export type ToothStatus =
   | 'filling'        // plomba — obstoječa (pred spremljanjem)
   | 'crown'          // prevleka / krona — tudi sidro mostu ali proteze
   | 'bridge_pontic'  // člen mostu
-  | 'endo'           // endodontsko zdravljenje (kanal) — dokončano
-  | 'endo_planned'   // endodontsko zdravljenje — potrebno / v teku
-  | 'endo_existing'  // endodontsko zdravljenje — obstoječe (pred spremljanjem)
   | 'implant'
   | 'abrasion'       // abrazija
   | 'overlay_planned'  // predviden overlay
   | 'overlay'          // overlay — dokončan
   | 'overlay_existing'  // overlay — obstoječ (pred spremljanjem)
+  | 'sealant_planned'  // zalitje fisur — predvideno
+  | 'sealant'          // zalitje fisur — opravljeno
+  | 'sealant_existing'  // zalitje fisur — obstoječe (pred spremljanjem)
   | 'extraction_planned'  // predvidena ekstrakcija — zob še prisoten
   | 'extracted'      // ekstrahiran — zob odstranjen
   | 'missing'        // manjkajoč (ni bil prisoten)
@@ -36,29 +36,42 @@ export type ToothStatus =
 // Surface-level status map
 export type SurfaceMap = Partial<Record<Surface, ToothStatus>> & { all?: ToothStatus };
 
-// Pocket depths: [mesial, mid, distal] in mm
-export type PocketDepths = [number, number, number];
+// Pocket depths: [mesial, mid, distal] in mm. Each point is individually
+// `null` until entered — click-to-focus/type-a-number entry (PatientChart.tsx)
+// fills one point at a time (mesial, then mid, then distal, auto-advancing),
+// so a tooth mid-entry, or one only ever partly probed, genuinely has some
+// points set and others not — a plain `number` per slot couldn't represent
+// that. `null`, not `undefined`, specifically: the outer `Record<string, ...>`
+// lookup already uses a missing key/`undefined` to mean "this tooth has no
+// entry at all" (see PocketDepthRow's own `pockets?.[fdi]`), so `null` here
+// unambiguously means "this tooth has *some* data, but not this point."
+export type PocketDepths = [number | null, number | null, number | null];
 
 // Gingival margin position relative to CEJ: [mesial, mid, distal] in mm.
 // 0 = at the CEJ. Negative = receded apical to CEJ (root exposed — the
 // common case, and what "luščenje - glajenje" is tracked against).
-// Positive = gum sits coronal to CEJ (covering some crown).
-export type GumMargin = [number, number, number];
+// Positive = gum sits coronal to CEJ (covering some crown). Same per-point
+// `null`-until-entered shape as PocketDepths above, for the same reason.
+export type GumMargin = [number | null, number | null, number | null];
 
 // Bleeding on probing (BOP): [mesial, mid, distal], one flag per probing
 // point — same 3 points as PocketDepths, tracked per surface like pockets
 // and gum margin, since BOP is clinically meaningful on both.
 export type BleedingPoints = [boolean, boolean, boolean];
 
-// Fissure-sealant lifecycle — same three-stage model as endo_existing/
-// endo/endo_planned and overlay_existing/overlay/overlay_planned:
-// 'existing' (grey) marks one already there before this practice started
-// tracking it, 'planned' (red) one still to be placed, 'done' (blue) one
-// just placed. Kept as its own field rather than folded into ToothStatus
-// (see ToothData.sealant below) — a plain three-value type, not a new
-// ToothStatus, for the same reason it was a boolean before: it needs to
-// combine freely with whatever else is going on for that tooth.
-export type SealantStage = 'planned' | 'done' | 'existing';
+// Endodontic treatment lifecycle — same three-stage model as
+// overlay_planned/overlay/overlay_existing and the sealant statuses:
+// 'planned' (red) still needs doing / in progress, 'done' (blue) just
+// completed, 'existing' (grey) a root canal already done before this
+// practice started tracking the tooth. Kept independent of ToothStatus
+// (see ToothData.endo below) rather than folded into it — per Monika's
+// explicit request that endodontic treatment combine freely with whatever
+// else is going on for that tooth (a filling and a completed root canal on
+// the same tooth at once, say), which the old endo/endo_planned/
+// endo_existing statuses couldn't do since they competed with every other
+// status for the single surfaces.all slot. Supersedes the older, unused
+// `canal` boolean this field replaces.
+export type EndoStage = 'planned' | 'done' | 'existing';
 
 // Single tooth data
 export interface ToothData {
@@ -79,9 +92,8 @@ export interface ToothData {
   };
   furcation?: 0 | 1 | 2 | 3;
   mobility?: 0 | 1 | 2 | 3;
-  canal?: boolean;
-  post?: boolean;  // zobni kolček (zatič) — vstavljen v koreninski kanal
-  sealant?: SealantStage;  // zalitje fisur — zaščitni premaz na okluzalni ploskvi
+  endo?: EndoStage;  // endodontsko zdravljenje (kanal) — see EndoStage above
+  post?: boolean;  // zobni zatiček — vstavljen v koreninski kanal
   notes?: string;
   rootCount: number;
 }
@@ -114,7 +126,25 @@ export interface Patient {
   firstName: string;
   lastName: string;
   dob: string;                  // ISO date
-  sex: 'M' | 'F' | 'other';
+  sex: 'M' | 'F';                // per Monika's explicit request, only these two are offered — no 'other' option
+  phone?: string;
+  email?: string;
+  // Address split into three fields — street (+ house number), postal
+  // code, city — rather than one free-text line, per Monika's explicit
+  // request. (Checked the sibling "dental calendar" booking app first —
+  // its own intake form doesn't collect a postal address at all, only
+  // name/phone/email/reason, so there was no existing convention to
+  // match; this three-way split is this app's own.)
+  address?: string;      // street + house number, e.g. "Slovenska cesta 15"
+  postalCode?: string;   // e.g. "1000"
+  city?: string;         // e.g. "Ljubljana"
+  // Št. zdravstvene kartice (ZZZS) — captured at patient creation for
+  // future use only; nothing in the app reads or validates this yet (see
+  // CLAUDE.md's "Out of Scope for Phase 1" — eZdravje/ZZZS integration is
+  // a later phase). Kept as a plain free-text string rather than a
+  // validated card-number format, since that format isn't needed for
+  // anything yet either.
+  healthCardNumber?: string;
   diagnoses: string[];
   visits: VisitRecord[];
 }

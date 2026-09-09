@@ -1,6 +1,7 @@
+import type { MouseEvent } from 'react';
 import { TOOTH_META } from '../../data/toothMeta';
 import { COLUMN_WIDTH, COLUMN_GAP } from '../../data/toothProfiles';
-import type { SurfaceMap, ToothStatus } from '../../types/dental';
+import type { Surface, SurfaceMap, ToothStatus, EndoStage } from '../../types/dental';
 import { ToothTopView } from './ToothTopView';
 
 // A tooth joins the prosthesis connector line if it's the denture tooth
@@ -15,8 +16,8 @@ export function isProsthesisLink(status: ToothStatus | undefined): boolean {
 
 interface TlorisRowProps {
   fdis: readonly string[];
+  /** Fires on every click inside this tooth's square (bubbled from ToothTopView's own zone clicks) — PatientChart.tsx uses this purely to track which tooth's detail panel is open; nothing in this component tree reads the value back (see isFdiSelected below for the click-to-edit selection's own outline, a separate concern). */
   onSelect?: (fdi: string) => void;
-  selectedFdi?: string;
   surfacesByFdi?: Record<string, SurfaceMap>;
   /** Draw a half-segment from this quadrant's *first* tooth out toward the
    * shared midline gap — the other half of a connector whose other half is
@@ -27,6 +28,13 @@ interface TlorisRowProps {
   connectToNext?: boolean;
   /** Which teeth show the dental-post line — see ToothTopView's `hasPost`. */
   postByFdi?: Record<string, boolean>;
+  /** Endodontic treatment (kanal) per tooth — see ToothTopView's `endoStage`. */
+  endoByFdi?: Record<string, EndoStage>;
+  /** Direct surface/whole-tooth click targeting (PatientChart.tsx's new selection/paint flow) — wrapped per-tooth below so ToothTopView itself stays fdi-agnostic. */
+  onTargetClick?: (fdi: string, target: Surface | 'all', e: MouseEvent) => void;
+  isTargetSelected?: (fdi: string, target: Surface | 'all') => boolean;
+  /** True if ANY target on this tooth is selected — drives this square's own outline, same coarser check NumberRow.tsx's highlight uses, so the two always agree on which tooth is "current" (see PatientChart.tsx's isFdiSelected). */
+  isFdiSelected?: (fdi: string) => boolean;
 }
 
 // Exported so BridgeRow.tsx can size its overlay cap to match the
@@ -72,7 +80,18 @@ function findProsthesisGapIndices(fdis: readonly string[], surfacesByFdi: Record
 // between the two (vestibular reading above tloris, oral reading below, or
 // vice versa depending on arch). Same COLUMN_WIDTH/COLUMN_GAP as everything
 // else in the chart, so columns line up with the rows above/below.
-export function TlorisRow({ fdis, onSelect, selectedFdi, surfacesByFdi, connectToPrev, connectToNext, postByFdi }: TlorisRowProps) {
+export function TlorisRow({
+  fdis,
+  onSelect,
+  surfacesByFdi,
+  connectToPrev,
+  connectToNext,
+  postByFdi,
+  endoByFdi,
+  onTargetClick,
+  isTargetSelected,
+  isFdiSelected,
+}: TlorisRowProps) {
   const gapIndices = findProsthesisGapIndices(fdis, surfacesByFdi);
   const totalWidth = fdis.length * COLUMN_WIDTH + (fdis.length - 1) * COLUMN_GAP;
   const showPrevHalf = connectToPrev && isProsthesisLink(surfacesByFdi?.[fdis[0]]?.all);
@@ -126,7 +145,19 @@ export function TlorisRow({ fdis, onSelect, selectedFdi, surfacesByFdi, connectT
               type="button"
               onClick={() => onSelect?.(fdi)}
               className="h-[26px] w-[26px] cursor-pointer rounded-sm outline-offset-2"
-              style={fdi === selectedFdi ? { outline: '2px solid var(--tooth-selected, #2e6e62)' } : undefined}
+              // Was `fdi === selectedFdi` — a separate, older piece of state
+              // only ever updated by clicking *inside* this square (via
+              // bubbling from ToothTopView's own zone clicks), never by
+              // clicking the FDI number below. That meant clicking the
+              // number could select a different tooth for the toolbar while
+              // this square's own outline stayed stuck on whichever tooth
+              // was last clicked here directly — exactly the desync Monika
+              // reported ("the previous tooth still remains marked"). Now
+              // driven by the same isFdiSelected() check NumberRow.tsx's
+              // own highlight uses, both reading the one shared `selection`
+              // state, so the two can't drift apart regardless of which one
+              // you click.
+              style={isFdiSelected?.(fdi) ? { outline: '2px solid var(--tooth-selected, #2e6e62)' } : undefined}
               aria-label={`Tooth ${fdi}`}
             >
               <ToothTopView
@@ -135,6 +166,9 @@ export function TlorisRow({ fdis, onSelect, selectedFdi, surfacesByFdi, connectT
                 arch={meta.arch}
                 surfaces={surfacesByFdi?.[fdi]}
                 hasPost={postByFdi?.[fdi]}
+                endoStage={endoByFdi?.[fdi]}
+                onTargetClick={(target, e) => onTargetClick?.(fdi, target, e)}
+                isTargetSelected={(target) => isTargetSelected?.(fdi, target) ?? false}
               />
             </button>
           </div>

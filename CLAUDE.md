@@ -41,25 +41,50 @@ src/
                                 # mm ruler + gumline + REC (gum margin) labels
       PocketDepthRow.tsx       # One quadrant's pocket-depth (PD) number row —
                                 # rendered twice per quadrant (vestibular + oral)
-      BridgeRow.tsx            # One quadrant's mostiček bracket(s) — auto-
-                                # detected from crown/implant + bridge_pontic
-                                # runs in statuses; also draws the fissure-
-                                # sealant tilde and overlay's cap, sitting
-                                # above TlorisRow (below it, upper arch)
+      BridgeRow.tsx            # One quadrant's mostiček bracket(s) — reads
+                                # an EXPLICIT fdi->group-id map
+                                # (bridgeGroupByFdi, set only by
+                                # handleCreateBridge in PatientChart.tsx),
+                                # not inferred from adjacent statuses; also
+                                # draws the fissure-sealant tilde and
+                                # overlay's cap, sitting above TlorisRow
+                                # (below it, upper arch)
       TlorisRow.tsx            # One quadrant's tlorisni-pogled squares
       NumberRow.tsx            # One quadrant's FDI number labels
-      ToothTopView.tsx         # Single FDI square — tlorisni pogled
+      ToothTopView.tsx         # Single FDI square — tlorisni pogled; also
+                                # exports hidesSurfaceDetail()
       ToothSideView.tsx        # Single anatomic profile — stranski pogled
                                 # (also exports ToothSideViewContent, the
                                 # <defs>/<g> content with no wrapping <svg>,
                                 # reused inside PerioGraphRow's shared canvas)
       perioStyle.ts            # Shared PD color thresholds + mesial/mid/distal
                                 # x-fractions, used by PerioGraphRow and
-                                # PocketDepthRow so the two stay consistent
+                                # PocketDepthRow so the two stay consistent;
+                                # also the shared PerioPoint type +
+                                # samePerioPoint() for click-to-focus entry
+                                # (see "Perio data entry")
     ui/
       StatusSymbol.tsx         # x-cross / endo-circle glyphs
+      StatusSwatch.tsx         # One status's icon+color, shared by
+                                # StatusLegend/StatusToolbar/StatusPicker
       StatusLegend.tsx         # Color + symbol legend, all statuses
-      SurfaceChip.tsx          # Clickable surface badge (not built yet)
+      StatusToolbar.tsx        # Always-visible status grid for the direct-
+                                # chart-selection flow (PatientChart.tsx) —
+                                # select target(s) on the chart, then click
+                                # a status here to apply
+      StatusPicker.tsx         # Inline status grid opened from
+                                # ToothDetailPanel's own "Cel zob"/surface
+                                # chips (the click-a-tooth flow)
+      ToothDetailPanel.tsx     # Panel below the chart for a selected tooth —
+                                # surface chips + StatusPicker + notes field
+      SurfaceChip.tsx          # Clickable surface badge, shows its own
+                                # resolved status
+      PostSwatch.tsx           # Dental post (zobni zatiček) icon — a plain
+                                # boolean field presented as one grid entry,
+                                # same shape as a real status
+      EndoSwatch.tsx           # Endodontic treatment (kanal) icon,
+                                # parameterized by EndoStage — three grid
+                                # entries (planned/done/existing)
       PatientBadge.tsx         # Name, age, diagnoses (not built yet)
   data/
     toothProfiles.ts           # Per-FDI silhouette/detail paths + on-screen
@@ -77,11 +102,29 @@ src/
     dental.ts                  # All TypeScript types (see below)
   hooks/
     useAuth.ts                 # Supabase session state + signIn/signOut
+    usePatients.ts              # Loads every patient + createPatient() —
+                                # see "Patient list" below
+    useOpenVisit.ts             # Resolves/creates the visit a chosen
+                                # patient's chart should load/save against
+                                # — see "Visit lifecycle" below
+    useVisit.ts                # Loads + saves one visit's tooth_records —
+                                # see "Visit lifecycle" below for what's
+                                # actually built vs. still just designed
   lib/
     supabase.ts                # Supabase client
   pages/
     Login.tsx                  # Email/password sign-in screen
-    PatientChart.tsx           # Main page (still placeholder patient/mock data)
+    PatientList.tsx             # Landing page after login — search/pick a
+                                # patient or add a new one — see "Patient
+                                # list" below
+    PatientChart.tsx           # Main page — full interactive chart (status
+                                # selection/toolbar, perio data entry,
+                                # bridge creation) for one chosen patient,
+                                # loading from and autosaving to that
+                                # patient's own resolved-or-created Supabase
+                                # visit via useOpenVisit.ts + useVisit.ts —
+                                # see "Visit lifecycle" below for exactly
+                                # what's real vs. still not built
     StatusShowcase.tsx         # Temporary dev-only review page for visual QA —
                                 # not part of the app's real navigation
 ```
@@ -111,14 +154,14 @@ export type ToothStatus =
   | 'filling'        // plomba — obstoječa (pred spremljanjem)
   | 'crown'          // prevleka / krona — tudi sidro mostu ali proteze
   | 'bridge_pontic'  // člen mostu
-  | 'endo'           // endodontsko zdravljenje (kanal) — dokončano
-  | 'endo_planned'   // endodontsko zdravljenje — potrebno / v teku
-  | 'endo_existing'  // endodontsko zdravljenje — obstoječe (pred spremljanjem)
   | 'implant'
   | 'abrasion'       // abrazija
   | 'overlay_planned'  // predviden overlay
   | 'overlay'          // overlay — dokončan
   | 'overlay_existing'  // overlay — obstoječ (pred spremljanjem)
+  | 'sealant_planned'  // zalitje fisur — predvideno
+  | 'sealant'          // zalitje fisur — opravljeno
+  | 'sealant_existing'  // zalitje fisur — obstoječe (pred spremljanjem)
   | 'extraction_planned'  // predvidena ekstrakcija — zob še prisoten
   | 'extracted'      // ekstrahiran — zob odstranjen
   | 'missing'        // manjkajoč (ni bil prisoten)
@@ -129,29 +172,39 @@ export type ToothStatus =
 // Surface-level status map
 export type SurfaceMap = Partial<Record<Surface, ToothStatus>> & { all?: ToothStatus };
 
-// Pocket depths: [mesial, mid, distal] in mm
-export type PocketDepths = [number, number, number];
+// Pocket depths: [mesial, mid, distal] in mm. Each entry is nullable — see
+// "Perio data entry" under "Perio graph" — to support ENTERING one point at
+// a time: null at one index means "this specific point not yet entered,"
+// distinct from the outer Record<string, PocketDepths> key being absent
+// entirely ("this tooth has no data at all").
+export type PocketDepths = [number | null, number | null, number | null];
 
 // Gingival margin position relative to CEJ: [mesial, mid, distal] in mm.
 // 0 = at the CEJ. Negative = receded apical to CEJ (root exposed — the
 // common case, and what "luščenje - glajenje" is tracked against).
-// Positive = gum sits coronal to CEJ (covering some crown).
-export type GumMargin = [number, number, number];
+// Positive = gum sits coronal to CEJ (covering some crown). Nullable per
+// point for the same partial-entry reason as PocketDepths above.
+export type GumMargin = [number | null, number | null, number | null];
 
 // Bleeding on probing (BOP): [mesial, mid, distal], one flag per probing
 // point — same 3 points as PocketDepths, tracked per surface like pockets
 // and gum margin, since BOP is clinically meaningful on both.
 export type BleedingPoints = [boolean, boolean, boolean];
 
-// Fissure-sealant lifecycle — same three-stage model as endo_existing/
-// endo/endo_planned and overlay_existing/overlay/overlay_planned:
-// 'existing' (grey) marks one already there before this practice started
-// tracking it, 'planned' (red) one still to be placed, 'done' (blue) one
-// just placed. Kept as its own field rather than folded into ToothStatus
-// (see ToothData.sealant below) — a plain three-value type, not a new
-// ToothStatus, for the same reason it was a boolean before: it needs to
-// combine freely with whatever else is going on for that tooth.
-export type SealantStage = 'planned' | 'done' | 'existing';
+// Endodontic treatment lifecycle — same three-stage model as
+// overlay_planned/overlay/overlay_existing and the sealant statuses:
+// 'planned' (red) still needs doing / in progress, 'done' (blue) just
+// completed, 'existing' (grey) a root canal already done before this
+// practice started tracking the tooth. Kept independent of ToothStatus
+// (ToothData.endo below) rather than folded into it — per Monika's
+// explicit request that endodontic treatment combine freely with whatever
+// else is going on for that tooth (a filling AND a completed root canal on
+// the same tooth at once, say), which the earlier endo/endo_planned/
+// endo_existing statuses couldn't do, since they competed with every other
+// status for the single surfaces.all slot — see "Canal display" below for
+// the full history of that change. Supersedes the older, unused `canal`
+// boolean this field replaces.
+export type EndoStage = 'planned' | 'done' | 'existing';
 
 // Single tooth data
 export interface ToothData {
@@ -172,9 +225,8 @@ export interface ToothData {
   };
   furcation?: 0 | 1 | 2 | 3;
   mobility?: 0 | 1 | 2 | 3;
-  canal?: boolean;
-  post?: boolean;  // zobni kolček (zatič) — vstavljen v koreninski kanal
-  sealant?: SealantStage;  // zalitje fisur — zaščitni premaz na okluzalni ploskvi
+  endo?: EndoStage;  // endodontsko zdravljenje (kanal) — see EndoStage above
+  post?: boolean;  // zobni zatiček — vstavljen v koreninski kanal
   notes?: string;
   rootCount: number;
 }
@@ -207,7 +259,23 @@ export interface Patient {
   firstName: string;
   lastName: string;
   dob: string;                  // ISO date
-  sex: 'M' | 'F' | 'other';
+  sex: 'M' | 'F';                // per Monika's explicit request, only these two are offered — no 'other' option
+  phone?: string;
+  email?: string;
+  // Address split into three fields — street (+ house number), postal
+  // code, city — rather than one free-text line, per Monika's explicit
+  // request. Checked the sibling "dental calendar" booking app first; its
+  // own intake form doesn't collect a postal address at all, so this
+  // three-way split is this app's own, not a matched convention.
+  address?: string;      // street + house number only, e.g. "Slovenska cesta 15"
+  postalCode?: string;   // e.g. "1000"
+  city?: string;         // e.g. "Ljubljana"
+  // Št. zdravstvene kartice (ZZZS) — a 9-digit number, captured at patient
+  // creation for future use only; nothing in the app reads or validates
+  // this yet beyond the input itself being digit-only/capped at 9 chars
+  // (see PatientList.tsx) — eZdravje/ZZZS integration is a later phase,
+  // see "Out of Scope for Phase 1" below.
+  healthCardNumber?: string;
   diagnoses: string[];
   visits: VisitRecord[];
 }
@@ -217,6 +285,30 @@ export interface Patient {
 
 ## Supabase Schema
 
+**This app now has its own dedicated Supabase project ("Dental charting"),
+separate from the appointment-scheduling/consent-storage app** (built in
+earlier work this session has no memory of — a different conversation,
+documented at `C:\Users\Uporabnik\Documents\Claude code dental calendar`).
+The two used to unintentionally share one Supabase project — its
+`booking_consents`/`sms_reminders` tables have nothing to do with the
+dental chart, but sat in the same database as `patients`/`visits`/
+`tooth_records`/`treatment_entries` regardless, which caused real
+confusion (a `schema.sql` run failing with "relation patients already
+exists" against tables that turned out to belong to the *other* app) and a
+real security gap (that app's backend holds a Supabase **service-role**
+key, which bypasses Row Level Security entirely — it could read/write this
+app's clinical data too, not just its own two tables). Split into a
+separate project per Monika's explicit decision once this was flagged —
+see "Current Status & Next Steps" for the move itself. `supabase/schema.sql`
+was run directly (unmodified — the new project was genuinely empty) rather
+than the `migrations/` folder, which stays in the repo only for reference/
+any other project that might ever need to catch up incrementally instead.
+Everything added *after* that initial run (restricting `sex` to M/F,
+`phone`/`email`/`address`/`postal_code`/`city`/`health_card_number` on
+`patients`) landed on the live project as its own migrations —
+`007_restrict_sex_to_mf.sql`, `008_add_patient_contact_fields.sql`,
+`009_split_address_fields.sql` — confirmed run.
+
 ```sql
 -- Patients
 create table patients (
@@ -224,7 +316,13 @@ create table patients (
   first_name text not null,
   last_name text not null,
   dob date not null,
-  sex text check (sex in ('M','F','other')),
+  sex text check (sex in ('M','F')),  -- only two options offered, per Monika's explicit request — no 'other'
+  phone text,
+  email text,
+  address text,        -- street + house number only — see postal_code/city below for the rest
+  postal_code text,
+  city text,
+  health_card_number text,  -- št. zdravstvene kartice (ZZZS) — captured for future use, not read anywhere in the app yet
   diagnoses text[] default '{}',
   created_at timestamptz default now()
 );
@@ -235,10 +333,19 @@ create table visits (
   patient_id uuid references patients(id) on delete cascade,
   date date not null,
   notes text,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  closed_at timestamptz  -- null = still open (the dentist may still be actively working in it — see "Visit lifecycle" below); set once, never un-set
 );
 
--- Tooth records per visit
+-- Tooth records per visit — ONE ROW PER TOOTH PER VISIT, not one shared row
+-- per tooth overall. This is what gives per-tooth chronological history for
+-- free (see "Visit lifecycle" below): querying every row for one tooth_id,
+-- ordered by the parent visit's date, IS that tooth's treatment history: no
+-- separate event-log table needed. While a visit is still open (see
+-- visits.closed_at above), the app upserts THIS SAME row on every autosave
+-- flush (on the visit_id+tooth_id unique constraint below) rather than
+-- inserting a new one per flush; once the visit closes, its rows are never
+-- written to again.
 create table tooth_records (
   id uuid primary key default gen_random_uuid(),
   visit_id uuid references visits(id) on delete cascade,
@@ -252,12 +359,15 @@ create table tooth_records (
   bleeding_lingual boolean[] default '{false,false,false}',
   furcation smallint default 0,
   mobility smallint default 0,
-  canal boolean default false,
-  post boolean default false,       -- zobni kolček (zatič) — see ToothData.post
-  sealant text check (sealant in ('planned','done','existing')),  -- zalitje fisur — see ToothData.sealant / SealantStage
+  endo text check (endo in ('planned','done','existing')),  -- endodontsko zdravljenje (kanal) — see ToothData.endo / EndoStage — supersedes the older unused `canal boolean` column
+  post boolean default false,       -- zobni zatiček — see ToothData.post
+  bridge_group_id text,             -- which explicit bridge this tooth belongs to, if any — see "Bridge display" below (bridgeGroupByFdi); not a foreign key, the id itself has no meaning beyond "these rows share the same value"
   notes text,
   created_at timestamptz default now()
 );
+
+create unique index if not exists tooth_records_visit_tooth_unique
+  on tooth_records (visit_id, tooth_id);  -- enables the upsert-while-open behavior described above
 
 -- Treatment plan entries
 create table treatment_entries (
@@ -324,10 +434,11 @@ from `dental chart template.jpg` and finalized in [`design/tooth-chart-prototype
   their own thicker `3px` stroke instead of `#1f1e20`/`1px` — "the line
   convention" is a default, not an absolute: `abrasion`'s own red
   (`#9D1616`) mark, so it stands out as a distinct kind of mark, not a
-  line — see the `abrasion` exception below; the `endo`/`endo_planned`
-  circle symbol, blue/red respectively at the same `3px` weight — see
-  "Canal display" below; and the `extraction_planned`/`extracted` X-cross,
-  same `3px` weight and the same red/blue as `endo`/`endo_planned` (see
+  line — see the `abrasion` exception below; the endo-circle symbol (drawn
+  off `endoStage`, an independent field — not a `ToothStatus` — see "Canal
+  display" below), blue/red/grey depending on stage, at the same `3px`
+  weight; and the `extraction_planned`/`extracted` X-cross, same `3px`
+  weight and the same red/blue as the endo-circle (see
   "Absent tooth: missing / extraction / extracted" below) — all three are
   **status markers**, not structural lines, which is exactly why they're
   allowed to break the convention everything else here follows.
@@ -373,8 +484,8 @@ from `dental chart template.jpg` and finalized in [`design/tooth-chart-prototype
   on). Anterior side zones are true triangles (two of the three vertices
   on the tooth's own outer corner, one inner apex), so their plain
   centroid skews hard toward that outer edge — close enough to collide
-  with a status like `endo`/`endo_planned` that also draws a circle
-  reaching those same outer edges. Monika caught this on tooth 33 ("these
+  with the endo-circle, which also reaches those same outer edges whenever
+  `endoStage` is set. Monika caught this on tooth 33 ("these
   dots are attached to the red circle and thus a bit poorly visible") —
   the first fix applied the shift to *every* tooth's side zones, which
   she then flagged as wrong for posterior teeth (4–8, e.g. molars):
@@ -389,7 +500,7 @@ from `dental chart template.jpg` and finalized in [`design/tooth-chart-prototype
   so they're left at the plain centroid regardless of tooth type.
   **Colors**: red (`#E94949`, `TODO_COLOR`) while a surface still needs
   treatment, blue (`#1412A9`, `DONE_COLOR`) once it's been treated — the
-  same two colors `endo`/`endo_planned` and `extraction_planned`/
+  same two colors the endo-circle and `extraction_planned`/
   `extracted` also use for their own red/blue markers (see "Canal display"
   and "Absent tooth: missing / extraction / extracted" below). This used
   to be a *dedicated* red/blue per feature — caries, endo, and (once it
@@ -415,10 +526,10 @@ from `dental chart template.jpg` and finalized in [`design/tooth-chart-prototype
   Per Monika's explicit request, this reuses the exact grey `BridgeRow.tsx`
   already used for the bridge bracket and fissure-sealant tilde, rather
   than a fresh color, since that grey already read as "neutral/status" on
-  this chart. Applied to `endo_existing` (see "Canal display" below),
-  `overlay_existing` (see "Bridge display" below), the fissure-sealant
-  field's own `'existing'` stage (`ToothData.sealant`, a `SealantStage` —
-  see "Bridge display" below), and — after an initial round where it was
+  this chart. Applied to the endo-circle's own `existing` stage (see
+  "Canal display" below),
+  `overlay_existing` (see "Bridge display" below), `sealant_existing`
+  (see "Bridge display" below), and — after an initial round where it was
   deliberately left out — `filling` too. The first pass reasoned that an
   "existing caries" state doesn't map onto real clinical practice the way
   an existing root canal or overlay does (active decay either needs
@@ -473,6 +584,13 @@ from `dental chart template.jpg` and finalized in [`design/tooth-chart-prototype
   `regionFillFor()`. The whole-tooth outer border also stays the normal
   dark color for `abrasion` (unlike `extracted`/`missing`), since
   `STATUS_STYLES.abrasion` intentionally has no `border` override.
+  **Applying `abrasion` by clicking an individual surface (not the whole
+  tooth) redirects to the whole-tooth path** — since this mark reads off
+  `wholeToothStatus`/the resolved occlusal surface only (never any other
+  individual zone), a per-surface click used to have no visible effect at
+  all for most surfaces. See `redirectsSurfaceEditToWholeTooth()` under
+  "Interaction Design" → "Click on tooth" for the fix and the fuller
+  reasoning.
 - **Exception — `bridge_pontic` skips surface subdivisions entirely.** A
   bridge tooth is one prosthetic unit, not a natural tooth with its own
   per-surface findings, so — per Monika's feedback — it doesn't need
@@ -761,20 +879,21 @@ Other finalized rules:
   so no status currently relies on that bare fallback on purpose; the
   underlying `'none'` fallback in `crownFill`'s own ternary is still there
   for whatever status might need it next.
-  **`endo`/`endo_planned`/`endo_existing`, `extraction_planned`,
+  **`extraction_planned`,
   `overlay_planned`/`overlay`/`overlay_existing`, and `caries`/
   `caries_treated`/`filling` all get the same white treatment as
   `healthy`** instead of falling through to that bare fallback. Each of these fills
   `'none'` in `statusStyles.ts` and has no symbol of its own in the side
-  view (their markers — endo-circle, overlay's cap, extraction's X,
+  view (their markers — overlay's cap, extraction's X,
   caries/filling's dot — are drawn elsewhere: the tloris square,
   `BridgeRow`'s own row, or not at all in this view), so without this
   exception the crown falls through to fully transparent, and with
   nothing painted over the root-grey base layer underneath, the *whole*
   tooth (crown included) reads as solid grey instead of the normal
   grey-root/white-crown split. This is exactly the bug Monika caught on
-  tooth 36 for `endo` ("why is the whole tooth `#D8D5CC`, we don't have
-  that color for crowns") — none of these statuses change a tooth's
+  tooth 36 back when endo was still a `ToothStatus` (`endo` — "why is the
+  whole tooth `#D8D5CC`, we don't have that color for crowns") — none of
+  these statuses change a tooth's
   outward appearance, so a plain white crown (the same as any other
   present, unremarkable tooth) is correct for all of them. The list has
   grown by re-discovery, not by design: each new status added to this
@@ -782,9 +901,13 @@ Other finalized rules:
   status *alone*, with no other status also fixing the crown incidentally.
   `caries`/`caries_treated` were one such instance — every earlier demo of
   either happened to sit on a tooth that also had `endo`/`endo_planned`
-  set (teeth 33/36), which already fixed the crown, so the gap stayed
+  set (teeth 33/36, back when those were still `ToothStatus` values),
+  which already fixed the crown, so the gap stayed
   invisible until tooth 16 (plain `{ all: 'caries' }`, no endo involved)
-  exposed it. `filling` joined the list later still, once it switched from
+  exposed it. (Endo itself no longer needs an entry in this list at all —
+  now that it's an independent field, `EndoStage` values never reach the
+  `status` prop this logic runs on in the first place, so it can't trip
+  this trap anymore; see "Canal display" above.) `filling` joined the list later still, once it switched from
   its own flat opaque `#FFFFFF` fill (which never had this bug, by
   coincidence — an opaque fill was never transparent to begin with) to the
   same `fill: 'none'`-plus-dot mechanism `caries`/`caries_treated` already
@@ -945,19 +1068,20 @@ Other finalized rules:
   actually use the wider panel instead of triggering horizontal scroll.
 
 ### Layout per quadrant (not per tooth — see perio graph below)
-Upper and lower arches stack their rows in different orders — the tooth
-number sits innermost (closest to the tloris squares) for the upper arch,
-but outermost (below the tooth artwork) for the lower arch, per feedback
-that it reads better there:
+Upper and lower arches now stack their rows as a true top-to-bottom
+mirror of each other — flip the whole chart across a horizontal line and
+the upper arch's stack lines up exactly with the lower arch's, per
+Monika's explicit request, echoing how the two arches actually meet at
+the bite line anatomically:
 ```
 [Upper arch]                      [Lower arch]
-  stranski pogled + REC             globina žepka (oralno/lingvalno)
-  (korenine gor)                    mostiček (če obstaja)
-  globina žepka (vestibularno)      tlorisni pogled
-  tlorisni pogled                   globina žepka (vestibularno/bukalno)
-  mostiček (če obstaja)             stranski pogled + REC
-  globina žepka (oralno/lingvalno)  (korenine dol)
-  tnum                              tnum
+  tnum                              globina žepka (oralno/lingvalno)
+  stranski pogled + REC             mostiček (če obstaja)
+  (korenine gor)                    tlorisni pogled
+  globina žepka (vestibularno)      globina žepka (vestibularno/bukalno)
+  tlorisni pogled                   stranski pogled + REC
+  mostiček (če obstaja)             (korenine dol)
+  globina žepka (oralno/lingvalno)  tnum
 ```
 Which pocket-depth row is vestibular (buccal) vs. oral (lingual) follows
 the *same* top=buccal/bottom=lingual (upper arch) or top=lingual/
@@ -965,16 +1089,29 @@ bottom=buccal (lower arch) convention already used for the tloris squares'
 own surface zones (see `zoneSurfaces` in `ToothTopView.tsx`) — a reading's
 position in this stack means the same anatomical thing it means there.
 
+**`tnum` used to sit at the bottom of both arches** — innermost (closest
+to the tloris squares) for the upper arch, outermost (below the tooth
+artwork) for the lower arch, per earlier feedback that it read better
+there. Per Monika's later, explicit follow-up request, the upper arch's
+`tnum` moved to the very top instead, above the side-view teeth — the one
+change needed to make the whole stack a genuine mirror end to end.
+`QuadrantBlock` in `ArchRow.tsx` composes `number`/`graph`/`pdAndTloris`
+in `[number, graph, pdAndTloris]` order for the upper arch now, the exact
+reverse of the lower arch's unchanged `[pdAndTloris, graph, number]`.
+
 **`mostiček` sits on opposite sides of `tlorisni pogled` between the two
 arches** — above it on the lower arch, below it on the upper arch (`flip`
-on `BridgeRow`, see "Bridge display" below) — a later addition, not the
-original design shown in most of this section's own history. The dental
-post triangle (see "Dental post" below) reaches outward from the tloris
-square's own top edge on the upper arch and bottom edge on the lower arch;
-`mostiček`'s bracket needs to sit on the *other* edge on each arch to
-avoid drawing on top of it, which is why the two arches' stacks are no
-longer simple mirrors of each other around `tlorisni pogled` the way the
-rest of this diagram still is.
+on `BridgeRow`, see "Bridge display" below), so the dental post triangle
+(see "Dental post" below), which reaches outward from the tloris square's
+own top edge on the upper arch and bottom edge on the lower arch, never
+collides with it. This reads as an asymmetry at first glance, but it
+isn't one: a true vertical mirror naturally swaps "above" and "below" for
+everything it reflects, so `mostiček` sitting on the opposite side of
+`tlorisni pogled` on each arch is exactly what the mirror in the diagram
+above already predicts, not an exception to it. `tnum`'s old
+never-moves-to-the-top-on-the-upper-arch behavior was the actual
+exception — now fixed, the mirror holds for every row, `mostiček`
+included.
 
 ### Status color palette
 | Status | Color | Notes |
@@ -984,9 +1121,6 @@ rest of this diagram still is.
 | caries_treated | none (transparent) | Relabeled "Plomba" (was "Karies (sanirano)") — once treated, that surface simply *is* a filling. Same dot marker as `caries`, blue (`#1412A9`, `DONE_COLOR`) instead of red — treatment done |
 | filling | none (transparent) | Relabeled "Plomba (obstoječa)" (was flat `#FFFFFF`) — a pre-existing restoration, already there before this practice started tracking the tooth, per Monika's explicit request that this render the same grey-dot way `endo_existing`/`overlay_existing` do rather than a flat fill: "a patient can come with many amalgam fillings and these should be marked." Same per-surface dot mechanism as `caries`/`caries_treated`, grey (`#8a8f94`, `STATUS_COLOR`) — see "Tlorisni pogled" below |
 | crown | #9FE1CB | Teal. Also used for a bridge anchor tooth (there's no separate `bridge_anchor` status anymore, per Monika's explicit request — see "Bridge display" below) and for a prosthesis anchor (`prosthesis_crown`, its own status, below) |
-| endo | none (transparent) | No whole-tooth fill (was green, `#C0DD97`) — instead a blue (`#1412A9`, `DONE_COLOR`) circle drawn inside the tooth's own square ("endo-circle" symbol), marking treatment done — see "Canal display" below |
-| endo_planned | none (transparent) | Same circle symbol as `endo`, red instead of blue — treatment still needed / in progress. **Not** `TODO_COLOR` — its own dedicated `#e24e4e` (`ENDO_PLANNED_COLOR`), slightly more saturated, compensating for how this symbol's thin stroke renders lighter on screen than `TODO_COLOR` does elsewhere — see "Canal display" below |
-| endo_existing | none (transparent) | Same circle symbol again, grey (`#8a8f94`, `STATUS_COLOR`) instead of red/blue — a root canal already done before this practice started tracking the tooth, not something newly planned or newly completed. See "Canal display" below |
 | implant | #CECBF6 | Purple fill, crown only (the root is a metal fixture instead, see "Stranski pogled" below); border `#1f1e20` — same dark color as every ordinary tooth's outline (was a saturated purple, `#534AB7`, paired with the fill; unified per Monika's explicit request) |
 | overlay_planned | none (transparent) | Tooth renders completely normally in both views (no fill/symbol change, per-surface findings untouched) — marked entirely by a 3px red (`#E94949`, `TODO_COLOR`) "[" -shaped cap wrapping the tloris square's own edge, drawn in `BridgeRow`'s shared row. See "Bridge display" below |
 | overlay | none (transparent) | Same as `overlay_planned`, but the cap is blue (`#1412A9`, `DONE_COLOR`) instead of red — restoration done. See "Bridge display" below |
@@ -997,6 +1131,13 @@ rest of this diagram still is.
 | prosthesis | — | Tloris view: X cross on a **circle**, not the usual square, in the same dark color as a normal tooth outline, solid border not dashed. Side view: blank — no crown, root, X cross, or outline, same as `bridge_pontic` — see "Tlorisni pogled" / "Stranski pogled" below |
 | prosthesis_crown | #9FE1CB | Same as `crown` in both views — flat whole-square fill, no subdivisions (`FLAT_INNER_STATUSES`), no other special-case rendering. Joins the same connector line `prosthesis` teeth get (`isProsthesisLink()`) — see "Tlorisni pogled" below. Not shown in the Legenda swatch grid (`StatusLegend.tsx`'s `ORDER`) — it renders identically to `crown` there (the connector line only shows up on the real chart, not an isolated swatch), so it would just be the same teal square twice; per Monika's explicit request |
 | bridge_pontic | none (transparent) | Solid (not dashed) border + X-cross, both the same dark color as every other tooth's own outline (not red or grey) in the tloris square. Side view: blank — neither crown, root, nor outline drawn at all — see "Bridge display" below. The bracket connecting anchors to pontics is a separate row (`BridgeRow`), not drawn on the tooth itself |
+
+Endodontic treatment (kanal) isn't in this table anymore — `endo`/
+`endo_planned`/`endo_existing` used to be three `ToothStatus` values here,
+but they've since been pulled out into an independent `EndoStage` field
+(`ToothData.endo`) so a tooth can have endo *and* some other status (a
+filling, say) at once — see "Canal display" below for the full symbol/
+color spec and the reasoning behind the move.
 
 `fracture` ("zlom / razpoka") was removed from `ToothStatus` entirely, per
 Monika's explicit request — a fracture/crack is "basically karies, but
@@ -1022,9 +1163,11 @@ too, per Monika's explicit request during the same review that renamed
 caries/caries_treated/filling above:
 - **`bridge_anchor`** → a bridge anchor tooth is just a plain `crown`
   now (see the `crown` row above and "Bridge display" below) — "this is
-  prevleka where bridge is fixed on." `isBridgeAnchorStatus()`
-  (`BridgeRow.tsx`) now checks `crown`/`implant` instead of
-  `bridge_anchor`/`implant`.
+  prevleka where bridge is fixed on." `isAnchorStatus()` (`BridgeRow.tsx`)
+  checks `crown`/`implant` for anchor purposes; `bridge_pontic` itself no
+  longer needs to be included there now that bridge grouping is explicit
+  rather than inferred from adjacent statuses — see "Bridge display"
+  below.
 - **`planned`** → removed as redundant with `endo_planned` ("Endodontsko
   zdravljenje (potrebno / v teku)"), which already covers the same
   ground.
@@ -1124,6 +1267,100 @@ landed on top of the tooth artwork once the line could move for recession.
   swatches, since BOP is a per-point perio-graph flag, not a tooth status,
   so it was never going to appear via the status loop.
 
+### Perio data entry (click-to-focus + type-a-number)
+
+**Status: built**, `PatientChart.tsx` only — `StatusShowcase.tsx`'s
+read-only chart simply never passes the props below, so nothing there
+becomes interactive. Until this, `PocketDepthRow`/`PerioGraphRow` above
+only ever rendered from static props — there was no way to actually enter
+a pocket-depth or gum-margin reading, and `PatientChart.tsx` didn't even
+pass those props into `DentalChart` at all. Deliberately a **separate**
+interaction mode from the status picker/toolbar (see "Interaction
+Design"), not a reuse of it: a full periodontal exam is roughly 200
+individual mm numbers (3 points × 2 surfaces × 32 teeth), so speed of
+entry matters far more here than for painting an occasional status.
+
+- **Click a point, then type a digit** — no popup number-pad, no
+  click-to-cycle. Clicking an unfocused point (mesial/mid/distal, on
+  either a `PocketDepthRow` or the gum-margin `RecLabels` in
+  `PerioGraphRow`) shows a focus ring in the same `--tooth-selected` teal
+  used for chart selection elsewhere, so "what keyboard input applies to
+  right now" reads consistently across the whole app. Typing `0`–`9`
+  while a point is focused sets that value and **auto-advances** —
+  mesial → mid → distal → the next tooth's mesial point — via
+  `advancePerioPoint()` (`PatientChart.tsx`), walking the *same* quadrant
+  + surface/kind the current point belongs to (`UPPER_LEFT`/
+  `UPPER_RIGHT`/`LOWER_LEFT`/`LOWER_RIGHT`, `toothMeta.ts`). Deliberately
+  stops at the end of a quadrant's row (clears focus) rather than
+  crossing into a sibling row — PD buccal → PD lingual, or across
+  arches — a fresh click starts the next row. Single digit only for
+  now: real probing depths are almost always single-digit, and the
+  visible circle only has room for one character anyway; a two-digit UI
+  is future work, not a data-model change.
+- **The same point doubles as a second control — bleeding on probing
+  (BOP) for a pocket-depth point, recession-vs-overgrowth sign for a
+  gum-margin point.** Real estate is tight (points sit ~12px apart, the
+  same reason BOP is already a ring-color change rather than a second
+  ring — see "Perio graph" above), so rather than add a whole new visible
+  toggle next to every point, clicking an **already-focused** point again
+  toggles that flag in place — `toggleBleeding()`/`toggleGumSign()`
+  (`PatientChart.tsx`) — without touching the number. A gum-margin point
+  with no value yet is a no-op to sign-toggle (nothing to flip the sign
+  of before a digit's been typed there). Holding **Shift** while typing a
+  digit toggles the same flag as a one-keystroke shortcut, calling the
+  exact same `toggleBleeding()`/`toggleGumSign()` functions so the two
+  mechanisms can never disagree; a plain digit never touches the flag, so
+  correcting a depth later never silently un-marks a point that was
+  already flagged. A brand-new gum-margin point defaults to **negative**
+  (recession, the common clinical case, and what the REC label's
+  no-sign-shown convention already assumes) — typing a plain digit
+  preserves whatever sign was already there.
+- **Mutual exclusion with the status-selection mode above**: clicking a
+  perio point clears the chart's status `selection`
+  (`handlePerioPointClick`), and clicking a chart status target clears
+  `focusedPerioPoint` (`handleTargetClick`) — entering numbers and
+  painting statuses are two separate modes, so starting one exits the
+  other cleanly, the same way `bridgeMessage` gets cleared by either too.
+- **Nullable per-point tuples**: `PocketDepths`/`GumMargin`
+  (`types/dental.ts`) widened from `[number, number, number]` to
+  `[number | null, number | null, number | null]` to support partial
+  entry — a `null` at one index means "this specific point not yet
+  entered," distinct from the outer `Record<string, PocketDepths>` key
+  being absent entirely ("this tooth has no data at all"). The gumline
+  polyline in `PerioGraphRow` still falls back to `0` per null point for
+  its own continuous line (`gm[j] ?? 0`) — a visual guide, not the
+  data-driven number/label, which stays hidden for a null point per the
+  existing "no entry = nothing shown" rule.
+- **Placeholder circles**: a faint dashed grey circle
+  (`PLACEHOLDER_COLOR`, `#ccd6d4`) marks every point that's interactive
+  but not yet entered, in both `PocketDepthRow` and `PerioGraphRow`'s
+  `RecLabels` — added after Monika reported "there are no numbers for
+  pocket depth... please fix this," traced to two causes at once: the
+  click hit-targets were fully invisible (`fill/stroke: 'none'`), giving
+  no visual affordance for where to click on an empty point at all, and
+  `PatientChart.tsx` had no seed data in any of the five new perio state
+  maps, so a fresh page load showed nothing whatsoever. The placeholder
+  is gated strictly on `interactive` (i.e. `onPointClick` was actually
+  passed), so it never appears on `StatusShowcase.tsx`'s read-only
+  chart — that page keeps its original "nothing shows until real data
+  exists" look, since there's no click to invite there. A few teeth
+  (16 in the seed data) now ship with example pocket-depth/gum-margin/BOP
+  readings on first load too, the same "pre-existing findings for
+  editing, not just blank entry" reasoning `SEED_SURFACES`/`SEED_ENDO`
+  already use.
+- **`PerioPoint`** (`perioStyle.ts`) is the shared point-identity type
+  both row components and `PatientChart.tsx`'s focus state key off:
+  `{ kind: 'pocket', fdi, surface, index }` or `{ kind: 'gum', fdi,
+  index }`, plus a `samePerioPoint()` equality helper. `PocketDepthRow`
+  gained a `surface: 'buccal' | 'lingual'` prop (needed to build correct
+  point identities — the two call sites already knew which surface they
+  were showing, just never passed it down) alongside `onPointClick`/
+  `focusedPoint`; `PerioGraphRow`'s `RecLabels` gained the same two.
+  Impacted teeth are excluded from all of this (`interactive` is false
+  whenever `statuses?.[fdi] === 'impacted'`) — nothing to probe on a
+  tooth that's never erupted, the same rule REC display already applied
+  to itself before entry existed at all.
+
 ### Bridge display (mostiček), fissure sealant (zalitje fisur), and overlay
 
 **Status: built**, matched against a reference chart Monika provided (a
@@ -1179,29 +1416,71 @@ Four pieces:
   confirmation that "the lower arch is fine as it is." **No text label**
   on the bracket — the app is read by dental professionals, who don't need
   "mostiček 14-16" spelled out; the bracket shape alone says it, per
-  Monika's explicit feedback. The bracket is **auto-detected from
-  `statuses`**, not a separate "which teeth are bridged" prop: it scans
-  each quadrant's own FDI display order for a contiguous run that starts
-  and ends on an anchor with only `bridge_pontic` teeth in between, same
-  as every other row already reads `surfacesByFdi`/`statuses` — so a
-  bridge just needs its teeth's own statuses set correctly and it shows
-  up, no additional data-model plumbing. **An anchor is `crown` *or*
-  `implant`** (`isBridgeAnchorStatus()`) — there's no separate
-  `bridge_anchor` status (see the "Status color palette" removal note
-  above: a bridge anchor tooth is just a plain `crown`, structurally and
-  visually identical to any other crowned tooth). A bridge can also be
-  supported by an implant instead of a natural crown, a real and common
-  clinical case, so an `implant`-status tooth at either (or both) ends of
-  a run is recognized too; its own fixture rendering (`ToothSideView.tsx`'s
-  `ImplantFixture`, `ToothTopView.tsx`'s implant fill) is completely
-  untouched by this — `BridgeRow` only reads the status to decide where to
-  draw the bracket, never changes how the anchor tooth itself renders.
-  **This is a looser check than it sounds** — any `crown` tooth adjacent
-  to a valid `bridge_pontic` run becomes a recognized anchor automatically,
-  since there's no separate marker distinguishing "this crown is a bridge
-  anchor" from "this is just an ordinary crown" (there never needs to be:
-  the pattern itself — a `bridge_pontic` run terminated by `crown`/
-  `implant` on both ends — is what a bridge anchor structurally *is*).
+  Monika's explicit feedback.
+  **The bracket comes from explicit selection, not from scanning `statuses`
+  for adjacent crown/implant/bridge_pontic runs** — the opposite of every
+  earlier version of this feature (see the full history below). Forming a
+  bridge is a deliberate act: select an existing anchor tooth (already
+  `crown` or `implant`) together with the teeth that should become its
+  pontics, then click "Člen mostu" in `StatusToolbar` — a dedicated
+  handler, `handleCreateBridge()` (`PatientChart.tsx`), special-cased ahead
+  of the generic apply-status-to-every-selected-target path every other
+  status uses (`handleStatusClick`). That one action populates
+  `bridgeGroupByFdi`, a plain `fdi → group-id` map threaded down
+  `DentalChart` → `ArchRow` → `BridgeRow` (mirroring `postByFdi`/
+  `endoByFdi`) — `BridgeRow`'s own `findBridgeGroups()` only ever draws a
+  bracket for teeth recorded there together, filtered per quadrant.
+  **Only ONE anchor needs to already exist in the selection** — not both
+  ends: a cantilever bridge (one anchor, one or more pontics, no anchor at
+  the far end) is a real clinical case and needs no special handling, since
+  `handleCreateBridge` only requires `anchors.length >= 1`. The anchor
+  tooth's own status is left completely untouched (still `crown`/
+  `implant`, fixture rendering unaffected); only the *other* selected teeth
+  become `bridge_pontic`. A selection with no pre-existing anchor at all,
+  or with fewer than two distinct teeth, or spanning more than one
+  quadrant (a bridge never crosses a quadrant boundary — one `BridgeRow`
+  per quadrant), creates no bridge — but unlike the toolbar's other
+  whole-tooth actions (`handleTogglePost`/`handleSetEndoStage`), which
+  silently no-op on an empty selection, each of these failure paths sets a
+  specific `bridgeMessage` explaining why, shown under the page header
+  until the next chart click. A group's membership is still re-validated
+  against CURRENT statuses on every render, not blindly trusted — so a
+  tooth whose status later changes away from what a bridge needs (an
+  anchor edited to something else, a pontic overwritten by a different
+  status via `ToothDetailPanel`) just quietly stops extending the bracket,
+  without `bridgeGroupByFdi` itself needing to be actively cleaned up
+  wherever a status can change.
+
+  **This replaces three earlier, purely status-driven detection schemes,**
+  all of which inferred a bridge from whichever crown/implant/bridge_pontic
+  statuses happened to sit next to each other after the fact rather than
+  recording an actual decision to bridge specific teeth together:
+  1. *Loose*: bracket any contiguous run containing a pontic, no
+     requirement that either end be a real anchor.
+  2. *Strict, either anchor type*: require the run to start and end on an
+     anchor, `crown` or `implant`, either combination allowed.
+  3. *Strict, matching anchor type*: tightened further to require both
+     ends be the *same* anchor type, per an earlier (and, it turned out,
+     mistaken) clinical correction that a mixed crown/implant pair "isn't
+     a real-world case."
+
+  Versions 2 and 3 both shared the same failure mode Monika reported
+  repeatedly: a bridge not yet closed off by a real anchor on *both*
+  sides — a lone pontic with nothing set next to it, a pontic next to only
+  one anchor — drew nothing at all, reading as "the bracket is broken."
+  Loosening the match (version 1, and briefly again after 3) fixed that but
+  produced the opposite failure instead: a tooth merely set to
+  `bridge_pontic` right next to an *unrelated* pre-existing crown/implant —
+  no intent to bridge the two at all — got silently welded into a phantom
+  bridge with it (the teeth-22/24-next-to-implant-21 case), and an isolated
+  pontic with no neighbors produced a degenerate zero-width "bracket," a
+  stray vertical tick with nothing to actually span. No purely
+  status-driven rule can win both ways at once, because adjacency can never
+  tell "these teeth were deliberately selected together" apart from "these
+  statuses just happen to be next to each other" — which is exactly why the
+  feature moved to explicit selection instead of one more adjacency rule.
+  See `findBridgeGroups()`'s own comment in `BridgeRow.tsx` and
+  `handleCreateBridge()`'s in `PatientChart.tsx` for the mechanism in full.
   Composed into `ArchRow.tsx`'s `pdAndTloris` block, always immediately
   adjacent to `TlorisRow` — between the vestibular/oral `PocketDepthRow`
   and `TlorisRow` on the lower arch (matching the "Layout per quadrant"
@@ -1218,74 +1497,72 @@ Four pieces:
   which has nothing there) and on the *top* `PocketDepthRow` for the upper
   arch (flipped: this row now sits below `TlorisRow` instead, so the top
   side is the one that needs the extra spacing to match).
-- **Fissure sealant (`sealant?: SealantStage` on `ToothData`)** marks a
-  tooth whose occlusal fissures have been (or will be) sealed as a
-  preventive measure — independent of `ToothStatus`, not a new status
-  value, threaded through the component chain the same way `post` already
-  is: `DentalChart` → `ArchRow` → `QuadrantBlock` → `BridgeRow`
-  (`sealantByFdi` prop) — but landing on `BridgeRow`, not `TlorisRow`,
-  since the mark itself lives in the bracket's own row, not inside the
-  tloris square. A per-tooth field rather than a `ToothStatus`, same
-  reasoning as `post`: sealant commonly coexists with whatever else is
-  going on for that tooth (most often nothing at all — it's usually
-  applied to an otherwise sound tooth as prevention), so it needs to
-  combine freely rather than compete for the single `surfaces.all` slot.
-  **`sealant` started as a plain `boolean`** (always rendering the same
-  grey tilde) before Monika's explicit request to extend the "status vs.
-  to-be-done vs. done" pattern to it too, the same as `endo`/`overlay`
-  below — `SealantStage` (`types/dental.ts`) is
-  `'planned' | 'done' | 'existing'`, still its own independent type
-  rather than folded into `ToothStatus`, for the same combine-freely
-  reason as above.
-  **Drawn as a small tilde (`~`)**, procedurally as an SVG path (two
-  mirrored cubic-Bézier humps), not a text glyph — consistent with every
-  other symbol in this chart being a drawn shape rather than a font
-  character. Centered at `midGapY` (see above) on the sealed tooth's own
-  column — this positioning was actually established *by* the sealant
-  tilde first (Monika's original request was specifically about the
-  tilde's own placement, "in the middle of the gap between tooth in the
-  tloris view and the numbers for pockets"), with the bracket's own bar
-  moved to match it afterward, not the other way around. At its current
-  size (`SEALANT_HALF_WIDTH`/`SEALANT_AMPLITUDE`, doubled once from an
-  initial size per Monika's explicit request) the tilde no longer fits
-  inside `BridgeRow`'s own nominal 4px-tall box, so the row's `<svg>` sets
-  `overflow: visible` — the same technique already used for the
-  dental-post triangle and abrasion's crown-edge outline. Color comes from
+- **Fissure sealant (`sealant_planned`/`sealant`/`sealant_existing`
+  statuses)** marks a tooth whose occlusal fissures have been (or will be)
+  sealed as a preventive measure — a real three-state `ToothStatus` set
+  now, same shape as `overlay_planned`/`overlay`/`overlay_existing` right
+  below. **This used to be an independent field** (`ToothData.sealant`, a
+  `SealantStage` type, threaded like `post` — `DentalChart` → `ArchRow` →
+  `QuadrantBlock` → `BridgeRow` via a `sealantByFdi` prop — rather than a
+  status), specifically so it could combine freely with whatever else was
+  going on for a tooth without competing for the single `surfaces.all`
+  slot, the same reasoning `post` still uses today. Per Monika's explicit
+  clinical correction, that premise was wrong: sealant and a status like
+  implant are not compliant services on the same tooth, so there was never
+  a real case needing that combination — the original demo doing exactly
+  that (teeth 21/37, implant + planned/done sealant together) was itself
+  clinically invalid. `SealantStage`, `ToothData.sealant`, and the
+  `sealantByFdi` prop chain have all been removed entirely; the type union,
+  `STATUS_STYLES`, and `STATUS_ORDER` (`statusStyles.ts`) are now the only
+  place its three states live, exactly like `overlay`'s own pair-plus-
+  existing-state. (Endo went the *opposite* direction later — see "Canal
+  display" above: it started as a `ToothStatus` pair, then had to become
+  an independent field for exactly the reason sealant just stopped being
+  one — a genuine need to coexist with another status. The two moves
+  aren't a contradiction; each field just landed wherever its own real
+  clinical constraint pointed.)
+  **Rendering is otherwise unchanged**: still a small tilde (`~`), drawn
+  procedurally as an SVG path (two mirrored cubic-Bézier humps) in
+  `BridgeRow.tsx`'s own row, not a text glyph — consistent with every other
+  symbol in this chart being a drawn shape. Centered at `midGapY` (see
+  above) on the sealed tooth's own column. At its current size
+  (`SEALANT_HALF_WIDTH`/`SEALANT_AMPLITUDE`, doubled once from an initial
+  size per Monika's explicit request) the tilde no longer fits inside
+  `BridgeRow`'s own nominal 4px-tall box, so the row's `<svg>` sets
+  `overflow: visible` — the same technique already used for the dental-post
+  triangle and abrasion's crown-edge outline. Color comes from
   `sealantColorFor()` (`BridgeRow.tsx`) — `TODO_COLOR` (planned),
   `DONE_COLOR` (done), or `STATUS_COLOR` (existing, the original and still
   the default look) — the same three shared colors `overlayColorFor()`
-  uses for overlay below.
-  **Demoed** on tooth 17 (upper) and 35 (lower) in `StatusShowcase.tsx`
-  (`MOCK_SEALANT`), both `'existing'` (their original meaning, unchanged)
-  on otherwise plain `healthy` teeth (no entry in `MOCK_SURFACES`) — the
-  common real-world case — so both of `flip`'s positions are visible:
-  above the tloris squares on the lower arch, below them on the upper
-  arch. Teeth 21 and 37 (both `implant`, purple fill) add `'planned'`/
-  `'done'` sealant on top, specifically to demonstrate the field's whole
-  point — it combines freely with whatever `ToothStatus` the tooth already
-  has, rather than competing for the single `surfaces.all` slot.
-  **Legend**: since `sealant` isn't a `ToothStatus`, it was never part of
-  `StatusLegend.tsx`'s `ORDER`-driven grid (and had no entry there at all
-  before this — a known, accepted gap at the time). Now that it has three
-  meaningfully different colors, it gets three small hand-added rows
-  (same pattern as the BOP row below it), one tilde each in
-  `STATUS_COLOR`/`TODO_COLOR`/`DONE_COLOR`.
-  **Schema**: changed from `boolean` to
-  `text check (sealant in ('planned','done','existing'))` in
-  `tooth_records` — edited `supabase/schema.sql` and
-  `supabase/migrations/004_add_sealant.sql` **in place** rather than
-  adding a new migration, since 004 had never been run anywhere live yet
-  (still true as of this writing — not yet run on the live project, same
-  as migrations 001–003).
+  uses for overlay below, now reading `statuses` (i.e. `surfaces.all`)
+  directly instead of the removed separate prop.
+  `StatusSwatch.tsx` (the shared swatch renderer both `StatusLegend.tsx`
+  and the click-to-edit pickers use) draws the same tilde as its
+  representative icon for all three sealant statuses, alongside the
+  caries dot/overlay cap it already drew for their own statuses.
+  **Demoed** on teeth 17 (upper, existing), 35 (lower, planned), and 37
+  (lower, done) in `StatusShowcase.tsx`'s `MOCK_SURFACES` — 37 used to be
+  a second `implant` example before this change; converting it left only
+  tooth 21 demonstrating the implant fixture rendering, a real (accepted)
+  reduction in tooth-shape coverage for that unrelated feature.
+  **Legend**: now flows through `StatusLegend.tsx`'s ordinary
+  `STATUS_ORDER`-driven grid automatically, like any other status — no
+  more hand-added rows for it.
+  **Schema**: the dedicated `sealant text check (...)` column in
+  `tooth_records` (`supabase/schema.sql`) and the migration that added it
+  (`supabase/migrations/004_add_sealant.sql`) have both been removed —
+  neither had ever been run on the live project, and sealant's three
+  states now live in the existing `surfaces` jsonb column like every other
+  status, needing no schema change of their own.
 - **Overlay (`overlay_planned`/`overlay`/`overlay_existing` statuses)**
   marks a partial-crown restoration covering the cusps — a real
-  three-state `ToothStatus` set this time, not an independent field like
-  `post`/`sealant` (there's no reason an overlay would need to combine
-  with some *other* whole-tooth status the way a post or sealant does, so
-  it fits the existing `surfaces.all` slot fine). Same planned/done/
+  three-state `ToothStatus` set, not an independent field like `post`
+  (there's no reason an overlay would need to combine with some *other*
+  whole-tooth status the way a post does, so it fits the existing
+  `surfaces.all` slot fine). Same planned/done/
   existing pattern and the same shared `TODO_COLOR`/`DONE_COLOR`/
   `STATUS_COLOR` as every other such pair/triple on the chart
-  (caries/caries_treated, endo/endo_planned/endo_existing,
+  (caries/caries_treated, the endo-circle's own stages,
   extraction_planned/extracted) — see the caries-dot color note under
   "Tlorisni pogled" above. `overlay_existing` (grey, `STATUS_COLOR`) was
   added after the original red/blue pair, per Monika's explicit request to
@@ -1298,11 +1575,12 @@ Four pieces:
   cap's color (via `overlayColorFor()`), even though nothing in the
   generic `wholeStyle.symbol` rendering pipeline reads it, since none of
   the three sets a `symbol` type. `ToothSideView.tsx` needed the same
-  white-crown fix `endo`/`extraction_planned` already have
+  white-crown fix `extraction_planned` already has
   (`isOverlayStatus`, folded into the same branch, covering all three
   statuses) — otherwise a `fill: 'none'` status with no symbol of its own
   falls through to the see-through-grey look reserved for actually-absent
-  tooth structure, the same bug Monika originally caught on `endo` (tooth
+  tooth structure, the same bug Monika originally caught on `endo` back
+  when it was still a `ToothStatus` (tooth
   36, "why is the whole tooth `#D8D5CC`") and that later resurfaced for
   `caries`/`caries_treated` too (see the "Healthy-tooth coloring"
   exception under "Stranski pogled" above).
@@ -1334,7 +1612,7 @@ Four pieces:
   `BridgeRow.tsx` reads the same value rather than a duplicated literal
   that could drift out of sync with the square's own actual size. Stroke
   is **3px** (`OVERLAY_STROKE_WIDTH`, widened once from an initial 2px),
-  matching the weight `abrasion`/`endo`/the extraction pair all use for
+  matching the weight `abrasion`/the endo-circle/the extraction pair all use for
   their own status markers.
   **A known paint-order caveat**: `BridgeRow` renders *before* `TlorisRow`
   in the DOM on the lower arch (unflipped) but *after* it on the upper
@@ -1392,114 +1670,109 @@ Four pieces:
 
 ### Canal display (endodontsko zdravljenje)
 
-**Status: built — the doctor's revised spec.** An earlier version (a
-pulp-chamber-to-apex line traced through the root, colored red/blue for
-planned/done) was built, shipped briefly in the "Cela karta" demo, then
-removed after Monika discussed canal/endo charting with the doctor —
-see the git history around 2026-08-18 if that approach is ever revisited.
-The doctor's actual request, once clarified, turned out to be much
-simpler: not a line inside the root at all, just a **symbol in the tloris
-(top-down) view** — a plain circle centered inside the tooth's own
-square, color-coded by treatment stage. No per-canal-count detail (a
-molar's 2–3 real canals aren't distinguished), no side-view geometry —
-this is a status marker, not an anatomical rendering.
+**Status: built — now an independent field, not a `ToothStatus`.** Two
+redesigns down from the original spec, both driven by real feedback rather
+than speculation:
 
-- **Three statuses, not one status + a flag**: `endo` (treatment done),
-  `endo_planned` (still needs doing / in progress), and `endo_existing`
-  (done before this practice started tracking the tooth — added later,
-  per Monika's explicit request to extend the same "status vs. to-be-done
-  vs. done" pattern `missing`/`extraction_planned`/`extracted` already
-  demonstrated to the other treatment pairs on the chart) — same pattern
-  already used for other multi-state pairs in `statusStyles.ts`
-  (`extracted`/`missing`), chosen over a single `endo` status plus a flag
-  (the approach the earlier, since-removed, canal-line feature used) for
-  consistency with those.
-- **Colors**: blue (`#1412A9`, `DONE_COLOR`) for `endo`, grey (`#8a8f94`,
-  `STATUS_COLOR`) for `endo_existing` — the same shared colors every other
-  todo/done/existing marker on the chart uses (see the caries-dot color
-  note under "Tlorisni pogled" above), not a dedicated set of their own.
-  This is a reversal from how the feature first shipped: `endo`/
-  `endo_planned` originally had their own fresh, dedicated hex
-  (`#1413A9`/`#F04343`, deliberately *not* reused from elsewhere), on the
-  same "distinct clinical marker, not the same one repainted" reasoning
-  `caries` also used at the time — Monika's later explicit request
-  reverted that app-wide, red/blue/grey should always mean the same thing
-  everywhere. Set via `symbolColor` on each status in `statusStyles.ts`,
-  the same mechanism `bridge_pontic` already uses to decouple a symbol's
-  color from the square's own border.
-  **`endo_planned` is the one exception to that unification**, and only
-  because of how *this specific symbol* renders, not a reversion of the
-  policy: its circle is a thin 3px stroke, not a solid filled shape like
-  `caries`'s own dot, so the same `TODO_COLOR` hex reads visibly
-  lighter/more washed-out on screen there than it does elsewhere (likely
-  anti-aliasing/blending with the background at that stroke width) —
-  Monika confirmed the on-screen color as "#E35656" (a perceptibly
-  pinker, lighter red than `TODO_COLOR`'s own `#E94949`) once she checked
-  it live, and asked for `#e24e4e` instead specifically here, while
-  confirming every *other* red marker on the chart (caries' dot,
-  extraction's X, overlay's cap, sealant's tilde) already reads correctly
-  as-is. Rather than adjust `TODO_COLOR` itself — which would have shifted
-  all of those too — `endo_planned` alone reads from its own
-  `ENDO_PLANNED_COLOR` constant (`statusStyles.ts`), not `TODO_COLOR`.
-- **The symbol itself** is a new `StatusSymbol` type, `'endo-circle'`
-  (`ui/StatusSymbol.tsx`) — a plain unfilled circle centered in the
-  caller's bounding box, using the full passed-in `strokeWidth` (meant to
-  read as a bold, deliberate mark, not fine annotation detail — unlike the
-  now-removed `granuloma` status's own `'granuloma-circle'` symbol type,
-  which scaled its stroke down to `* 0.5` for exactly the opposite reason;
-  see the "Status color palette" removal note above). `ToothTopView.tsx`
-  sizes it to **touch the square's own outer
-  edges** — a centered `x=1,y=1,width=26,height=26` box (the same one
-  `bridge_pontic`'s cross reaches), which for a circle means
-  `r = min(width,height)/2 = 13` centered at `(14,14)`, exactly the
-  square's own center — per Monika's explicit request, and matching how
-  `prosthesis`'s own circle (`cx=14,cy=14,r=13`) already fills the same
-  footprint. Stroke width is **3px**, the same weight as `abrasion`'s own
-  mark, again per Monika's explicit request — not the `1px` every other
-  line in this view uses (see the line convention under "Tlorisni pogled"
-  above, which lists `endo`/`endo_planned` alongside `abrasion` as the
-  two deliberate exceptions to that convention, both now sharing the same
-  `3px` weight).
-- **Replaces the flat whole-tooth fill**, not layered on top of it: all
-  three of `endo`/`endo_planned`/`endo_existing` set `fill: 'none'`, the
-  same way `extracted`/`missing`/`prosthesis` forgo a fill in favor of a
-  symbol. `endo` previously filled the whole tooth green (`#C0DD97`) —
-  gone now, replaced by the circle. The square's own outline stays the
-  default dark (`border` unset on all three statuses) — only the circle
-  carries the status color. This is tloris-view only — the side view has
-  no equivalent symbol for any of the three, and needed its own explicit
-  fix to avoid an all-grey tooth once the flat fill went away; see the
-  "Healthy-tooth coloring" exception under "Stranski pogled" below
-  (`isEndoStatus` there covers all three statuses, not just the original
-  two).
-- **A real tooth, not a prosthetic unit**: unlike `bridge_pontic`/
-  `prosthesis`, none of the three endo statuses skip
+1. An early version traced a pulp-chamber-to-apex line through the root,
+   red/blue for planned/done. Shipped briefly in the "Cela karta" demo,
+   then removed once Monika discussed canal/endo charting with the doctor
+   — see the git history around 2026-08-18 if that approach is ever
+   revisited. The doctor's actual request, once clarified, was much
+   simpler: not a line inside the root at all, just a **symbol in the
+   tloris (top-down) view** — a plain circle centered inside the tooth's
+   own square, color-coded by treatment stage. No per-canal-count detail
+   (a molar's 2–3 real canals aren't distinguished), no side-view geometry
+   — a status marker, not an anatomical rendering.
+2. That symbol then shipped as three mutually-exclusive `ToothStatus`
+   values (`endo`/`endo_planned`/`endo_existing`), same pattern as
+   `extracted`/`missing` — but a `ToothStatus` lives in the single
+   `surfaces.all` slot along with every *other* status, so a tooth
+   couldn't have both a filling and a completed root canal recorded at
+   once: applying one wiped out the other. Monika flagged this directly
+   ("a filling and endodontic treatment can be on the same tooth"), and it
+   was scoped down to *just* this fix (rather than a fully general
+   multi-status system) — endo was pulled out into its own independent
+   field, `ToothData.endo` (`EndoStage`, types/dental.ts — `'planned' |
+   'done' | 'existing'`), exactly mirroring how dental post already works
+   (see "Dental post" below): a plain value threaded alongside `surfaces`,
+   not competing with it. This also finally gave the long-vestigial
+   `ToothData.canal?: boolean` field a real purpose — it predated and was
+   meant to be superseded by the original endo statuses but was left
+   unused; `endo` replaces it outright (dropped from `ToothData` and from
+   `tooth_records`, migration `004_add_endo.sql`).
+
+**Current shape:**
+- `endoStage?: EndoStage` is threaded through the component chain exactly
+  like `hasPost` — `DentalChart` → `ArchRow` → `TlorisRow` (`endoByFdi`
+  prop) → `ToothTopView` (`endoStage` prop) — independent of
+  `surfacesByFdi` end to end. `handleSetEndoStage()` in `PatientChart.tsx`
+  applies a stage to every distinct tooth in the current selection (same
+  dedup pattern as `handleTogglePost`, generalized from boolean to
+  stage-equality: sets the stage if any selected tooth doesn't already
+  have it, clears it if all of them do — so clicking the same stage twice
+  toggles it off).
+- **The symbol itself is unchanged** from the original design — the
+  `'endo-circle'` `StatusSymbol` type (`ui/StatusSymbol.tsx`), a plain
+  unfilled circle using the full passed-in `strokeWidth` (meant to read as
+  a bold, deliberate mark, not fine annotation detail). `ToothTopView.tsx`
+  still sizes it to **touch the square's own outer edges** — a centered
+  `x=1,y=1,width=26,height=26` box (the same one `bridge_pontic`'s cross
+  reaches), which for a circle means `r = min(width,height)/2 = 13`
+  centered at `(14,14)`, exactly the square's own center — at the same
+  **3px** stroke weight as `abrasion`'s own mark (see the line convention
+  under "Tlorisni pogled" above, which still lists the endo-circle
+  alongside `abrasion` as a deliberate exception to that convention's
+  usual 1px). What changed is *where this gets drawn*: no longer inside
+  the generic `wholeStyle.symbol` dispatch (that block only ever fires off
+  a `ToothStatus`, and endo isn't one anymore) — it's its own
+  unconditional block, drawn whenever `endoStage` is set, regardless of
+  whatever real `ToothStatus` the tooth also has.
+- **Colors**: blue (`DONE_COLOR`) for `done`, grey (`STATUS_COLOR`) for
+  `existing` — the same shared colors every other todo/done/existing
+  marker on the chart uses (see the caries-dot color note under "Tlorisni
+  pogled" above), read via `endoColorFor()` (`statusStyles.ts`) rather
+  than a `StatusStyle.symbolColor` entry now that there's no
+  `STATUS_STYLES` entry to hang it on. `planned` is still the one
+  exception to that unification, for the same reason it always was: its
+  circle is a thin 3px stroke, not a solid filled shape like `caries`'s
+  own dot, so the shared `TODO_COLOR` hex reads visibly lighter/more
+  washed-out there than it does elsewhere — Monika confirmed the
+  on-screen color as "#E35656" once she checked it live, and asked for a
+  slightly more saturated `#e24e4e` (`ENDO_PLANNED_COLOR`) specifically
+  for this one symbol, while confirming every *other* red marker on the
+  chart already read correctly.
+- **A real tooth, not a prosthetic unit**: setting `endoStage` never skips
   per-surface subdivision — the triangles, occlusal rectangle, and divider
-  lines all still render normally (just unfilled, since `fill` is
-  `'none'` for all three); only the symbol is special-cased.
-- **Whole-tooth only**, same simplification as every other symbol-driven
-  status in this view (`surfaces.all`, not per-surface) — setting `endo`
-  on an individual surface (e.g. `{ m: 'endo' }`) still resolves via
-  `regionFillFor()` like before, but now renders that surface transparent
-  rather than green, since there's no per-surface equivalent of the
-  circle symbol. Not a new limitation — `extracted`/`missing`/`prosthesis`
-  already only render their symbol at the whole-tooth level too.
-- Demoed on tooth 34 (`endo_planned`, red, isolated), tooth 47 (`endo`,
-  blue, isolated), and tooth 22 in the main "Cela karta" chart plus tooth
-  41 in the swatch grid (`endo_existing`, grey, isolated) in
-  `StatusShowcase.tsx`, so all three circle colors are visible side by
-  side on their own. Teeth 33 and 36 combine an
-  endo-circle with per-surface caries dots on top — one of each state, per
-  Monika's explicit request first for the done case (36, blue) then the
-  to-do case (33, red) — demonstrating that a whole-tooth symbol
-  (`surfaces.all`) and per-surface markers (caries dots) coexist
-  correctly regardless of which endo state is involved: `surfaces.all`
-  still drives the endo-circle regardless of what any individual surface
-  is overridden to, since `statusFor()` only falls through to
-  `surfaces.all` for surfaces *without* their own override — see the
-  caries exception under "Tlorisni pogled" above.
+  lines all still render normally, driven entirely by whatever
+  `ToothStatus` the tooth has (or doesn't). This is the whole point: a
+  tooth can be a plain `crown` (flat teal square, no subdivisions) *and*
+  show the endo-circle on top, or have per-surface `caries` dots *and* the
+  circle, simultaneously — real coexistence now, not just non-conflicting
+  slots that happened not to collide.
+- **Whole-tooth only, tloris-view only** — same simplification as before:
+  there's no per-surface equivalent of the circle symbol, and no
+  side-view rendering at all (the side view's own white-crown fix no
+  longer needs a special case for endo either, now that it's never part
+  of the `status` prop reaching that logic — see "Healthy-tooth coloring"
+  under "Stranski pogled" below).
+- **Not reachable from `ToothDetailPanel.tsx`'s chip/picker flow**, same
+  as dental post — both independent fields are only editable via the
+  direct-click `StatusToolbar` flow (see "Uniform service presentation"
+  under "Interaction Design" below), presented as three ordinary grid
+  entries (`EndoSwatch.tsx`, one per `EndoStage`) rather than one, since a
+  tri-state field can't be a single toggle button the way post is.
+- Demoed in `StatusShowcase.tsx` via `MOCK_ENDO` (independent of
+  `MOCK_SURFACES` now): tooth 34 (`planned`, red, isolated), tooth 47
+  (`done`, blue, isolated), tooth 22 (`existing`, grey, isolated) show all
+  three circle colors on their own; teeth 33 and 36 combine the
+  endo-circle with per-surface `caries` overrides on every surface — one
+  of each endo state — demonstrating the actual coexistence fix this
+  change was for: neither tooth has an `all` entry in `MOCK_SURFACES` at
+  all anymore, just the per-surface caries dots, with the circle coming
+  entirely from `MOCK_ENDO`.
 
-### Dental post (zobni kolček)
+### Dental post (zobni zatiček)
 
 **Status: built.** A post inserted into a treated root canal for
 retention — tloris view only, no side-view rendering.
@@ -1514,12 +1787,15 @@ retention — tloris view only, no side-view rendering.
   commonly coexists with whatever else is going on for that tooth (a
   crown, caries, an already-completed root canal), the same way BOP or
   gum-margin readings do, so it needed to combine freely with any
-  `ToothStatus` rather than compete with one for the single `surfaces.all`
-  slot the way e.g. `endo` and `caries` would if both were whole-tooth
-  statuses (`ToothData.canal`, the older leftover field this pattern
-  echoes, predates the `endo`/`endo_planned` statuses that superseded its
-  original purpose — `post` is a distinct, still-live concept, not a
-  rename of it).
+  `ToothStatus` — the same reasoning `ToothData.endo` (`EndoStage`) now
+  follows too, see "Canal display" above; `post` was the pattern endo was
+  built to mirror once endo hit exactly this same competing-for-
+  surfaces.all problem for real. `post` is a distinct, still-live concept
+  from `endo`, not the same field twice — the two happen to share the same
+  threading shape, nothing more. This stays true internally, but per Monika's explicit
+  request the *UI* now presents it exactly like a real status wherever
+  services are listed — see "Uniform service presentation" under
+  "Interaction Design" below.
 - **Shape: a hollow (outline-only) triangle**, not a plain line — went
   through two earlier versions before landing here, each per Monika's own
   follow-up correction:
@@ -1580,8 +1856,8 @@ retention — tloris view only, no side-view rendering.
   above for the fuller reasoning; this section's original fix is still
   correct in spirit, just no longer hardcoded to one row.
 - **Demoed on tooth 26** (upper, already `crown` — a post commonly
-  supports a crown) **and tooth 36** (lower, already `endo` + caries dots
-  — a post commonly follows a root canal) in `StatusShowcase.tsx`
+  supports a crown) **and tooth 36** (lower, already `endoStage: 'done'` +
+  caries dots — a post commonly follows a root canal) in `StatusShowcase.tsx`
   (`MOCK_POST`), so both pointing directions are visible in context, each
   a clinically plausible pairing rather than an arbitrary tooth choice.
   **Tooth 13** (upper, `crown` — the anchor of the 13-14-15 bridge) was
@@ -1661,7 +1937,7 @@ together, per Monika's explicit request, once she needed to distinguish
   look any different from a normal present tooth except for that flag.
 - **`extraction_planned`/`extracted` together are a two-state pair**, same
   red-todo/blue-done pattern as `caries`/`caries_treated` and
-  `endo`/`endo_planned` — and, per Monika's explicit request, the exact
+  the endo-circle's own stages — and, per Monika's explicit request, the exact
   same two shared colors (`TODO_COLOR`/`DONE_COLOR`, see the caries-dot
   color note under "Tlorisni pogled" above for why these are shared
   rather than each pair's own dedicated shade). `missing` isn't part of
@@ -1669,12 +1945,16 @@ together, per Monika's explicit request, once she needed to distinguish
   fact about the tooth.
 - **X-cross weight is 3px**, not this view's usual 1px, for both
   `extraction_planned` and `extracted` — the same deliberate exception
-  `abrasion`'s mark and `endo`/`endo_planned`'s circle already get (see
+  `abrasion`'s mark and the endo-circle already get (see
   the line convention under "Tlorisni pogled" above), per Monika's
   explicit follow-up request once she'd seen the default 1px weight on
   localhost. In `ToothTopView.tsx` this is `isExtractionPair` folded into
-  the same `strokeWidth={isEndo || isExtractionPair ? 3 : LINE_WIDTH}`
-  check `isEndo` already used. In `ToothSideView.tsx` the x-cross render
+  `strokeWidth={isExtractionPair ? 3 : LINE_WIDTH}` in the generic
+  `wholeStyle.symbol` block — the endo-circle used to share this same
+  ternary (`isEndo || isExtractionPair`) back when it was drawn through
+  that block too, but now that it's its own independent, unconditional
+  block (see "Canal display" above) it just hardcodes its own `3`
+  directly, unrelated to this check. In `ToothSideView.tsx` the x-cross render
   block is *only* ever reached by these two statuses (`prosthesis`/
   `bridge_pontic` are excluded there, and `missing` has no symbol at all),
   so its `EXTRACTION_X_STROKE_WIDTH` applies unconditionally rather than
@@ -1864,22 +2144,419 @@ what happened to that swatch grid since.
 
 ## Interaction Design
 
-### Click on tooth
-- Opens detail panel below chart
-- Shows: tooth number, type, all surface statuses, pocket depths (B + L), notes field
-- Surface chips are clickable to change status (dropdown or quick-select)
+**Status: built** (`PatientChart.tsx` + `src/components/ui/ToothDetailPanel.tsx`,
+`SurfaceChip.tsx`, `StatusPicker.tsx`, `StatusToolbar.tsx`, `StatusSwatch.tsx`,
+`PostSwatch.tsx`), now saving to Supabase via `useVisit.ts` (autosave on a
+30s inactivity timer or immediately on sign-out — see "Visit lifecycle"
+below for exactly what's real vs. still hardcoded). Two ways to set a
+status, both writing through the same underlying functions
+(`handleSurfaceStatusChange`/`handleWholeToothStatusChange` in
+`PatientChart.tsx`) so they can never disagree:
 
-### Status change flow
-1. Click tooth → detail panel opens
-2. Click surface chip → status picker appears (list of all statuses)
-3. Select status → surface updates visually immediately (optimistic UI)
-4. Auto-save to Supabase after 1s debounce
+(A third, entirely separate interaction mode exists for pocket-depth and
+gum-margin *numbers* — click-to-focus + type-a-number, not click-to-select
++ pick-a-status — since a full periodontal exam is roughly 200 individual
+mm readings, too high-volume for the picker/toolbar pattern below. See
+"Perio data entry" under "Perio graph" for the full mechanism; it clears
+`selection` and vice versa, so the two modes never mix mid-click.)
 
-### Two record layers
-- `initial_status` — stanje ob prvem pregledu (anamneza)
-- `visit_entries[]` — vsak obisk doda nov zapis
+### Click on tooth (detail panel)
+- Click a tooth → a detail panel opens below the chart, keyed to that FDI
+  (`key={selectedFdi}`, so switching teeth remounts it fresh — no leftover
+  open-picker state bleeding from one tooth to the next).
+- Shows: tooth number + type, a "Cel zob" (whole tooth) control, one chip
+  per applicable surface (`TOOTH_META[fdi].surfaces`, ant/post-aware
+  labels via `surfaceLabel()` in `toothMeta.ts`), and a notes field.
+- Clicking the whole-tooth control or a surface chip opens `StatusPicker`
+  inline — a full flat grid of every status (`STATUS_ORDER`,
+  `statusStyles.ts`), each with its `StatusSwatch` icon — picking one
+  applies immediately (optimistic UI, no confirmation step) and closes the
+  picker. Whole-tooth *replaces* that tooth's `SurfaceMap` (`{ all:
+  status }`, clearing any per-surface overrides); a single surface pick
+  *merges* (touches only that key). If the picked status is one that
+  hides per-surface detail entirely (`hidesSurfaceDetail()`,
+  `ToothTopView.tsx` — crown, implant, missing, extracted,
+  prosthesis_crown, bridge_pontic, prosthesis, impacted), it's redirected
+  to the whole-tooth path regardless of which surface was actually
+  clicked — setting one of these on a single surface would otherwise
+  either do nothing visible, or paint just that one triangle in a flat
+  status's color, neither of which is clinically real (Monika's example:
+  "Krona should apply to the entire tooth instead of a single surface").
+  Chips for a tooth already under a hides-detail whole-tooth status show a
+  one-line hint explaining why editing them won't change anything on the
+  chart, rather than silently no-opping.
+  **`abrasion` redirects to the whole-tooth path too, via a second,
+  broader predicate** (`redirectsSurfaceEditToWholeTooth()`,
+  `PatientChart.tsx` — `hidesSurfaceDetail() || status === 'abrasion'`),
+  not by joining `hidesSurfaceDetail()`'s own set. Its own mark (the red
+  incisal-edge line or occlusal-box outline — see "Tlorisni pogled" above)
+  reads off `wholeToothStatus` for anterior teeth and the resolved
+  OCCLUSAL surface specifically for posterior ones — never any other
+  individual surface — so per Monika's report, clicking e.g. a mesial/
+  distal/buccal/lingual zone and picking "Abrazija" there had no visible
+  effect at all, and even the occlusal zone only worked by coincidence.
+  Unlike `hidesSurfaceDetail()`'s own group, though, abrasion does NOT
+  hide the tooth's other per-surface detail — the triangles/occlusal
+  rectangle still render, just unfilled, and a *different* surface set
+  independently afterward (caries on one specific zone, say) still shows
+  normally — it just needs the whole tooth set so its own mark reliably
+  triggers regardless of which surface(s) were clicked. That's why it
+  isn't folded into `hidesSurfaceDetail()` itself: that function is also
+  read by the "won't be visible" hint above, which would be a false claim
+  for abrasion (other surfaces' own changes *do* stay visible there).
 
-Display toggle: "Začetno stanje" / "Obisk [datum]" — allows seeing history.
+### Direct chart selection (StatusToolbar)
+A faster, later addition, built after trying the panel-only flow and
+finding it too slow for marking several things at once:
+- **Every surface zone is its own click target** — not just the whole
+  tooth. `ToothTopView.tsx` wires `onClick`/`pointerEvents: 'all'` onto
+  each triangle and the occlusal rectangle (needed because a `fill:
+  'none'`/transparent zone doesn't receive pointer events by default in
+  SVG), reporting `(surface, event)` up through a shared
+  `onTargetClick`/`isTargetSelected` prop pair threaded through
+  `TlorisRow` → `ArchRow` → `DentalChart` (the same pass-through pattern
+  every other per-tooth data map in this chart already uses). The FDI
+  number below each tooth (`NumberRow.tsx`) is the explicit "target the
+  whole tooth" affordance — clicking a surface zone can't mean that once
+  every zone has its own meaning, so there needed to be a separate control
+  for it. Flat/hides-detail teeth (and `impacted`'s blank tloris square)
+  report `'all'` from their one whole-square click target, same as
+  before.
+- **Multi-select**: plain click on a target replaces the current
+  selection with just that one; Ctrl/Cmd (or Shift) + click toggles it
+  in/out of the existing selection — selected zones/squares get a
+  translucent `--tooth-selected`-colored overlay drawn on top, regardless
+  of the tooth's own status color underneath.
+  **Two more indicators track the same selection at the whole-tooth
+  level**, both driven by one shared `isFdiSelected(fdi)` check
+  (`PatientChart.tsx` — true if *any* target belonging to that tooth is
+  currently selected, regardless of which specific surface): the tloris
+  square's own outline (`TlorisRow.tsx`, a rounded `2px solid
+  var(--tooth-selected)` border) and the FDI number's own highlight
+  (`NumberRow.tsx`, filled background). These two used to be driven by two
+  *different* pieces of state — the number by the fine-grained
+  `isTargetSelected`, the square by an unrelated, older `selectedFdi`
+  (only ever updated by clicking *inside* the square itself, via bubbling
+  from a zone's own click, never by clicking the number) — so clicking the
+  number to select a new tooth for the toolbar left the *previous* tooth's
+  square outline stuck in place, per Monika's explicit bug report ("if I
+  click on a tooth in tloris view it gets marked... if I then click on
+  another tooth number, this number gets marked, but the previous tooth
+  still remains marked in tloris view"). Both now read the same
+  `isFdiSelected`, so a plain click anywhere — the number, a surface zone,
+  or a flat tooth's whole square — moves both indicators together and
+  clears the previous tooth's, every time. `selectedFdi` (still real,
+  still drives the detail panel below — see "Click on tooth" above) is no
+  longer threaded down into `DentalChart`/`ArchRow`/`TlorisRow` at all,
+  since nothing in that tree reads its *value* anymore, only fires it
+  upward via `onSelect`.
+- **Apply to selection**: `StatusToolbar` (rendered as a sidebar next to
+  the chart) shows an always-visible grid of every status, identical in
+  spirit to `StatusPicker` — clicking one applies it to every currently
+  selected target at once (same merge/whole-tooth-redirect rules as
+  above). **The selection is deliberately left untouched afterward** — per
+  Monika's explicit request ("apply crown to tooth 21, then — still
+  selected, no reselecting — toggle the dental post on it too"), so
+  several services can be layered onto the same selected tooth/teeth back
+  to back. This is a reversal: every apply action (`handleStatusClick`,
+  `handleTogglePost`, `handleSetEndoStage`) used to clear the selection on
+  success, matching a "uniform treatment end to end" reasoning at the
+  time — reversed once that same uniformity turned out to be exactly what
+  made applying several services to one tooth tedious. The selection now
+  only ever changes from an actual chart click (replace, or Ctrl/Cmd to
+  extend) or an explicit clear — this same `StatusToolbar`'s own "Prekliči
+  izbiro" button, or Escape (`PatientChart.tsx`'s own `keydown` listener —
+  the first global keyboard handling in this app — guarded so it does
+  nothing while focus is in a text input, e.g. the notes textarea).
+  **`bridge_pontic` is the one status in this grid that doesn't follow the
+  generic apply-to-every-target rule above** — `handleStatusClick`
+  special-cases it to `handleCreateBridge()` instead, which needs an
+  existing anchor tooth (`crown`/`implant`) in the selection and forms an
+  explicit bridge group rather than just painting a status — see "Bridge
+  display" for the full mechanism and why it replaced an earlier,
+  purely status-driven approach.
+- **An earlier version also supported arming a status first** ("pick a
+  status, press a lock key, then paint it across repeated clicks without
+  re-picking each time" — explicitly requested, "like tools in MS Word")
+  — built, then reverted per explicit feedback once tried: the "armed but
+  not yet applied" intermediate state was too easy to miss (clicking a
+  status with nothing selected just highlighted it, with no obvious sign
+  anything had happened), so a click on the chart afterward silently did
+  nothing from the user's point of view. Select-then-apply only, going
+  forward — not currently planned to revisit.
+
+### Uniform service presentation
+
+**Every service or finding gets exactly one entry, presented identically,
+wherever services are listed** — `StatusLegend.tsx`'s Legenda and
+`StatusToolbar`'s/`StatusPicker`'s grids alike: one small icon
+(`StatusSwatch`, or a dedicated equivalent like `PostSwatch.tsx` for a
+field that isn't a real `ToothStatus`) plus one label, in a single
+button/row of the same size and shape as everything else next to it. This
+applies *regardless of whether the service happens to be a real
+`ToothStatus` internally* — per Monika's explicit request, prompted by
+`post` (zobni zatiček) originally getting a bespoke two-button "Dodaj" /
+"Odstrani" control in `StatusToolbar`, visually inconsistent with every
+status's own single click-to-apply button right next to it. `post` is a
+plain per-tooth boolean (`ToothData.post`, not part of `SurfaceMap`, kept
+separate specifically because it needs to coexist with whatever status a
+tooth already has — a post commonly supports an existing crown or follows
+a completed root canal), but the UI still presents it as one button with
+one icon (`PostSwatch`), positioned inside the exact same grid as every
+real status; clicking it toggles post on for every distinct tooth in the
+current selection if any lack it, off once all of them already have it
+(`handleTogglePost`, `PatientChart.tsx`) — one click, same as a status,
+not an add/remove pair. `StatusLegend.tsx` follows the identical rule:
+`post` gets its own hand-added row (same pattern the BOP row already
+used, since BOP was never a `ToothStatus` either), same icon/size/label
+shape as every `STATUS_ORDER`-driven row above it.
+
+**Endodontic treatment (`ToothData.endo`, `EndoStage`) followed the exact
+same rule once it was pulled out of `ToothStatus`** — see "Canal display"
+above for why. It's the first field this principle had to stretch for: a
+tri-state value can't be a single toggle button the way `post`'s boolean
+is, so it's presented as **three** grid entries instead of one
+(`EndoSwatch.tsx`, parameterized by `EndoStage`, mirroring how
+`StatusSwatch` covers many statuses through one component) — but each
+entry is still exactly one icon + one label, same size/shape as every
+other button next to it, and clicking one still applies immediately with
+no extra confirmation step. The rule was never "one field, one button" —
+it's "one *value*, one button"; `post` only ever had one value to offer.
+`StatusLegend.tsx` mirrors this with three hand-added rows, same pattern
+as the `post`/BOP rows.
+
+**Any future non-`ToothStatus` service field must follow this same
+rule**: one icon component per distinct value (co-located in
+`src/components/ui/`, matching `StatusSwatch`/`PostSwatch`/`EndoSwatch`'s
+own size/viewBox convention), one entry per value in both
+`StatusLegend.tsx` and `StatusToolbar`/`StatusPicker`'s grids — never a
+bespoke multi-control widget (an add/remove pair, a dropdown, etc.), even
+if the underlying data model has to stay a separate field (as `post` and
+`endo` both do) for good reason.
+
+### Status change flow (current)
+1. Click a tooth (panel) or a surface/whole-tooth zone directly (toolbar
+   selection) — or several, via Ctrl/Cmd+click.
+2. Click a status in the picker/toolbar grid → applies immediately
+   (optimistic UI, no confirmation step, no debounce).
+3. Autosave to Supabase is **built and confirmed working**, via
+   `useVisit.ts` — see "Visit lifecycle" below for the full picture,
+   including what's still not built (closing a visit — nothing ever sets
+   `visits.closed_at` yet). Every state map this
+   step used to describe as local-only (`surfacesByFdi`/`postByFdi`/
+   `endoByFdi`/`notesByFdi`, plus the perio-entry state —
+   `pocketsBuccalByFdi`/`pocketsLingualByFdi`/`gumMarginByFdi`/
+   `bleedingBuccalByFdi`/`bleedingLingualByFdi`) now lives in and is
+   persisted by that hook instead of a plain `useState` in
+   `PatientChart.tsx` — `bridgeGroupByFdi` is the one exception, still
+   local-only `useState` there.
+
+### Visit lifecycle (open/close) and per-tooth history
+
+**Status: first slice built and confirmed working; the full lifecycle
+below is still only designed.** `src/hooks/useVisit.ts` now actually loads
+a visit's `tooth_records` on mount and saves back to Supabase — confirmed
+live by Monika (a change made on `PatientChart.tsx`, saved, survives a
+sign-out/sign-in round trip, and shows up as a real row in the Supabase
+Table Editor). This is the agreed shape reached through direct discussion
+about when saving should actually happen, and supersedes the earlier,
+vaguer "Two record layers" sketch (`initial_status` + `visit_entries[]`)
+with a concrete mechanism built on the schema's own existing shape, not a
+new one — but **what's actually built today is a deliberately narrower
+slice of the full design**, spelled out below.
+
+**What's built and confirmed:**
+- `useVisit(visitId)` loads every `tooth_records` row for one visit into
+  the same per-fdi state shape `PatientChart.tsx` already used locally
+  (`surfacesByFdi`/`postByFdi`/`endoByFdi`/pockets/gum-margin/bleeding/
+  notes/`bridgeGroupByFdi`), and exposes a `flush()` that upserts every
+  tooth that actually changed since the last save back into that visit's
+  rows (`onConflict: 'visit_id,tooth_id'`, the unique index from migration
+  005) — see the dirty-tracking bullet below for how "actually changed" is
+  determined.
+- `PatientChart.tsx` calls `flush()` three ways: a 30-second-since-the-
+  last-change debounce (the standard React reset-the-timer-in-a-cleanup
+  pattern), immediately on clicking "Odjava" (sign out), and immediately
+  on "← Nazaj na seznam pacientov" (back to the patient list) — see
+  `handleBackClick`/`handleSignOutClick`.
+- `App.tsx` now gates `PatientChart` behind a real Supabase Auth session
+  (`Login.tsx`/`useAuth.ts`, previously built but unused) instead of the
+  `VITE_DEV_PAGE=patient` bypass — signing in for real is now required to
+  reach the chart at all. `VITE_DEV_PAGE=showcase` still bypasses auth for
+  `StatusShowcase.tsx`, which stays read-only/local-only on purpose.
+- Migrations 001–009 are confirmed run on the live project (now the
+  dedicated "Dental charting" one — see "Supabase Schema" above), and both
+  Monika's and Gregor's Supabase Auth logins are confirmed created and
+  working.
+- **`bridgeGroupByFdi` now persists too** (`tooth_records.bridge_group_id`,
+  migration `006_add_bridge_group.sql`) — confirmed live: a bridge formed
+  via "Člen mostu" survives a reload/sign-out-sign-in, same as every other
+  field `useVisit.ts` tracks. This closes what used to be the one remaining
+  gap in the save pipeline.
+- **Real dirty-tracking in `flush()`** — confirmed working: it now diffs
+  every field against a `lastSavedRef` snapshot (what was last successfully
+  written, or just loaded) and only upserts teeth that actually changed,
+  via plain reference (`!==`) checks per field per tooth — safe because
+  every setter already replaces a changed tooth's value with a brand new
+  object/array rather than mutating one in place, so an untouched tooth's
+  reference never changes on its own. Replaces the earlier version, which
+  rewrote every tooth with any data at all on every single save.
+- **A real patient list (`PatientList.tsx`/`usePatients.ts`) now exists**,
+  replacing the single hardcoded `TEST_VISIT_ID` this section used to
+  describe — see "Patient list" below for the full feature. `useOpenVisit
+  (patientId)` (new hook) resolves which visit a chosen patient's chart
+  should actually load/save against: a visit for that patient dated today
+  with `closed_at` still null, reused if one already exists (e.g. reopening
+  the chart later the same day), otherwise a fresh one inserted with
+  today's date. `useVisit`'s own `visitId` parameter is now `string | null`
+  specifically to accommodate this — `PatientChart.tsx` calls it before
+  `useOpenVisit`'s id has arrived, and the load effect just waits.
+
+**What's still only hardcoded or not built at all** — this is a proof
+that the pipeline works end to end, not the finished feature:
+- **Closing a visit is still fully unimplemented** — nothing anywhere ever
+  sets `visits.closed_at`. `useOpenVisit`'s date-scoped resolution (see
+  above) means a visit from a previous day is simply never revisited or
+  closed by anything; it just sits there permanently "open" while a fresh
+  one gets created for today. The full lifecycle design below (an
+  inactivity-timeout close, an explicit "leaving this workspace" close)
+  remains just a design.
+- **No "Zgodovina zdravljenja" (treatment history) tab exists yet.** The
+  data model already supports it for free (see below), but nothing in the
+  UI reads a tooth's *other* visits' rows yet — only its current/latest
+  one.
+- **No patient-detail/edit view exists.** `phone`/`email`/`address`/
+  `postalCode`/`city`/`healthCardNumber` are only ever entered once, at
+  patient creation (`PatientList.tsx`'s "+ Nov pacient" form) — nothing
+  lets you view or change them again afterward, except the list row's own
+  phone number (shown under the patient's name when one's on file).
+
+**The problem that shaped this**: an early proposal was to save (and log
+one history entry) every time the selected tooth changes — click a
+different tooth, flush whatever changed on the previous one. Monika
+rejected this once she walked through her actual workflow: a real
+appointment touches many teeth, often revisiting the same one more than
+once, and a chart note is naturally written per *visit*, not per
+tooth-glance — saving on every tooth switch would fragment one visit's
+work into several disconnected history entries for the same tooth. She
+also flagged a separate, practical problem with the interaction itself:
+"I clicked the wrong service" needs a window to correct a mistake before
+anything commits, which argues for saving less eagerly, not more.
+
+**The resolution (design — not yet implemented; see "What's still only
+hardcoded or not built at all" above for what actually exists today) — a
+visit is either open (still being worked on) or closed (finished,
+permanent) — `visits.closed_at`** (migration
+`005_add_visit_lifecycle.sql`), null while open:
+- Opening a patient's chart resumes their most recent visit if it's still
+  open, or starts a new one if the last one was already closed. There's no
+  explicit "start visit" button — opening the chart to work on it *is*
+  starting (or resuming) one.
+- While a visit is open, an inactivity timer (~30s since the last change)
+  flushes whatever's changed to Supabase — a safety net against losing
+  work to a crash or interruption, not a "commit," since the visit itself
+  is still open. Every flush **updates the same visit's own rows** rather
+  than creating new ones (see the unique constraint below) — nothing is
+  fragmented by how many times the 30s timer happens to fire during one
+  sitting.
+- A visit **closes** — `closed_at` set once, never un-set — on an explicit
+  "leaving this workspace" action (signing out today; switching to a
+  different patient or a future section like invoicing, later) or a
+  longer safety-net inactivity timeout (tens of minutes, in case a tab is
+  left open and forgotten) — whichever happens first. Once closed, its
+  rows are never written to again; the next edit anywhere starts a fresh
+  visit.
+- **Known limitation, accepted deliberately for now**: until "close a
+  visit" is reliably tied to a real action (rather than only a timeout),
+  a visit that's reopened after a long natural pause — hours, not
+  30-plus minutes — could in principle still be "the same open visit"
+  rather than a new one, which isn't quite right. Monika accepted this
+  tradeoff explicitly rather than block all saving on solving it
+  perfectly first.
+
+**No separate event-log table — `tooth_records` already has the right
+shape.** It's one row *per tooth per visit*, not one shared row per tooth
+overall (see the Supabase Schema section above) — that was already true
+before this discussion, just not yet exploited. That means:
+- **Per-tooth chronological history** (the "Zgodovina zdravljenja" tab
+  Monika described — click a tooth, see everything ever done to it, in
+  order) is just every `tooth_records` row for that `tooth_id`, joined to
+  its visit's `date`, ordered chronologically. No new table, no separate
+  event log to keep in sync with the "current" data.
+- **The live chart's current state**, per tooth, is that tooth's row from
+  the patient's most recent visit that touched it — a tooth untouched
+  since three visits ago still shows its status from back then, correctly,
+  without needing its own row copied forward into every visit since.
+- **The upsert index** — a unique index on `(visit_id, tooth_id)`, added in
+  the same migration — is what makes "update this same row on every flush
+  while the visit is open" atomic (`supabase.upsert(..., { onConflict:
+  'visit_id,tooth_id' })`) instead of requiring a manual
+  check-then-insert-or-update round trip.
+- **Only teeth actually touched during a visit get a row for it** — a
+  delta, not a full 32-tooth snapshot every visit. A tooth nothing
+  happened to during a given visit simply has no row for that visit,
+  which is exactly right for "what was actually done" history (no
+  duplicate rows for teeth nothing happened to) and cheaper to store.
+
+**Gap closed**: `bridgeGroupByFdi` (which teeth are explicitly linked into
+one bridge — see "Bridge display" above) now has a column — plain
+`bridge_group_id text` on `tooth_records` (migration
+`006_add_bridge_group.sql`), not a foreign key, since the group id itself
+has no meaning beyond "these rows share the same value." Confirmed working
+live: a bridge formed via "Člen mostu" survives a reload.
+
+### Patient list
+
+**Status: built and confirmed working.** `PatientList.tsx` is now the
+app's actual landing page after login — `App.tsx` holds a small two-value
+`Route` (`{ page: 'list' } | { page: 'chart'; patientId; patientLabel }`)
+instead of going straight to `PatientChart`.
+
+- `usePatients()` loads every patient (sorted by last name, then first —
+  RLS already scopes this to the one authenticated dentist/account, so
+  there's no per-practice filtering to add), and exposes `createPatient()`.
+  Search is a plain client-side filter over that in-memory list
+  (`PatientList.tsx`'s own `query` state) — a single-dentist practice's
+  patient list is small enough that a server-side search round trip isn't
+  solving a real problem yet.
+- "+ Nov pacient" is an inline form, not a separate page: ime/priimek/datum
+  rojstva are required (the three columns `patients` itself requires
+  not-null); spol, telefon, e-pošta, naslov/poštna št./kraj, and the ZZZS
+  health-card number are all optional. Submitting either shows an inline
+  error or navigates straight into the new patient's (empty) chart.
+- **Telefon** uses `react-phone-number-input` (`defaultCountry="SI"`,
+  emits an E.164 string) — checked against the sibling "dental calendar"
+  booking app's own intake form first, which uses this exact same
+  library/config, so this matches an existing convention rather than
+  inventing a new one. Styled via plain CSS in `index.css` under the
+  library's own fixed `.PhoneInput`/`.PhoneInputInput`/`.PhoneInputCountry`
+  class names (there's no className prop path to the inner pieces),
+  matching this app's border/text-color tokens. Unlike the booking app's
+  own field, it's deliberately **not** `required` here — a phone number
+  there gates an online booking submission; here it's one optional field
+  on an already-valid patient record.
+- **Št. zdravstvene kartice** is a plain `<input>` constrained to exactly
+  9 digits: non-digit characters are stripped on input (not just rejected
+  on submit), `maxLength={9}` caps it, and `pattern="\d{9}"` blocks
+  submitting a partially-typed number via the browser's own validation.
+- **Naslov is split into three fields** — street (+ house number),
+  `Poštna št.`, `Kraj` — rather than one free-text line, per Monika's
+  explicit request (checked the sibling booking app first; it has no
+  address field at all, so there was no convention to match — this split
+  is this app's own). Form layout, after two rounds of Monika's own
+  cosmetic follow-up requests: Naslov spans the form's full width on its
+  own row; the row below splits into the same left-half/right-half every
+  other row in this form uses (Ime/Priimek, Datum rojstva/Spol,
+  Telefon/E-pošta) — `Št. zdravstvene kartice` takes the right half (lined
+  up with Priimek/Spol/E-pošta), with `Poštna št.`/`Kraj` sharing the left
+  half between them (lined up with Ime/Datum rojstva/Telefon), since
+  neither needs a full half-width field to itself.
+- Selecting a patient (or successfully adding one) hands `patientId` plus
+  a display label (`"Priimek Ime"`) up to `App.tsx`, which switches
+  `Route` to `{ page: 'chart', patientId, patientLabel }` — `PatientChart`
+  itself resolves/creates that patient's own visit via `useOpenVisit` (see
+  above) rather than the route carrying a `visitId` directly.
+- **No patient-detail/edit view yet** — see the "not built" list above.
 
 ---
 
@@ -1924,40 +2601,83 @@ Display toggle: "Začetno stanje" / "Obisk [datum]" — allows seeing history.
 
 ## Phase 1 Deliverables (Dental Chart MVP)
 
-- [x] Supabase project setup (EU region, schema applied, RLS enabled) —
-      confirmed live (RLS blocks unauthenticated reads correctly); the
-      `gum_margin` migration (`supabase/migrations/001_add_gum_margin.sql`),
-      the `bleeding` surfaces migration
-      (`supabase/migrations/002_add_bleeding_surfaces.sql`), the
-      dental-post migration (`supabase/migrations/003_add_post.sql`), and
-      the fissure-sealant migration
-      (`supabase/migrations/004_add_sealant.sql`) still need to be run on
-      it
-- [ ] Auth: single user login (Monika) via Supabase Auth email/password —
-      `Login.tsx` + `useAuth.ts` built and functional, but not yet wired as
-      the app's actual entry point (`App.tsx` currently shows the dev-only
-      `StatusShowcase` review page instead — see its `SHOW_STATUS_SHOWCASE`
-      flag), and Monika's user account in Supabase isn't confirmed created
-- [ ] Patient list page (search by name) — not started
-- [ ] Patient chart page with full FDI dental chart — `PatientChart.tsx`
-      renders the real `DentalChart`, but against a placeholder/no real
-      patient, not Supabase data
-- [ ] Tlorisni pogled — all 32 teeth, correct surfaces, click to edit —
-      rendering, per-surface status fill, and tooth selection on click are
-      done; there's no editor yet for a click to actually open
-- [ ] Stranski pogled — anatomic profiles, pocket depths, canals —
+- [x] Supabase project setup (EU region, schema applied, RLS enabled) — went
+      through a real detour before landing here: an earlier note claimed
+      this was "confirmed live" against a project that, once actually
+      checked with Monika, turned out to have no dental-chart tables at
+      all, then (once tables did turn up) turned out to be **shared with a
+      separate, unrelated appointment-scheduling/consent-storage app**
+      (`booking_consents`/`sms_reminders` — documented at
+      `C:\Users\Uporabnik\Documents\Claude code dental calendar`, a
+      different conversation this session has no memory of), whose
+      `patients`/`visits`/`tooth_records`/`treatment_entries` tables
+      already existed but only in `schema.sql`'s ORIGINAL, very first
+      shape — none of migrations 001–005 had ever actually been run.
+      Migrations 001–005 were run to catch that project up, **then Monika
+      decided to split the dental chart into its own dedicated Supabase
+      project entirely** ("Dental charting") once the shared setup's real
+      risk became clear: that other app's backend holds a Supabase
+      **service-role key** (bypasses RLS entirely), which could reach this
+      app's clinical data too, not just its own two tables. `schema.sql`
+      (already including everything through migration 005) was run
+      directly against the new, genuinely empty project — no migrations
+      needed there. The `migrations/` folder and the history above stay in
+      the repo for reference; neither describes this app's actual database
+      going forward.
+- [x] Auth: single user login (Monika) via Supabase Auth email/password —
+      `Login.tsx` + `useAuth.ts` were already built and functional, and are
+      wired as the app's actual entry point (`App.tsx` no longer bypasses
+      auth for `PatientChart` — see "Visit lifecycle" above). Re-created in
+      the new dedicated project once the split above happened (the old
+      project's user doesn't carry over) — two accounts confirmed created
+      there, `goslar.monika@gmail.com` and `gregor.goslar@gmail.com`, with
+      a confirmed real sign-in on localhost.
+- [x] Patient list page (search by name) — `PatientList.tsx`/`usePatients.ts`,
+      confirmed working; client-side search over every patient, plus an
+      inline "+ Nov pacient" form (ime/priimek/datum rojstva required; spol
+      restricted to M/F only, telefon/e-pošta/naslov+poštna
+      št.+kraj/ZZZS health-card number all optional) — see "Patient list"
+      above for the full feature, including why phone/address were built
+      the way they were. No patient-detail/edit view yet — these fields are
+      only ever entered once, at creation.
+- [x] Patient chart page with full FDI dental chart — `PatientChart.tsx`
+      renders the real `DentalChart` against a real chosen patient now,
+      resolving/creating that patient's own visit via `useOpenVisit` (see
+      "Visit lifecycle" above) instead of one hardcoded test visit
+- [x] Tlorisni pogled — all 32 teeth, correct surfaces, click to edit —
+      rendering, per-surface status fill, tooth selection, and a working
+      editor (`ToothDetailPanel`/`StatusPicker`, plus the direct-chart
+      `StatusToolbar` multi-select flow) are all done — see "Interaction
+      Design" above; now saved to Supabase, `bridgeGroupByFdi` included
+      (see "Visit lifecycle" above)
+- [x] Stranski pogled — anatomic profiles, pocket depths, canals —
       profiles + a full perio graph (pocket depth, gum margin) are done
-      and go well beyond the original spec (see "Perio graph" above);
-      endodontic treatment now has a tloris-view status symbol
-      (blue/red circle, `endo`/`endo_planned` — see "Canal display"
-      above), the doctor's actual final spec, replacing an earlier
-      root-canal-line idea that was built and then removed; no
+      and go well beyond the original spec (see "Perio graph" above); PD/
+      REC entry itself (click-to-focus + type-a-number, BOP/sign toggles)
+      is also built — see "Perio data entry" above — not just read-only
+      display anymore; endodontic treatment now has a tloris-view symbol
+      driven by an independent `EndoStage` field (blue/red/grey circle —
+      see "Canal display" above), the doctor's actual final spec for the
+      symbol itself, after an earlier root-canal-line idea was tried and
+      removed, and then a later architecture change pulled it out of
+      `ToothStatus` entirely so it can coexist with any other status; no
       side-view canal/root geometry is shown, by design
 - [x] Status color fill per surface
-- [ ] Detail panel on tooth click — not started
-- [ ] Save tooth status to Supabase — not started (no writes exist yet,
-      only reads for auth)
-- [ ] Visit history toggle (initial vs visit records) — not started
+- [x] Detail panel on tooth click — see "Interaction Design" above for the full
+      current interaction (a click-to-edit panel, plus a direct-click
+      multi-select toolbar layered on top); now saved to Supabase, same as
+      every other status-setting path on this page
+- [x] Save tooth status to Supabase — built and confirmed working
+      (`useVisit.ts`, autosave on a 30s inactivity timer or immediately on
+      sign-out/back-to-list), including bridges and real dirty-tracking
+      (only actually-changed teeth get written, not every tooth with any
+      data) against a real, per-patient, resolved-or-created visit — see
+      "Visit lifecycle" above for exactly what's real vs. still not built
+      (closing a visit)
+- [ ] Visit history toggle (initial vs visit records) — not started; the
+      underlying data shape already supports a per-tooth chronological
+      history view for free (see "Visit lifecycle" above), but no UI reads
+      it yet
 - [ ] Basic print view (chart only, A4) — not started
 
 ## Out of Scope for Phase 1
@@ -1989,27 +2709,32 @@ next:
 - Implant fixture rendering (two-tone screw + abutment, fixed real-world
   length, centered on the crown's own true midpoint) replacing the traced
   root for `implant` status — see "Stranski pogled" above
-- Bridge display: auto-detected bracket (`BridgeRow`) over anchor/pontic
-  runs, anchored on a natural crown or an implant, pontic drawn as a
-  solid-outline square with an X-cross (same dark color as every other
-  tooth's outline) in the tloris view and completely blank (no crown,
-  root, or outline) in the side view; the bracket flips to sit below
-  `TlorisRow` on the upper arch (`BridgeRow`'s `flip` prop) so it no
-  longer collides with the dental post there — see "Bridge display" above
+- Bridge display: bracket (`BridgeRow`) over an explicitly-created bridge
+  group (`bridgeGroupByFdi`), anchored on a natural crown or an implant —
+  only ONE anchor needs to already exist, a cantilever bridge is a valid
+  case — pontic drawn as a solid-outline square with an X-cross (same dark
+  color as every other tooth's outline) in the tloris view and completely
+  blank (no crown, root, or outline) in the side view; the bracket flips
+  to sit below `TlorisRow` on the upper arch (`BridgeRow`'s `flip` prop)
+  so it no longer collides with the dental post there — see "Bridge
+  display" above
 - Prosthesis (removable-denture) tooth status: circle-in-place-of-square
   rendering in the tloris view, adjacent teeth linked with a connector
   line (including across the arch midline) — see "Tlorisni pogled" above;
   `prosthesis_crown` extends the same connector to natural crowned teeth
   anchoring the same prosthesis, rendered as a completely ordinary crown
-- Endodontic treatment status symbol: blue/red circle-in-square
-  (`endo`/`endo_planned`) in the tloris view, the doctor's final spec
-  after an earlier root-canal-line idea was tried and removed — see
-  "Canal display" above
+- Endodontic treatment symbol: blue/red/grey circle-in-square in the
+  tloris view, the doctor's final spec for the mark itself after an
+  earlier root-canal-line idea was tried and removed — now driven by an
+  independent `EndoStage` field (`ToothData.endo`), not a `ToothStatus`,
+  after a later change so it can coexist with any other status on the same
+  tooth (a filling and a completed root canal at once, say) — see "Canal
+  display" above
 - Caries marker: a per-surface red/blue dot (`caries`/`caries_treated`),
   not a flat fill — the one status pair in the whole chart that marks
   individual surfaces rather than only the whole tooth — see "Tlorisni
   pogled" above
-- Dental post (zobni kolček): a hollow triangle touching the tloris
+- Dental post (zobni zatiček): a hollow triangle touching the tloris
   square's own outer edge and pointing outward, independent of
   `ToothStatus` (a plain per-tooth boolean, `ToothData.post`, threaded
   like bleeding/gum-margin data) — see "Dental post" above
@@ -2020,7 +2745,7 @@ next:
   with a 3px red X — see "Absent tooth: missing / extraction / extracted"
   above
 - Unified todo/done/existing colors: every such marker on the chart
-  (caries/caries_treated, endo/endo_planned/endo_existing,
+  (caries/caries_treated, the endo-circle's own stages,
   extraction_planned/extracted, overlay_planned/overlay/overlay_existing,
   fissure sealant's own three stages) shares one red (`TODO_COLOR`,
   `#E94949`), one blue (`DONE_COLOR`, `#1412A9`), and one grey
@@ -2034,14 +2759,15 @@ next:
   `filling` itself was converted to the same per-surface grey-dot
   mechanism (see the "Status color palette" caries/caries_treated/filling
   relabeling note above).
-- Fissure sealant (zalitje fisur): a small tilde drawn in the same shared
-  row as the bridge bracket (`BridgeRow.tsx`), both centered on the true
-  midpoint of the gap between the tloris squares and the pocket-depth
-  numbers row; independent of `ToothStatus` (`ToothData.sealant`, a
-  `SealantStage` — `'planned' | 'done' | 'existing'` — threaded like
-  `post`, upgraded from a plain boolean once it gained the same
-  three-color treatment) — see "Bridge display, fissure sealant, and
-  overlay" above
+- Fissure sealant (zalitje fisur, `sealant_planned`/`sealant`/
+  `sealant_existing`): a small tilde drawn in the same shared row as the
+  bridge bracket (`BridgeRow.tsx`), both centered on the true midpoint of
+  the gap between the tloris squares and the pocket-depth numbers row — a
+  real three-state `ToothStatus` set now, same shape as `overlay_planned`/
+  `overlay`/`overlay_existing`, converted from an earlier independent field
+  once Monika's clinical correction ruled out the "needs to combine with
+  any status" premise that field existed for — see "Bridge display,
+  fissure sealant, and overlay" above
 - Overlay (`overlay_planned`/`overlay`/`overlay_existing`): a red/blue/
   grey "[" -shaped cap that wraps the tloris square's own edge (long bar
   flush against the edge, short ends bleeding onto the tooth's own face),
@@ -2054,10 +2780,49 @@ next:
   into the root direction) with its root clipped at the row's own last
   ruler line and its gumline/REC number forced flat — demoed on tooth 48
   (a real third molar) in "Cela karta" — see "Impacted tooth" above
+- Bridge creation rebuilt from the ground up as an **explicit** action —
+  select an existing anchor (crown/implant) together with the teeth that
+  should become its pontics, then click "Člen mostu" (`handleCreateBridge`,
+  `PatientChart.tsx`) — replacing three earlier rounds of purely
+  status-driven bracket *inference* (loose any-adjacent-run, strict
+  both-ends-anchored, strict matching-anchor-type), all of which kept
+  failing in one of two opposite ways: drawing nothing for a
+  not-yet-closed bridge ("looks broken"), or silently welding an unrelated
+  neighboring crown/implant into a bridge nobody meant to form (Monika's
+  teeth-22/24-next-to-implant-21 report). Only one anchor needs to already
+  exist in the selection — a cantilever bridge needs no special handling —
+  and a failed attempt (no anchor in the selection, too few teeth, spans a
+  quadrant boundary) now shows a specific `bridgeMessage` instead of doing
+  nothing silently — see "Bridge display, fissure sealant, and overlay"
+  above for the full mechanism and history
+- Pocket-depth / gum-margin **entry** built: click a probing point, type a
+  digit, auto-advance to the next one; the same point doubles as a
+  bleeding-on-probing/sign toggle on a second click, or via Shift+digit in
+  one keystroke — see "Perio data entry" above. Previously the perio graph
+  only ever rendered from static demo props; `PatientChart.tsx` didn't
+  even pass pocket/gum-margin/bleeding data into the chart at all
+- Applying a status/post/endo-stage/bridge from `StatusToolbar` no longer
+  clears the chart selection afterward — per Monika's explicit request, so
+  several services can be layered onto the same selected tooth/teeth
+  without reselecting between each one; the selection now only changes
+  from an actual chart click or an explicit clear (button/Escape) — see
+  "Direct chart selection" above
+- `abrasion` applied by clicking an individual surface (rather than the
+  whole tooth) now redirects to the whole-tooth path, the same way
+  crown/implant/etc. already did — its own mark only ever read off the
+  whole tooth or the occlusal surface specifically, so most per-surface
+  clicks previously had no visible effect at all — see
+  `redirectsSurfaceEditToWholeTooth()` under "Interaction Design" above
+- Tloris square outline / FDI number highlight unified under one shared
+  `isFdiSelected(fdi)` check (`PatientChart.tsx`) instead of two
+  independent pieces of state — fixes a desync Monika caught (selecting a
+  tooth via its FDI number left the *previous* tooth's tloris square still
+  outlined) — see "Direct chart selection" above
 - Status cleanup pass, per Monika's explicit request while reviewing the
   Legenda: `bridge_anchor` removed (a bridge anchor is just a plain
-  `crown` now — `isBridgeAnchorStatus()` in `BridgeRow.tsx` checks
-  `crown`/`implant`); `planned` removed as redundant with `endo_planned`;
+  `crown` now — `isAnchorStatus()` in `BridgeRow.tsx` checks
+  `crown`/`implant`); `planned` removed as redundant with
+  `endo_planned`;
   `granuloma`/`diastema` removed outright (along with the
   `'granuloma-circle'` `StatusSymbol` type and its dead-code
   `rootTipY`/`tipBox` locals in `ToothSideView.tsx`); `caries` relabeled
@@ -2096,26 +2861,137 @@ next:
   fully dead code, not a maintained fallback). The Legenda (`StatusLegend`)
   is unaffected and still covers every status/color/symbol individually,
   which was the part of Primeri actually worth keeping.
-- Supabase project (schema applied, RLS confirmed working) and a
-  functional login screen (`Login.tsx` + `useAuth.ts`)
+- Supabase project's 5 migrations run and confirmed against what turned out
+  to be a project shared with a separate, unrelated appointment-scheduling/
+  consent-storage app — then, once that sharing's real risk (that app's
+  backend holds a service-role key, which bypasses RLS project-wide) became
+  clear, **split into its own brand-new, dedicated Supabase project**
+  ("Dental charting"), with `schema.sql` run fresh there instead — see the
+  corrected "Supabase project setup" checkbox above. `.env`/`.env.patient`
+  repointed at the new project (URL + anon key); the database password is
+  also kept in `.env` under `SUPABASE_DB_PASSWORD`, unused by the app
+  itself (never wired into `src/lib/supabase.ts`, which only needs the URL
+  + anon key), stored purely for reference. Monika's Auth login re-created
+  in the new project (`goslar.monika@gmail.com`, plus
+  `gregor.goslar@gmail.com`), confirmed working; `TEST_VISIT_ID`
+  (`PatientChart.tsx`) re-seeded there too — its value is no longer the
+  same visit named earlier in this file's own history. **Cleanup
+  confirmed**: the dental chart's now-orphaned `patients`/`visits`/
+  `tooth_records`/`treatment_entries` tables were dropped from the old,
+  shared project (`booking_consents`/`sms_reminders` untouched, unaffected)
+  — that project is now purely the appointment-scheduling/consent-storage
+  app's own, with nothing left over from this one
+- `App.tsx` flipped off the `VITE_DEV_PAGE=patient` bypass onto the real
+  session-gated login flow — `StatusShowcase` keeps its own separate
+  `VITE_DEV_PAGE=showcase` bypass, unaffected
+- **First working save/load pipeline to Supabase** (`src/hooks/useVisit.ts`)
+  — confirmed live by Monika: a change made on the chart survives sign-out/
+  sign-in, visible as a real row in the Supabase Table Editor. Autosaves
+  ~30s after the last change, or immediately on sign-out — see "Visit
+  lifecycle" above for the full reasoning (why not save-per-tooth-switch)
+  and exactly what's still hardcoded/simplified in this first version (one
+  fixed test visit, no visit resume/close logic yet)
+- `bridgeGroupByFdi` persistence added (`tooth_records.bridge_group_id`,
+  migration `006_add_bridge_group.sql`) — confirmed live: a bridge formed
+  via "Člen mostu" now survives a reload, closing what had been the one
+  field the save pipeline above didn't yet cover
+- Real dirty-tracking added to `useVisit.ts`'s `flush()` — confirmed
+  working: a `lastSavedRef` snapshot (what was last written, or just
+  loaded) is diffed per field per tooth via plain reference checks, so a
+  save now only writes teeth that actually changed, not every tooth with
+  any data at all
+- Upper arch's `tnum` row moved from the bottom of its stack to the very
+  top, above the side-view teeth (`QuadrantBlock` in `ArchRow.tsx`), per
+  Monika's explicit request — the upper and lower arch stacks now mirror
+  each other exactly, top to bottom — see "Layout per quadrant" above
+- **Patient list built** (`PatientList.tsx`/`usePatients.ts`) — confirmed
+  working, replacing the single hardcoded `TEST_VISIT_ID` `PatientChart.tsx`
+  used to always load. A new `useOpenVisit(patientId)` hook resolves which
+  visit a chosen patient's chart loads/saves against (today's still-open
+  one if it exists, otherwise a freshly created one) — see "Patient list"
+  and "Visit lifecycle" above for the full picture, including what this
+  narrower, date-scoped resolution does and doesn't cover (closing a visit
+  is still not built at all).
+- **Patient record narrowed to just M/F** — per Monika's explicit request
+  ("I do not admit other genders"), `Patient['sex']` dropped `'other'`
+  entirely; a patient with nothing recorded yet is `null`, not a third
+  gender value. Confirmed working, migration `007_restrict_sex_to_mf.sql`
+  run on the live project.
+- **Four new patient fields added**: `phone`, `email`, `address`,
+  `healthCardNumber` (št. zdravstvene kartice / ZZZS, for future
+  eZdravje/ZZZS use only) — per Gregor's explicit request that these were
+  missing. `address` was then split further into `address` (street),
+  `postalCode`, `city`, again per Monika's explicit request. All confirmed
+  working; migrations `008_add_patient_contact_fields.sql` and
+  `009_split_address_fields.sql` run on the live project. See "Patient
+  list" above for the full feature, including the phone input (matched to
+  the sibling "dental calendar" app's own `react-phone-number-input`
+  usage) and the health-card number's 9-digit input constraint.
 
 **Not started, roughly in the order they'll matter:**
-1. Run `supabase/migrations/001_add_gum_margin.sql`,
-   `supabase/migrations/002_add_bleeding_surfaces.sql`,
-   `supabase/migrations/003_add_post.sql`, and
-   `supabase/migrations/004_add_sealant.sql` on the live project
-2. Confirm/create Monika's user in Supabase Auth, then flip `App.tsx` back
-   to the real login flow (remove the `SHOW_STATUS_SHOWCASE` dev flag and
-   its `StatusShowcase` import)
-3. Patient list page + a real patient/visit data flow into `DentalChart`
-   (replacing `PatientChart.tsx`'s placeholder), via custom hooks
-   (`usePatient`, `useVisit`) per the Supabase-calls convention below
-4. Click-to-edit: detail panel on tooth click, surface status picker,
-   auto-save to Supabase
-5. Visit history toggle, print view
+1. Closing a visit — nothing anywhere ever sets `visits.closed_at` yet;
+   the full lifecycle design in "Visit lifecycle" above (an
+   inactivity-timeout close, an explicit "leaving this workspace" close)
+   remains just a design
+2. "Zgodovina zdravljenja" (treatment history) tab — the data shape already
+   supports it for free (every `tooth_records` row for one tooth, across
+   visits, is that tooth's history — see "Visit lifecycle" above), but no
+   UI reads a tooth's older visits yet, only its latest one
+3. A patient-detail/edit view — phone/email/address/postal code/city/
+   health-card number are currently only ever entered once, at patient
+   creation; nothing lets you view or change them again afterward except
+   the list row's own phone number
+4. Print view
 
 ---
 
-*Last updated: 2026-08-20 ("Primeri — cel zob" removed from StatusShowcase.tsx, per Monika's request — EXAMPLES and the now-dead ToothColumn.tsx deleted)*
+*Last updated: 2026-09-08 (patient list built — PatientList.tsx/
+usePatients.ts, replacing the single hardcoded TEST_VISIT_ID; a new
+useOpenVisit(patientId) hook resolves/creates a real per-patient visit for
+PatientChart.tsx to load/save against, confirmed working. Patient record
+extended: sex narrowed to M/F only per Monika's explicit request (no
+"other"); phone/email/address/healthCardNumber added per Gregor's request,
+then address split further into address(street)/postalCode/city per
+Monika's request — all confirmed working, migrations 007-009 run on the
+live project. Telefon uses react-phone-number-input matched to the sibling
+"dental calendar" app's own usage; Št. zdravstvene kartice constrained to
+exactly 9 digits. Previous entry, same day: real dirty-tracking added to
+useVisit.ts's
+flush() — a lastSavedRef snapshot is diffed per field per tooth via plain
+reference checks, so a save now only writes teeth that actually changed,
+confirmed working; bridgeGroupByFdi now persists too —
+tooth_records.bridge_group_id, migration 006_add_bridge_group.sql,
+confirmed live: a bridge formed via "Člen mostu" survives a reload; the
+old shared Supabase project's now-orphaned patients/visits/tooth_records/
+treatment_entries tables were dropped, confirmed, leaving it purely the
+appointment-scheduling/consent-storage app's own. Previous entry, 2026-09-07:
+first working Supabase save/load pipeline confirmed live by Monika —
+useVisit.ts loads and autosaves one visit's
+tooth_records, ~30s after the last change or immediately on sign-out;
+App.tsx now requires a real Supabase Auth login to reach PatientChart
+instead of the VITE_DEV_PAGE=patient bypass; all 5 pending migrations run
+against the live project, which turned out to already be shared with a
+separate, unrelated appointment-scheduling/consent-storage app neither
+Monika nor this session had the full picture on at first — then split into
+its own brand-new, dedicated Supabase project ("Dental charting") once
+that sharing's real risk (the other app's backend holds a service-role
+key, bypassing RLS project-wide) became clear, with schema.sql run fresh
+there, .env repointed, Monika's login and the test visit re-created; bridge
+creation
+rewritten from purely status-driven bracket inference — which went through
+three rounds (loose, both-ends-anchored, matching-anchor-type) and kept
+either drawing nothing for an unclosed bridge or silently welding an
+unrelated neighboring crown/implant into a phantom one — to an explicit
+fdi->group-id map set only by selecting an anchor together with its
+pontics and clicking "Člen mostu", now also able to cross the arch's own
+midline and enforcing matching anchor types; applying a status/post/
+endo-stage/bridge from StatusToolbar no longer clears the chart selection
+afterward; abrasion/sealant/overlay applied via an individual surface
+click now redirect to the whole-tooth path, since none of their own marks
+ever read any surface but the whole tooth (or, for abrasion on posterior
+teeth, the occlusal one); pocket-depth/gum-margin entry built —
+click-to-focus + type-a-number, BOP/sign toggle on a second click or
+Shift+digit, auto-advance, nullable PocketDepths/GumMargin tuples,
+placeholder circles so empty points are actually discoverable)*
 *Project: Monikina ordinacija — digitalizacija*
 *Stack: React 18 + Vite + TypeScript + Supabase (EU)*

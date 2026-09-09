@@ -3,7 +3,7 @@ import type { Arch } from '../../data/toothMeta';
 import { TOOTH_PROFILES, COLUMN_WIDTH, COLUMN_GAP, PX_PER_MM } from '../../data/toothProfiles';
 import type { GumMargin, ToothStatus } from '../../types/dental';
 import { ToothSideViewContent } from './ToothSideView';
-import { POINT_X_FRACTIONS } from './perioStyle';
+import { POINT_X_FRACTIONS, samePerioPoint, type PerioPoint } from './perioStyle';
 
 const RULER_STEP_MM = 2;
 // Room reserved beyond the deepest root in the row for the REC (gum-margin)
@@ -17,6 +17,17 @@ const ROOT_LABEL_MARGIN_PX = REC_ROW_INSET + 6;
 const CROWN_LABEL_MARGIN_PX = 6;
 
 const REC_LABEL_COLOR = '#4C7093';
+const REC_HIT_RADIUS = 7;
+const SELECTED_COLOR = 'var(--tooth-selected, #2e6e62)';
+// Faint placeholder for an interactive-but-not-yet-entered REC point — same
+// reasoning as PocketDepthRow's own PLACEHOLDER_COLOR: the hit circle is
+// otherwise fully invisible, so without this there's nothing to see where a
+// click would start entry. Only shown when interactive (PatientChart.tsx);
+// the read-only StatusShowcase.tsx chart is unaffected.
+const REC_PLACEHOLDER_RADIUS = 2.5;
+const PLACEHOLDER_COLOR = '#ccd6d4';
+
+type GumPoint = Extract<PerioPoint, { kind: 'gum' }>;
 
 interface PerioGraphRowProps {
   fdis: readonly string[];
@@ -24,6 +35,9 @@ interface PerioGraphRowProps {
   /** Gingival margin per tooth (buccal surface), [mesial, mid, distal] mm. Defaults to 0 (at CEJ) for any tooth not given. */
   gumMargin?: Record<string, GumMargin>;
   statuses?: Record<string, ToothStatus>;
+  /** Click-to-focus/type-a-number entry (PatientChart.tsx) — see PerioPoint. Optional: StatusShowcase.tsx's read-only chart simply never passes these, so nothing there becomes interactive. */
+  onPointClick?: (point: GumPoint) => void;
+  focusedPoint?: PerioPoint | null;
 }
 
 // Tooth silhouettes + continuous gum-margin line, modeled on Curve Dental's
@@ -33,7 +47,7 @@ interface PerioGraphRowProps {
 // (REC, plain magnitude) just past the root tips. Width/x-positions use the
 // exact same COLUMN_WIDTH/COLUMN_GAP constants ArchRow uses everywhere else,
 // so this lines up with the rows above/below it.
-export function PerioGraphRow({ fdis, arch, gumMargin, statuses }: PerioGraphRowProps) {
+export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, focusedPoint }: PerioGraphRowProps) {
   const profiles = fdis.map((fdi) => TOOTH_PROFILES[fdi]);
   const maxRootMm = Math.max(...profiles.map((p) => p.rootLengthMm));
   const maxCrownMm = Math.max(...profiles.map((p) => p.crownLengthMm));
@@ -92,8 +106,12 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses }: PerioGraphRow
       // coronalSign is the y-direction that "toward the crown" points in
       // for this arch — so adding the two moves recession (negative gm)
       // toward the root, and gum overgrowth (positive gm) toward the
-      // crown, regardless of arch.
-      y: cejY + gm[j] * PX_PER_MM * coronalSign,
+      // crown, regardless of arch. A tooth mid-entry can have some points
+      // set and others still null (see GumMargin in types/dental.ts) — the
+      // line is a continuous visual guide, not itself the recorded data,
+      // so an unset point just reads as "at the CEJ" here, same as a
+      // whole-tooth-absent default already does.
+      y: cejY + (gm[j] ?? 0) * PX_PER_MM * coronalSign,
     }));
   });
 
@@ -180,28 +198,80 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses }: PerioGraphRow
         // is a known, definite fact ("no recession, unerupted"), not
         // missing data, so it's shown the same way a real [0,0,0] entry
         // would be for any other tooth, regardless of whether gumMargin
-        // actually has an entry for this fdi.
+        // actually has an entry for this fdi. Never interactive, though —
+        // nothing to probe on a tooth that's never erupted.
         const impacted = statuses?.[fdi] === 'impacted';
         const gm = impacted ? ([0, 0, 0] as GumMargin) : gumMargin?.[fdi];
-        if (!gm) return null;
         const colX = i * (COLUMN_WIDTH + COLUMN_GAP);
         const xs = POINT_X_FRACTIONS.map((frac) => colX + COLUMN_WIDTH * frac);
-        return <RecLabels key={fdi} xs={xs} y={recRowY} gumMm={gm} />;
+        return (
+          <RecLabels
+            key={fdi}
+            fdi={fdi}
+            xs={xs}
+            y={recRowY}
+            gumMm={gm}
+            onPointClick={impacted ? undefined : onPointClick}
+            focusedPoint={focusedPoint}
+          />
+        );
       })}
     </svg>
   );
 }
 
-function RecLabels({ xs, y, gumMm }: { xs: number[]; y: number; gumMm: GumMargin }) {
-  // Shown as a plain magnitude (no "-") since recession is the expected
-  // case clinically and the sign reads as noise.
+function RecLabels({
+  fdi,
+  xs,
+  y,
+  gumMm,
+  onPointClick,
+  focusedPoint,
+}: {
+  fdi: string;
+  xs: number[];
+  y: number;
+  /** Undefined when this tooth has no gum-margin entry at all yet — still renders 3 (invisible, when interactive) hit targets so an empty tooth can be clicked to start entry. */
+  gumMm?: GumMargin;
+  onPointClick?: (point: GumPoint) => void;
+  focusedPoint?: PerioPoint | null;
+}) {
   return (
     <>
-      {gumMm.map((mm, i) => (
-        <text key={i} x={xs[i]} y={y + 0.5} fontSize={5.5} textAnchor="middle" dominantBaseline="middle" fill={REC_LABEL_COLOR}>
-          {Math.abs(mm)}
-        </text>
-      ))}
+      {([0, 1, 2] as const).map((i) => {
+        const mm = gumMm?.[i];
+        const point: GumPoint = { kind: 'gum', fdi, index: i };
+        const interactive = !!onPointClick;
+        const focused = interactive && samePerioPoint(focusedPoint, point);
+        return (
+          <g key={i}>
+            {focused && <circle cx={xs[i]} cy={y} r={REC_HIT_RADIUS} fill="none" stroke={SELECTED_COLOR} strokeWidth={1.5} />}
+            {interactive && mm == null && (
+              <circle cx={xs[i]} cy={y} r={REC_PLACEHOLDER_RADIUS} fill="none" stroke={PLACEHOLDER_COLOR} strokeWidth={1} strokeDasharray="1 1" />
+            )}
+            {/* Shown as a plain magnitude (no "-") since recession is the
+                expected case clinically and the sign reads as noise — the
+                actual signed value still drives which side of the CEJ the
+                gumline dot/label sit on. */}
+            {mm != null && (
+              <text x={xs[i]} y={y + 0.5} fontSize={5.5} textAnchor="middle" dominantBaseline="middle" fill={REC_LABEL_COLOR}>
+                {Math.abs(mm)}
+              </text>
+            )}
+            {interactive && (
+              <circle
+                cx={xs[i]}
+                cy={y}
+                r={REC_HIT_RADIUS}
+                fill="none"
+                stroke="none"
+                style={{ pointerEvents: 'all', cursor: 'pointer' }}
+                onClick={() => onPointClick?.(point)}
+              />
+            )}
+          </g>
+        );
+      })}
     </>
   );
 }

@@ -5,3 +5,39 @@
 body {
   margin: 0;
 }
+
+/* react-phone-number-input (PatientList.tsx's "Telefon" field) — styled to
+   match every other text input on this page (same border/radius/padding/
+   text color as the plain Tailwind-classed inputs right next to it), and
+   to match the sibling "dental calendar" booking app's own phone field
+   (see its App.css) which uses this exact same library/class names. The
+   library ships unstyled elements under these fixed class names — there's
+   no className prop path to reach the inner flag-select/number pieces
+   individually, so this has to be plain CSS rather than Tailwind classes
+   on the component itself. */
+.PhoneInput {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--line, #ccd6d4);
+  background: transparent;
+}
+
+.PhoneInputInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: var(--ink, #1c2624);
+  padding: 0;
+  outline: none;
+}
+
+.PhoneInputCountry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}

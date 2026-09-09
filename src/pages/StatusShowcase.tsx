@@ -1,6 +1,6 @@
 import { DentalChart } from '../components/chart/DentalChart';
 import { StatusLegend } from '../components/ui/StatusLegend';
-import type { SurfaceMap, PocketDepths, GumMargin, BleedingPoints, SealantStage } from '../types/dental';
+import type { SurfaceMap, PocketDepths, GumMargin, BleedingPoints, EndoStage } from '../types/dental';
 
 // No 'perio' status — periodontal disease is now shown directly by the
 // pocket-depth/gum-margin numbers and gumline below, not a flat tooth
@@ -54,7 +54,7 @@ const MOCK_BLEEDING_LINGUAL: Record<string, BleedingPoints> = {
   46: [false, false, true],
 };
 
-// Dental post (zobni kolček) demo — one per arch, so both line directions
+// Dental post (zobni zatiček) demo — one per arch, so both line directions
 // (up on upper, down on lower) are visible. 26 (upper, crown) and 36
 // (lower, already endo + caries) — a post commonly follows a root canal
 // and supports a crown, so both are clinically plausible pairings, not
@@ -71,35 +71,39 @@ const MOCK_POST: Record<string, boolean> = {
   36: true,
 };
 
-// Fissure sealant (zalitje fisur) demo. `sealant` used to be a plain
-// boolean (always the grey "existing" look) before Monika's explicit
-// request to extend the planned/done/existing pattern to it too, same as
-// endo/overlay below. 17 (upper) and 35 (lower) keep their original
-// 'existing' meaning, both otherwise unremarkable posterior teeth (no
-// entry in MOCK_SURFACES, so plain `healthy`) — the most common
-// real-world case, and still exercising both of BridgeRow's flip
-// positions (above the tloris squares on the lower arch, below them on
-// the upper). 21 and 37 (both `implant`, purple) add 'planned'/'done'
-// sealant on top, to demonstrate the field's whole point: it combines
-// freely with whatever else is going on for that tooth, rather than
-// competing for the single surfaces.all slot.
-const MOCK_SEALANT: Record<string, SealantStage> = {
-  17: 'existing',
-  35: 'existing',
-  21: 'planned',
-  37: 'done',
+// Endodontic treatment (kanal) — no longer a ToothStatus (see EndoStage in
+// types/dental.ts), so it's threaded independently here too, the same way
+// MOCK_POST is. Preserves the exact same demo pairings the old
+// endo/endo_planned/endo_existing statuses used: 33/36 combine endo with
+// per-surface caries overrides in MOCK_SURFACES below (proving the two now
+// genuinely coexist, not just "surfaces.all didn't happen to conflict");
+// 34/47 are isolated planned/done circles; 22 is the isolated existing
+// (grey) state.
+const MOCK_ENDO: Record<string, EndoStage> = {
+  22: 'existing',
+  33: 'planned',
+  34: 'planned',
+  36: 'done',
+  47: 'done',
 };
 
 // Illustrative surface statuses for the full "Cela karta" demo — a light
 // scattering across all four quadrants, not one-per-status (that's what the
 // EXAMPLES list below is for). Includes both abrasion cases (24 posterior,
-// 23 anterior) so the bowtie/hollow-box marks are visible in context; two
-// implants (21, 37) so the fixture glyph's scaled and centered correctly
-// across different tooth shapes; a 45-44-43 bridge anchored on two natural
-// crowns; and a 15-14-13 bridge anchored on an implant (15) at one end and
-// a natural crown (13) at the other, so
-// BridgeRow's detection also covers implant-supported bridges, not just
-// tooth-to-tooth ones; three adjacent prosthesis teeth (31, 32, 41) to
+// 23 anterior) so the bowtie/hollow-box marks are visible in context;
+// implant fixture rendering (21); a 45-44-43 bridge anchored on two natural
+// crowns; and a 15-14-13 bridge anchored on crowns at both ends too — both
+// demos deliberately use the SAME anchor type at both ends (crown+crown),
+// per Monika's explicit clinical correction: a bridge with two anchors
+// must match, crown+crown or implant+implant, never one of each ("fixing
+// bridge on crown on one side and implant on the other is a professional
+// mistake") — enforced by both handleCreateBridge (PatientChart.tsx, at
+// creation time) and findBridgeGroups's own anchorTypesMatch check
+// (BridgeRow.tsx, re-validated live). A bridge only needs ONE anchor to
+// exist at all, though — a cantilever (one anchor, no anchor at the far
+// end) is a real clinical case and has nothing to mismatch against, since
+// the type-matching rule only applies once there are two anchors to
+// compare; three adjacent prosthesis teeth (31, 32, 41) to
 // check the tloris circle-swap both in isolation and side-by-side across
 // the midline divider, plus 42 next to 41 as a prosthesis_crown — a
 // natural crowned tooth anchoring the same prosthesis, connected by the
@@ -107,14 +111,15 @@ const MOCK_SEALANT: Record<string, SealantStage> = {
 // circle+X; both endodontic states side by side — 47 done (blue circle,
 // isolated) and 34 still needed/in progress (red circle, isolated) — so
 // the two colors of the same endo-circle symbol are visible together; and
-// two teeth combining a whole-tooth endo-circle with per-surface caries
-// dots on every surface, one of each endo state — 33 (root canal still
-// needed, red circle) and 36 (root canal already done, blue circle) — per
+// two teeth combining an independent endo-circle (MOCK_ENDO, below — no
+// longer a ToothStatus, see EndoStage) with per-surface caries dots on
+// every surface, one of each endo state — 33 (root canal still needed,
+// red circle) and 36 (root canal already done, blue circle) — per
 // Monika's explicit request that a tooth needing a root canal can show
-// that alongside its own caries just like the done case already did.
-// Works the same way for both: `surfaces.all` drives the whole-tooth
-// symbol regardless of what any individual surface is overridden to, so
-// every surface can be explicitly set to 'caries' without disturbing it.
+// that alongside its own caries. This now demonstrates real coexistence,
+// not just non-conflicting slots: 33/36 have no `all` entry in
+// MOCK_SURFACES at all anymore, just per-surface 'caries' overrides — the
+// endo-circle comes entirely from MOCK_ENDO, independent of surfaces.
 // Plus one fully caries-treated tooth (25, blue) with no endo involvement,
 // alongside 16's single whole-tooth caries case, so the per-surface dot
 // marker (not a flat fill) reads clearly in context for both states, on
@@ -123,39 +128,61 @@ const MOCK_SEALANT: Record<string, SealantStage> = {
 // to be a third implant example there — see its own dedicated comment at
 // its entry below, and "Impacted tooth" in CLAUDE.md for the full
 // PerioGraphRow submerge/clip behavior this exercises.
+// 17/35/37 demo the three fissure-sealant states (sealant_existing/
+// sealant_planned/sealant) — a real ToothStatus set now, not a separate
+// independent field, per Monika's explicit clinical correction: sealant
+// and a status like implant are not compliant services on the same tooth,
+// so there was never a valid case for combining them (the earlier
+// implant+sealant demo on 21/37 was actually clinically wrong). 37 was
+// implant before this change; converting it to `sealant` (done) leaves
+// only 21 demonstrating the implant fixture rendering — a real reduction
+// in tooth-shape coverage for that feature, accepted since implant
+// rendering is settled and unlikely to regress, unlike this new status set.
 const MOCK_SURFACES: Record<string, SurfaceMap> = {
   // A bridge anchor is just a plain `crown` (there's no separate
-  // `bridge_anchor` status anymore — see `isBridgeAnchorStatus()` in
-  // BridgeRow.tsx), so 13/43/45 below are indistinguishable from any other
-  // crowned tooth on their own; the bracket appears automatically once
-  // BridgeRow finds a valid crown/implant-pontic(s)-crown/implant run.
+  // `bridge_anchor` status anymore — see `isAnchorStatus()` in
+  // BridgeRow.tsx), so 13/15/43/45 below are indistinguishable from any
+  // other crowned tooth on their own. The bracket itself no longer comes
+  // from these statuses alone, though — BridgeRow only draws it for teeth
+  // explicitly grouped together via MOCK_BRIDGE_GROUPS below (mirroring
+  // handleCreateBridge in PatientChart.tsx — see BridgeRow.tsx's own
+  // history comment for why purely status-driven detection was dropped).
   13: { all: 'crown' },
   14: { all: 'bridge_pontic' },
-  15: { all: 'implant' },
+  15: { all: 'crown' },
   16: { all: 'caries' },
+  // Fissure sealant, existing (grey) — see the dedicated comment above
+  // MOCK_SURFACES for the other two states (37, 35).
+  17: { all: 'sealant_existing' },
   21: { all: 'implant' },
   23: { all: 'abrasion' },
   24: { all: 'abrasion' },
   25: { all: 'caries_treated' },
   26: { all: 'crown' },
-  // 33 still needs a root canal (all: 'endo_planned' — red circle) and
-  // also has caries on every one of its own surfaces (anterior tooth, so
-  // just b/l/m/d, no 'o'), each explicitly overridden to 'caries' rather
-  // than left to fall through to 'endo_planned' — the fallback rule
-  // (statusFor) only reaches surfaces.all when a surface has no override
-  // of its own.
-  33: { all: 'endo_planned', b: 'caries', l: 'caries', m: 'caries', d: 'caries' },
-  34: { all: 'endo_planned' },
-  // 36 already had a root canal (all: 'endo' — keeps the blue circle,
-  // same reasoning as 33 above) and also has caries on every surface
-  // (posterior, so b/o/l/m/d all included).
-  36: { all: 'endo', b: 'caries', o: 'caries', l: 'caries', m: 'caries', d: 'caries' },
-  37: { all: 'implant' },
+  // 33 still needs a root canal (MOCK_ENDO[33] = 'planned' — red circle,
+  // set independently below) and also has caries on every one of its own
+  // surfaces (anterior tooth, so just b/l/m/d, no 'o') — no `all` entry
+  // here at all anymore, just the per-surface overrides, since the
+  // endo-circle no longer comes from surfaces.all.
+  33: { b: 'caries', l: 'caries', m: 'caries', d: 'caries' },
+  // 34's root canal (still needed — red circle) is entirely MOCK_ENDO[34],
+  // so it has no SurfaceMap entry here at all.
+  // Fissure sealant, planned (red) — see the dedicated comment above
+  // MOCK_SURFACES for the other two states (17, 37).
+  35: { all: 'sealant_planned' },
+  // 36 already had a root canal (MOCK_ENDO[36] = 'done' — blue circle, set
+  // independently below, same reasoning as 33 above) and also has caries
+  // on every surface (posterior, so b/o/l/m/d all included).
+  36: { b: 'caries', o: 'caries', l: 'caries', m: 'caries', d: 'caries' },
+  // Fissure sealant, done state — see the dedicated comment above
+  // MOCK_SURFACES for why this replaced an implant demo here.
+  37: { all: 'sealant' },
   42: { all: 'prosthesis_crown' },
   43: { all: 'crown' },
   44: { all: 'bridge_pontic' },
   45: { all: 'crown' },
-  47: { all: 'endo' },
+  // 47's root canal (done — blue circle) is entirely MOCK_ENDO[47], so it
+  // has no SurfaceMap entry here at all.
   31: { all: 'prosthesis' },
   32: { all: 'prosthesis' },
   41: { all: 'prosthesis' },
@@ -188,9 +215,26 @@ const MOCK_SURFACES: Record<string, SurfaceMap> = {
   // alongside the planned/done pair, per service — a root canal or
   // overlay already present before this practice started tracking the
   // tooth, grey (STATUS_COLOR, the same grey as the bridge bracket and
-  // sealant tilde) instead of red/blue.
-  22: { all: 'endo_existing' },
+  // sealant tilde) instead of red/blue. 22's root canal is entirely
+  // MOCK_ENDO[22] now, so it has no SurfaceMap entry here at all.
   27: { all: 'overlay_existing' },
+};
+
+// Explicit fdi → bridge-group-id map — mirrors handleCreateBridge in
+// PatientChart.tsx (select an existing anchor together with its pontics,
+// then click "Člen mostu"): BridgeRow no longer draws a bracket from
+// crown/implant/bridge_pontic statuses alone, so without an entry here
+// 13/14/15 and 43/44/45 above would just show as an ordinary crown, a
+// crossed-out pontic square, and another ordinary crown, with no bracket
+// connecting them. Group ids only need to be distinct from one another;
+// their value has no meaning beyond that.
+const MOCK_BRIDGE_GROUPS: Record<string, string> = {
+  13: 'demo-13-15',
+  14: 'demo-13-15',
+  15: 'demo-13-15',
+  43: 'demo-43-45',
+  44: 'demo-43-45',
+  45: 'demo-43-45',
 };
 
 export function StatusShowcase() {
@@ -220,7 +264,8 @@ export function StatusShowcase() {
           bleedingBuccal={MOCK_BLEEDING_BUCCAL}
           bleedingLingual={MOCK_BLEEDING_LINGUAL}
           postByFdi={MOCK_POST}
-          sealantByFdi={MOCK_SEALANT}
+          endoByFdi={MOCK_ENDO}
+          bridgeGroupByFdi={MOCK_BRIDGE_GROUPS}
         />
       </div>
 
