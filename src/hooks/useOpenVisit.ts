@@ -2,22 +2,26 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 // Resolves which `visits.id` PatientChart.tsx should load/save against for
-// a given patient — the "resume today's open visit, or start a new one"
-// logic CLAUDE.md's "Visit lifecycle" section describes and useVisit.ts's
-// own comment used to flag as deliberately not built yet. Previously
-// PatientChart.tsx just hardcoded one seeded TEST_VISIT_ID; now that a real
-// patient list exists (PatientList.tsx), there's a real patientId to
-// resolve a real visit from.
+// a given patient — "resume the most recent still-open visit, or start a
+// new one" — the logic CLAUDE.md's "Visit lifecycle" section describes.
+// Previously PatientChart.tsx just hardcoded one seeded TEST_VISIT_ID; now
+// that a real patient list exists (PatientList.tsx), there's a real
+// patientId to resolve a real visit from.
 //
-// Resolution rule: an "open" visit is one with today's date and no
-// `closed_at` — if the patient already has one (e.g. re-opening the chart
-// mid-appointment, or clicking back into the same patient later the same
-// day), reuse it so today's edits keep landing in one row per tooth rather
-// than fragmenting across several visits; otherwise create a fresh one
-// dated today. Nothing here ever sets `closed_at` — that's the other half
-// of the lifecycle (explicitly closing a visit once an appointment is
-// truly done) and stays a future step, same as it was before this hook
-// existed.
+// Resolution rule: an "open" visit is one with no `closed_at` at all — NOT
+// scoped to today's date. An earlier version of this hook filtered on
+// `.eq('date', today)` too, on the (wrong) assumption that "resume today's
+// visit" meant "only ever reuse one dated today." Since closing a visit is
+// still fully unimplemented (`closed_at` is never set by anything), that
+// date filter meant a patient's chart silently started a brand new, EMPTY
+// visit every time it was opened on a later calendar day than their last
+// one — Gregor caught this directly: opening any patient showed a blank
+// chart even after real data had been entered, because that data was sound
+// in an older visit the date filter could no longer find. Dropping the
+// date filter fixes this: as long as nothing has closed a patient's visit,
+// there is only ever ONE open one for them, and every session — today,
+// tomorrow, next week — keeps landing in that same visit until closing is
+// actually built (see the "Not started" list in CLAUDE.md).
 //
 // Every Supabase call lives here, not in PatientChart.tsx directly, per
 // CLAUDE.md's own "Coding Conventions" rule.
@@ -33,12 +37,10 @@ export function useOpenVisit(patientId: string) {
     setError(null);
 
     async function resolve() {
-      const today = new Date().toISOString().slice(0, 10);
       const { data: existing, error: findError } = await supabase
         .from('visits')
         .select('id')
         .eq('patient_id', patientId)
-        .eq('date', today)
         .is('closed_at', null)
         .order('created_at', { ascending: false })
         .limit(1);
@@ -53,6 +55,10 @@ export function useOpenVisit(patientId: string) {
         setLoading(false);
         return;
       }
+      // `date` here is just descriptive (when this visit was first opened)
+      // — it no longer plays any role in resolving which visit to reuse,
+      // see this hook's own comment above.
+      const today = new Date().toISOString().slice(0, 10);
       const { data: created, error: createError } = await supabase
         .from('visits')
         .insert({ patient_id: patientId, date: today })
