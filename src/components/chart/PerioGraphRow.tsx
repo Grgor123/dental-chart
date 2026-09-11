@@ -38,6 +38,17 @@ interface PerioGraphRowProps {
   /** Click-to-focus/type-a-number entry (PatientChart.tsx) — see PerioPoint. Optional: StatusShowcase.tsx's read-only chart simply never passes these, so nothing there becomes interactive. */
   onPointClick?: (point: GumPoint) => void;
   focusedPoint?: PerioPoint | null;
+  /**
+   * Fires when this tooth's own side-view drawing (crown + root) is
+   * clicked — the same "which tooth is selected" callback TlorisRow.tsx's
+   * tloris square and NumberRow.tsx's FDI number already call. The
+   * anatomic drawing here is the single most visually obvious "the tooth"
+   * element on the whole chart, so it needs this too: Gregor reported
+   * "Izbran zob: …" not updating when he clicked a tooth, and it turned
+   * out he was (reasonably) clicking the illustrated tooth itself, not the
+   * small tloris square underneath it.
+   */
+  onSelect?: (fdi: string) => void;
 }
 
 // Tooth silhouettes + continuous gum-margin line, modeled on Curve Dental's
@@ -47,7 +58,7 @@ interface PerioGraphRowProps {
 // (REC, plain magnitude) just past the root tips. Width/x-positions use the
 // exact same COLUMN_WIDTH/COLUMN_GAP constants ArchRow uses everywhere else,
 // so this lines up with the rows above/below it.
-export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, focusedPoint }: PerioGraphRowProps) {
+export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, focusedPoint, onSelect }: PerioGraphRowProps) {
   const profiles = fdis.map((fdi) => TOOTH_PROFILES[fdi]);
   const maxRootMm = Math.max(...profiles.map((p) => p.rootLengthMm));
   const maxCrownMm = Math.max(...profiles.map((p) => p.crownLengthMm));
@@ -158,7 +169,8 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, f
             width={profile.displayWidth}
             height={profile.displayHeight}
             viewBox={`0 0 ${profile.width} ${profile.height}`}
-            style={{ overflow: 'visible' }}
+            style={{ overflow: 'visible', cursor: onSelect ? 'pointer' : undefined }}
+            onClick={() => onSelect?.(fdi)}
           >
             <ToothSideViewContent fdi={fdi} arch={arch} profile={profile} status={statuses?.[fdi]} />
           </svg>

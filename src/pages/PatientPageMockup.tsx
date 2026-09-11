@@ -128,6 +128,29 @@ const MOCK_TOOTH_HISTORY: Record<string, { date: string; opis: string }[]> = {
   46: [{ date: '12. 4. 2020', opis: 'Zob manjka — evidentirano ob prvem pregledu.' }],
 };
 
+// Frame 3 (right column, bottom tabbed frame): entirely fabricated content
+// for all four tabs, same "pins down where the future feature would live"
+// role as MOCK_TOOTH_HISTORY above — no real RTG/photo storage, SMS log, or
+// email log exists yet (see docs/patient-record-spec.md's own open
+// questions on the RTG integration mechanism).
+const MOCK_RTG_GALLERY = [
+  { date: '11. 10. 2026', opis: 'Panoramski posnetek (OPG)' },
+  { date: '3. 1. 2023', opis: 'Lokalni posnetek — zgornji desni kvadrant' },
+  { date: '22. 9. 2022', opis: 'Lokalni posnetek — implantat 21' },
+];
+
+const MOCK_PHOTOS = [
+  { date: '11. 10. 2026', opis: 'Pred posegom — zgornji lok' },
+  { date: '3. 1. 2023', opis: 'Most 13–15, po namestitvi' },
+];
+
+const MOCK_SMS = { date: '12. 10. 2026', text: 'Pozdravljeni, vaš termin je potrjen za 14. 3. 2026 ob 10:30. Lep pozdrav, Ordinacija Monika Goslar.' };
+
+const MOCK_EMAILS = [
+  { date: '12. 10. 2026', subject: 'Potrditev termina 14. 3. 2026', snippet: 'Pozdravljeni, obveščamo vas, da je vaš termin potrjen…' },
+  { date: '2. 1. 2023', subject: 'Napotnica za rentgensko slikanje', snippet: 'V prilogi vam pošiljamo napotnico za OPG posnetek…' },
+];
+
 const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
   'abrasion',
   'sealant_planned', 'sealant', 'sealant_existing',
@@ -148,8 +171,46 @@ function sameTarget(a: Target, b: Target): boolean {
   return a.fdi === b.fdi && a.surface === b.surface;
 }
 
-const FIELD_INPUT_CLASSES = 'rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]';
-const FIELD_LABEL_CLASSES = 'flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]';
+// "1982-03-12" -> "12.3.1982", matching the mockup's own date display
+// (day.month.year, no leading zeros) — the <input type="date"> in edit
+// mode still uses the plain ISO string, this is view-mode display only.
+function formatSlovenianDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return iso;
+  return `${Number(d)}.${Number(m)}.${y}`;
+}
+
+const GENDER_LABELS: Record<string, string> = { M: 'Moški', F: 'Ženski', '': 'Neznano' };
+
+// Deliberately NOT boxed — a bordered/padded input is naturally taller than
+// a bare line of text, and Gregor's explicit, repeated request is that this
+// whole card stay pinned at its view-mode height (536px) even in edit mode.
+// So edit-mode fields get only an underline, same font-size/line-height as
+// the view-mode text, no padding — as close as an <input>/<select> can get
+// to occupying exactly one text line's worth of height instead of an input
+// box's worth. The underline itself is a `box-shadow`, not a `border` —
+// a border adds to the element's own box height (that was the last
+// remaining 1px-per-field gap once padding was already zeroed), while a
+// box-shadow paints without taking up any layout space at all.
+const FIELD_INPUT_CLASSES =
+  'w-full appearance-none border-0 bg-transparent px-0 py-0 text-base leading-6 text-[var(--ink,#1c2624)] shadow-[0_1px_0_0_var(--line,#ccd6d4)] focus:shadow-[0_1px_0_0_var(--accent,#2e6e62)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted,#6f7c79)]';
+// Plain label-over-value display used while NOT editing — see the
+// PatientInfoField helper below and the file-level comment at the top of
+// PatientPageMockup for why this mirrors the mockup's read view exactly
+// (no border/box at all, just two lines of text).
+const VIEW_LABEL_CLASSES = 'text-sm text-[var(--muted,#7e7e7d)]';
+const VIEW_VALUE_CLASSES = 'text-base text-[var(--ink,#1c2624)]';
+// Scoped override for the one PhoneInput usage in this card — its own
+// stylesheet (react-phone-number-input/style.css) doesn't box the inner
+// <input> itself, but the browser's default UA border/padding on a bare
+// <input> does, which is the same "taller than a text line" problem the
+// FIELD_INPUT_CLASSES fields above solve for. Scoped to .ppm-phone-compact
+// (this page's only PhoneInput) rather than the bare .PhoneInput classes,
+// so it can't leak into any other PhoneInput usage elsewhere in the app.
+const PHONE_COMPACT_CSS = `
+  .ppm-phone-compact .PhoneInputInput { border: none; padding: 0; background: transparent; font-size: 1rem; line-height: 1.5rem; }
+  .ppm-phone-compact .PhoneInputCountryIcon { height: 1.1rem; }
+`;
 
 export function PatientPageMockup() {
   // ---- Chart status/service editing — local state only, close copy of
@@ -169,6 +230,60 @@ export function PatientPageMockup() {
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   const [activeTab, setActiveTab] = useState<'legenda' | 'storitve'>('legenda');
   const [phone, setPhone] = useState('+38641234567');
+  // Frame 1 (top banner): "Vprašalnik" opens a placeholder modal — the real
+  // questionnaire responses/data model don't exist yet (see docs/patient-record-spec.md).
+  const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
+  // Frame 2 (left column, patient info card): modeled directly on
+  // design/PatientRecordMockup.svg — plain label-over-value text while
+  // viewing (no boxes/borders at all, matching the mockup's read view
+  // exactly), swapping to real bordered inputs only once "Uredi" is
+  // clicked (the mockup only ever depicts the view state, so the edit
+  // state is our own reasonable extrapolation of "toggles into an
+  // editable state"). Nothing here writes to Supabase — still local-state
+  // mockup only, so "Uredi" -> "Shrani" just flips editMode back off.
+  // Field set matches the mockup's own two-column block exactly — no
+  // separate EMŠO field (the mockup has none) and "Št. ZZZS" is the one
+  // insurance-card-style identifier, not a second "Št. zdravstvene
+  // kartice" field alongside it. Fields are lifted into real state (not
+  // uncontrolled defaultValue) since the view mode needs to render their
+  // current value as plain text.
+  const [editMode, setEditMode] = useState(false);
+  const [patientInfo, setPatientInfo] = useState({
+    spol: 'M' as 'M' | 'F' | '',
+    terapevt: 'Monika Novak',
+    dob: '1982-03-12',
+    email: 'gregor.goslar@gmail.com',
+    naslov: 'Spodnje Pirniče 41j',
+    postalCode: '1215',
+    kraj: 'Medvode',
+    zzzs: '039303892',
+    evidenca: '123456',
+  });
+  function updatePatientInfo<K extends keyof typeof patientInfo>(key: K, value: (typeof patientInfo)[K]) {
+    setPatientInfo((prev) => ({ ...prev, [key]: value }));
+  }
+  // Notes: its own submit flow, independent of the Edit toggle above — the
+  // spec lists "Notes field (submittable)" as its own bullet, distinct from
+  // the Edit-toggled identity fields. Starts empty, matching the mockup's
+  // own empty grey Opombe box.
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteLog, setNoteLog] = useState<{ date: string; text: string }[]>([]);
+
+  function handleSubmitNote() {
+    const text = noteDraft.trim();
+    if (!text) return;
+    setNoteLog((prev) => [{ date: new Date().toLocaleDateString('sl-SI'), text }, ...prev]);
+    setNoteDraft('');
+  }
+
+  // Frame 3 (right column, bottom tabbed frame): Rentgeni/Fotografije/SMS/
+  // E-pošta — modeled on the mockup's own frame, which sits here below
+  // "Podrobnosti termina" rather than in the left column (the written spec
+  // put it on the left; the actual SVG mockup disagrees, and per Gregor's
+  // "model it the same way as the SVG" instruction for frame 2, the mockup
+  // wins). "Rentgeni" defaults active, matching the mockup's own screenshot.
+  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sms' | 'eposta'>('rentgeni');
+  const [rtgGalleryOpen, setRtgGalleryOpen] = useState(false);
 
   function redirectsSurfaceEditToWholeTooth(status: ToothStatus): boolean {
     return WHOLE_TOOTH_MARKER_STATUSES.includes(status) || hidesSurfaceDetail(status);
@@ -297,77 +412,298 @@ export function PatientPageMockup() {
   const selectedHistory = selectedFdi ? MOCK_TOOTH_HISTORY[selectedFdi] : undefined;
 
   return (
-    <div className="mx-auto flex max-w-[1900px] flex-col gap-3 p-4">
+    <div className="flex w-full flex-col gap-3 py-4">
+      <style>{PHONE_COMPACT_CSS}</style>
       {/* Row 1: back button + health-questionnaire alert banner — entirely
-          illustrative, see the file-level comment above. */}
-      <div className="flex items-center gap-4">
+          illustrative, see the file-level comment above. Keeps its own
+          small horizontal inset even though the three columns below now
+          run edge-to-edge (per Gregor's explicit request) — this row isn't
+          one of "the three columns," so nothing forces it to also touch
+          the screen edges, and a bare-flush banner/back-button read worse. */}
+      <div className="flex items-center gap-4 px-4">
         <button
           type="button"
           className="flex-none text-sm text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
         >
           ← Nazaj na seznam pacientov
         </button>
-        <div className="flex-1 rounded-md bg-[#e0231c] px-4 py-2 text-sm font-bold text-white">
-          Zdravstvene podrobnosti pacienta iz vprašalnika o zdravju (alergije, razna akutna stanja)
+        <div className="flex flex-1 items-center gap-4 rounded-md bg-[#e0231c] px-4 py-2 text-sm font-bold text-white">
+          {/* Three equal-width columns, each left-aligned within its own
+              third, spanning the full space from the banner's own left edge
+              to the "(mockup...)" note / Vprašalnik button on the right —
+              per Gregor's explicit request for genuinely equal
+              distribution, not just equal gaps (justify-between, tried
+              first, anchors the first/last items to the two edges
+              instead). */}
+          <div className="grid flex-1 grid-cols-3 items-center gap-4 text-left">
+            <span>Alergije: penicilin</span>
+            <span>Akutna stanja: povišan krvni tlak</span>
+            <span>Zdravila: Lisinopril 10mg</span>
+          </div>
+          <span className="flex-none text-xs font-normal italic text-white/80">
+            (mockup — iz vprašalnika o zdravju)
+          </span>
+          <button
+            type="button"
+            onClick={() => setQuestionnaireOpen(true)}
+            className="flex-none rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#e0231c] hover:bg-white/90"
+          >
+            Vprašalnik
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-[300px_1fr_380px] items-start gap-4">
+      {questionnaireOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setQuestionnaireOpen(false)}
+        >
+          <div
+            className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Vprašalnik o zdravju</h2>
+              <button
+                type="button"
+                onClick={() => setQuestionnaireOpen(false)}
+                className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="mb-4 text-sm italic text-[var(--muted,#6f7c79)]">
+              Mockup — tu bo prikazan celoten izpolnjen vprašalnik pacienta (odgovori o alergijah, kroničnih
+              boleznih, zdravilih, preteklih operacijah ipd.).
+            </p>
+            <div className="flex flex-col gap-3 text-sm text-[var(--ink,#1c2624)]">
+              <div>
+                <span className="font-semibold">Alergije: </span>
+                penicilin
+              </div>
+              <div>
+                <span className="font-semibold">Kronične bolezni / akutna stanja: </span>
+                povišan krvni tlak
+              </div>
+              <div>
+                <span className="font-semibold">Zdravila: </span>
+                Lisinopril 10mg
+              </div>
+              <div>
+                <span className="font-semibold">Datum izpolnitve: </span>
+                4. 1. 2023
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Column widths: 1:2:1 ratio (patient data : dental chart : Rentgeni
+          etc.) — the fr-based track sizes re-portion themselves against
+          whatever width is actually available, so the 12px left/right
+          margins below don't need any separate ratio recalculation to
+          preserve 1:2:1. */}
+      <div className="grid grid-cols-[1fr_2fr_1fr] items-start gap-3 px-3">
         {/* ---- Left column: identity/contact fields + past appointments ---- */}
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <h1 className="text-3xl font-bold text-[var(--ink,#1c2624)]">Goslar Gregor</h1>
-
-            <div className="flex gap-3">
-              <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                Datum rojstva
-                <input type="date" defaultValue="1985-06-12" className={FIELD_INPUT_CLASSES} />
-              </label>
-              <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                Spol
-                <select defaultValue="M" className={FIELD_INPUT_CLASSES}>
-                  <option value="">Neznano</option>
-                  <option value="F">Ženski</option>
-                  <option value="M">Moški</option>
-                </select>
-              </label>
+          <div className="flex flex-col gap-4 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <h1 className="text-3xl font-bold text-[var(--ink,#1c2624)]">Goslar Gregor</h1>
+              <button
+                type="button"
+                onClick={() => setEditMode((v) => !v)}
+                className={
+                  editMode
+                    ? 'flex-none rounded-full bg-[var(--accent,#2e6e62)] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90'
+                    : 'flex-none rounded-full border border-[var(--ink,#1c2624)] px-5 py-1.5 text-sm font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]'
+                }
+              >
+                {editMode ? 'Shrani' : 'Uredi'}
+              </button>
             </div>
 
-            <div className="flex gap-3">
-              <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                Telefon
-                <PhoneInput defaultCountry="SI" value={phone} onChange={(v) => setPhone(v ?? '')} />
-              </label>
-              <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                E-pošta
-                <input type="email" defaultValue="gregor.goslar@example.com" className={FIELD_INPUT_CLASSES} />
-              </label>
-            </div>
-
-            <label className={FIELD_LABEL_CLASSES}>
-              Naslov
-              <input defaultValue="Slovenska cesta 15" className={FIELD_INPUT_CLASSES} />
-            </label>
-
-            <div className="flex gap-3">
-              <div className="flex flex-1 gap-3">
-                <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                  Poštna št.
-                  <input inputMode="numeric" defaultValue="1000" className={FIELD_INPUT_CLASSES} />
-                </label>
-                <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                  Kraj
-                  <input defaultValue="Ljubljana" className={FIELD_INPUT_CLASSES} />
-                </label>
+            {/* Two-column field grid — view mode renders plain label/value
+                text (no boxes), matching the mockup's read view exactly;
+                edit mode swaps the value line for a real input. */}
+            <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Spol</span>
+                {editMode ? (
+                  <select
+                    value={patientInfo.spol}
+                    onChange={(e) => updatePatientInfo('spol', e.target.value as 'M' | 'F' | '')}
+                    className={FIELD_INPUT_CLASSES}
+                  >
+                    <option value="">Neznano</option>
+                    <option value="F">Ženski</option>
+                    <option value="M">Moški</option>
+                  </select>
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{GENDER_LABELS[patientInfo.spol]}</span>
+                )}
               </div>
-              <label className={FIELD_LABEL_CLASSES + ' flex-1'}>
-                Št. zdravstvene kartice
-                <input inputMode="numeric" maxLength={9} defaultValue="123456789" className={FIELD_INPUT_CLASSES} />
-              </label>
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Izbran terapevt</span>
+                {editMode ? (
+                  <input
+                    value={patientInfo.terapevt}
+                    onChange={(e) => updatePatientInfo('terapevt', e.target.value)}
+                    className={FIELD_INPUT_CLASSES}
+                  />
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{patientInfo.terapevt}</span>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Datum rojstva</span>
+                {editMode ? (
+                  // Plain text, not <input type="date"> — a native date
+                  // input's calendar-icon chrome carries its own minimum
+                  // height that can't be zeroed via padding/border like the
+                  // other fields here, which broke the fixed-536px height
+                  // requirement by a few px. ISO format (yyyy-mm-dd) while
+                  // editing; formatSlovenianDate() still renders the
+                  // friendly form in view mode.
+                  <input
+                    value={patientInfo.dob}
+                    onChange={(e) => updatePatientInfo('dob', e.target.value)}
+                    placeholder="LLLL-MM-DD"
+                    className={FIELD_INPUT_CLASSES}
+                  />
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{formatSlovenianDate(patientInfo.dob)}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>E-pošta</span>
+                {editMode ? (
+                  <input
+                    type="email"
+                    value={patientInfo.email}
+                    onChange={(e) => updatePatientInfo('email', e.target.value)}
+                    className={FIELD_INPUT_CLASSES}
+                  />
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{patientInfo.email}</span>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Naslov</span>
+                {editMode ? (
+                  // No gap between the two stacked rows here (unlike most
+                  // other multi-row groups in this card) — the view-mode
+                  // text above is two plain lines with no space between
+                  // them either (a single <span> with a <br/>), and this
+                  // card's fixed-536px height leaves no room to spare.
+                  <div className="flex flex-col">
+                    <input
+                      value={patientInfo.naslov}
+                      onChange={(e) => updatePatientInfo('naslov', e.target.value)}
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                    <div className="flex gap-1.5">
+                      <input
+                        value={patientInfo.postalCode}
+                        onChange={(e) => updatePatientInfo('postalCode', e.target.value)}
+                        inputMode="numeric"
+                        placeholder="Poštna št."
+                        className={FIELD_INPUT_CLASSES + ' w-20'}
+                      />
+                      <input
+                        value={patientInfo.kraj}
+                        onChange={(e) => updatePatientInfo('kraj', e.target.value)}
+                        placeholder="Kraj"
+                        className={FIELD_INPUT_CLASSES + ' flex-1'}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>
+                    {patientInfo.naslov}
+                    <br />
+                    {patientInfo.postalCode} {patientInfo.kraj}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Telefonska številka</span>
+                {editMode ? (
+                  <div className="ppm-phone-compact w-full shadow-[0_1px_0_0_var(--line,#ccd6d4)]">
+                    <PhoneInput defaultCountry="SI" value={phone} onChange={(v) => setPhone(v ?? '')} />
+                  </div>
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{phone}</span>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Št. ZZZS</span>
+                {editMode ? (
+                  <input
+                    value={patientInfo.zzzs}
+                    onChange={(e) => updatePatientInfo('zzzs', e.target.value)}
+                    inputMode="numeric"
+                    className={FIELD_INPUT_CLASSES}
+                  />
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{patientInfo.zzzs}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Št. Interne evidence</span>
+                {editMode ? (
+                  <input
+                    value={patientInfo.evidenca}
+                    onChange={(e) => updatePatientInfo('evidenca', e.target.value)}
+                    className={FIELD_INPUT_CLASSES}
+                  />
+                ) : (
+                  <span className={VIEW_VALUE_CLASSES}>{patientInfo.evidenca}</span>
+                )}
+              </div>
+            </div>
+
+            {/* Opombe: its own submit flow, independent of the Edit toggle
+                above — the spec lists "Notes field (submittable)" as its
+                own bullet, distinct from the Edit-toggled identity fields.
+                Single grey box (#D2D0CA, sampled off the mockup) with
+                "Shrani" floating inside its bottom-right corner, same as
+                the mockup — not a bordered textarea + separate button row. */}
+            <div className="flex flex-col gap-1">
+              <span className={VIEW_LABEL_CLASSES}>Opombe</span>
+              <div className="relative">
+                <textarea
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  placeholder="Dodaj opombo o pacientu…"
+                  rows={4}
+                  className="w-full resize-none rounded-xl border-none bg-[#d2d0ca] px-3 py-2 pb-12 text-[var(--ink,#1c2624)] placeholder:text-[var(--ink,#1c2624)]/50"
+                />
+                <button
+                  type="button"
+                  onClick={handleSubmitNote}
+                  disabled={!noteDraft.trim()}
+                  className="absolute bottom-3 right-3 rounded-full bg-[#1800ad] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Shrani
+                </button>
+              </div>
+              {noteLog.length > 0 && (
+                <ul className="mt-2 flex flex-col gap-1.5 border-t border-[var(--line,#ccd6d4)] pt-2">
+                  {noteLog.map((entry, i) => (
+                    <li key={i} className="flex gap-3 text-sm text-[var(--ink,#1c2624)]">
+                      <span className="w-20 flex-none font-mono text-xs text-[var(--muted,#6f7c79)]">{entry.date}</span>
+                      <span>{entry.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
 
-          <div className="min-h-[280px] flex-1 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+          <div className="min-h-[220px] flex-1 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
             <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
             <p className="mt-2 text-sm italic text-[var(--muted,#6f7c79)]">
               Mockup — tu bo kronološki seznam preteklih obiskov in opravljenih storitev za tega pacienta.
@@ -377,11 +713,17 @@ export function PatientPageMockup() {
 
         {/* ---- Middle column: the real, clickable chart + status toolbar + tabs ---- */}
         <div className="flex flex-col gap-3">
-          <p className="text-xs text-[var(--muted,#6f7c79)]">
-            Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.
-          </p>
-
           <DentalChart
+            instructionText={
+              <div className="flex items-center justify-between gap-3">
+                {/* Left side switches from the idle prompt to "Izbran zob: …"
+                    once a tooth is selected — per Gregor's explicit request.
+                    Right side is a static hint, matching the mockup's own
+                    header row exactly ("Za vnos globine žepka..."). */}
+                <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
+                <span>Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.</span>
+              </div>
+            }
             surfacesByFdi={surfacesByFdi}
             pocketsBuccal={MOCK_POCKETS_BUCCAL}
             pocketsLingual={MOCK_POCKETS_LINGUAL}
@@ -487,22 +829,146 @@ export function PatientPageMockup() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <button type="button" className="text-sm font-medium text-[var(--ink,#1c2624)] hover:text-[var(--accent,#2e6e62)]">
-              Rentgeni
-            </button>
-            <button type="button" className="text-sm font-medium text-[var(--ink,#1c2624)] hover:text-[var(--accent,#2e6e62)]">
-              Fotografije
-            </button>
-            <button type="button" className="text-sm font-medium text-[var(--ink,#1c2624)] hover:text-[var(--accent,#2e6e62)]">
-              SMS
-            </button>
-            <button type="button" className="text-sm font-medium text-[var(--ink,#1c2624)] hover:text-[var(--accent,#2e6e62)]">
-              E-pošta
-            </button>
+          {/* Rentgeni/Fotografije/SMS/E-pošta — modeled on
+              design/PatientRecordMockup.svg, which places this frame here
+              in the right column below "Podrobnosti termina" (the written
+              spec put it in the left column instead; the mockup wins per
+              Gregor's "model it the same way" instruction for this page).
+              Same active-tab underline pattern as the Legenda/Storitve po
+              zobeh tabs in the middle column.
+              Fixed height (h-[492px], pixel-matched to the Rentgeni tab's
+              own natural height — the tallest of the four) so switching
+              tabs never resizes the card, per Gregor's explicit request. */}
+          <div className="flex h-[492px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+            <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
+              <div className="flex gap-1">
+                {(
+                  [
+                    ['rentgeni', 'Rentgeni'],
+                    ['fotografije', 'Fotografije'],
+                    ['sms', 'SMS'],
+                    ['eposta', 'E-pošta'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setInfoTab(key)}
+                    className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                      infoTab === key
+                        ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
+                        : 'border-transparent text-[var(--ink-soft,#45524f)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {infoTab === 'rentgeni' && (
+                <button
+                  type="button"
+                  onClick={() => setRtgGalleryOpen(true)}
+                  className="mb-2 flex-none rounded-full border border-[var(--ink,#1c2624)] px-3 py-1 text-xs font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]"
+                >
+                  RTG galerija
+                </button>
+              )}
+            </div>
+
+            {infoTab === 'rentgeni' && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+                  Mockup — slike bi se sem prenesle samodejno iz RTG aparata/studia. Prikazan je najnovejši posnetek.
+                </p>
+                <div className="flex w-full flex-1 items-center justify-center rounded-md bg-[#e7e7e7] text-sm text-[var(--muted,#6f7c79)]">
+                  {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
+                </div>
+              </div>
+            )}
+
+            {infoTab === 'fotografije' && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+                  Mockup — klinične fotografije, ki jih zdravnik naloži med zdravljenjem.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {MOCK_PHOTOS.map((photo, i) => (
+                    <div key={i} className="flex flex-col gap-1">
+                      <div className="flex aspect-square w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">
+                        {photo.opis}
+                      </div>
+                      <span className="text-xs text-[var(--muted,#6f7c79)]">{photo.date}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {infoTab === 'sms' && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — zadnje SMS sporočilo s pacientom.</p>
+                <div className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+                  <p>{MOCK_SMS.text}</p>
+                  <p className="mt-2 text-xs text-[var(--muted,#6f7c79)]">{MOCK_SMS.date}</p>
+                </div>
+              </div>
+            )}
+
+            {infoTab === 'eposta' && (
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — kronološka zgodovina e-pošte s pacientom.</p>
+                <ul className="flex flex-col gap-2">
+                  {MOCK_EMAILS.map((email, i) => (
+                    <li key={i} className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-semibold">{email.subject}</span>
+                        <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{email.date}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">{email.snippet}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {rtgGalleryOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setRtgGalleryOpen(false)}
+        >
+          <div
+            className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">RTG galerija</h2>
+              <button
+                type="button"
+                onClick={() => setRtgGalleryOpen(false)}
+                className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="mb-4 text-sm italic text-[var(--muted,#6f7c79)]">
+              Mockup — tu bo prikazana celotna RTG galerija pacienta.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {MOCK_RTG_GALLERY.map((img, i) => (
+                <div key={i} className="flex flex-col gap-1">
+                  <div className="flex aspect-[4/3] w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">
+                    {img.opis}
+                  </div>
+                  <span className="text-xs text-[var(--muted,#6f7c79)]">{img.date}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

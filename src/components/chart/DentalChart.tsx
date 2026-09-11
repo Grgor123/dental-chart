@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../../data/toothMeta';
 import type { Surface, SurfaceMap, PocketDepths, GumMargin, BleedingPoints, EndoStage } from '../../types/dental';
 import type { PerioPoint } from './perioStyle';
@@ -45,6 +45,20 @@ interface DentalChartProps {
    * everywhere else.
    */
   compact?: boolean;
+  /**
+   * Instruction line rendered inside this card, above the arches — per
+   * Gregor's explicit feedback on `PatientPageMockup.tsx` that the text
+   * "belongs to the dental chart" and should sit inside its own bordered
+   * frame rather than floating above it as a separate paragraph. Typed as
+   * `ReactNode`, not `string` — the mockup's own usage needs a two-part
+   * row (a dynamic "Kliknite na zob…"/"Izbran zob: …" message on the left,
+   * a static perio-entry hint on the right, matching the SVG mockup's own
+   * header row), not just plain text. Rendered outside the zoomed inner
+   * wrapper below so it stays normal-sized regardless of `zoom: 1.3`.
+   * Undefined (the default) renders nothing, so every other caller
+   * (StatusShowcase.tsx, PatientChart.tsx) is unaffected.
+   */
+  instructionText?: ReactNode;
 }
 
 export function DentalChart({
@@ -65,11 +79,15 @@ export function DentalChart({
   focusedPerioPoint,
   hideArchLabels = false,
   compact = false,
+  instructionText,
 }: DentalChartProps) {
   return (
     <div
       className={`overflow-x-auto rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] ${compact ? 'p-2' : 'p-6'}`}
     >
+      {instructionText && (
+        <div className="mb-2 text-xs text-[var(--muted,#6f7c79)]">{instructionText}</div>
+      )}
       {/* The chart's native size (~700px wide) is tiny next to a real
           monitor — zoom scales every fixed-pixel element uniformly (SVGs,
           the 26px tloris buttons, borders, text) so it actually fills the

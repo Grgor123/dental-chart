@@ -261,6 +261,7 @@ function QuadrantBlock({
       statuses={statuses}
       onPointClick={onPerioPointClick}
       focusedPoint={focusedPerioPoint}
+      onSelect={onSelect}
     />
   );
   const tloris = (
@@ -362,7 +363,7 @@ function QuadrantBlock({
         </div>
       </>
     );
-  const number = <NumberRow fdis={fdis} onTargetClick={onTargetClick} isFdiSelected={isFdiSelected} />;
+  const number = <NumberRow fdis={fdis} onTargetClick={onTargetClick} isFdiSelected={isFdiSelected} onSelect={onSelect} />;
 
   return (
     <div className="flex flex-col items-start gap-1">
