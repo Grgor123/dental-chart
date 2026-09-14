@@ -50,6 +50,29 @@ interface StatusToolbarProps {
    * saves the vertical space that layout needed.
    */
   className?: string;
+  /**
+   * Drops this panel's own border/background/padding, leaving just the
+   * flex-col content — for when it's nested inside another card that
+   * already provides those (PatientPageMockup.tsx's frame 7 embeds this
+   * whole toolbar as the "Legenda" tab's own content, inside a tabs card
+   * that already has its own border/bg/padding — a second nested border
+   * there read as a redundant box-in-a-box). Defaults to false so every
+   * other caller (PatientChart.tsx) keeps its own standalone bordered
+   * panel unchanged.
+   */
+  bare?: boolean;
+  /**
+   * Suppresses this panel's own header block entirely — both the
+   * idle-state prompt ("Kliknite ploskev ali cel zob…") and the "n
+   * izbranih… / Prekliči izbiro" pair shown once something's selected —
+   * for PatientPageMockup.tsx's frame 7, which moved both of those up
+   * into the tab bar itself (right-aligned, same row as the "Legenda"/
+   * "Storitve po zobeh" tab buttons, both on one line) to reclaim
+   * vertical space and avoid the page needing a scroll to see the rest of
+   * this card. Defaults to false so PatientChart.tsx's own standalone
+   * panel is unchanged.
+   */
+  hideHeader?: boolean;
 }
 
 // Always-visible status palette for PatientChart.tsx's direct-click
@@ -71,37 +94,43 @@ export function StatusToolbar({
   onSetEndoStage,
   bridgeMessage,
   className = 'w-[260px] flex-none',
+  bare = false,
+  hideHeader = false,
 }: StatusToolbarProps) {
   const hasSelection = selectionCount > 0;
 
   return (
-    <div className={`flex flex-col gap-2.5 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-3 ${className}`}>
+    <div
+      className={`flex flex-col gap-2.5 ${bare ? '' : 'rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-3'} ${className}`}
+    >
       {bridgeMessage && (
         <p className="rounded border border-[var(--danger,#b3261e)] bg-[var(--danger-bg,#fdecea)] p-2 text-xs text-[var(--danger,#b3261e)]">
           {bridgeMessage}
         </p>
       )}
-      <div className="flex flex-col gap-1">
-        {hasSelection ? (
-          <p className="text-xs text-[var(--ink,#1c2624)]">
-            <strong>{selectionCount}</strong> {selectionCount === 1 ? 'izbrana ploskev/zob' : 'izbranih'} — kliknite
-            status za uporabo.
-          </p>
-        ) : (
-          <p className="text-xs text-[var(--ink-soft,#45524f)]">
-            Kliknite ploskev ali cel zob na karti (Ctrl/Cmd za več), nato status spodaj za uporabo.
-          </p>
-        )}
-        {hasSelection && (
-          <button
-            type="button"
-            onClick={onClearSelection}
-            className="self-start rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-xs text-[var(--ink-soft,#45524f)]"
-          >
-            Prekliči izbiro (Esc)
-          </button>
-        )}
-      </div>
+      {!hideHeader && (
+        <div className="flex flex-col gap-1">
+          {hasSelection ? (
+            <p className="text-xs text-[var(--ink,#1c2624)]">
+              <strong>{selectionCount}</strong> {selectionCount === 1 ? 'izbrana ploskev/zob' : 'izbranih'} — kliknite
+              status za uporabo.
+            </p>
+          ) : (
+            <p className="text-xs text-[var(--ink-soft,#45524f)]">
+              Kliknite ploskev ali cel zob na karti (Ctrl/Cmd za več), nato status spodaj za uporabo.
+            </p>
+          )}
+          {hasSelection && (
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="self-start rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-xs text-[var(--ink-soft,#45524f)]"
+            >
+              Prekliči izbiro (Esc)
+            </button>
+          )}
+        </div>
+      )}
       {/* Always full-opacity and clickable, whether or not there's a
           selection — per explicit feedback that dimming/disabling the grid
           between edits was distracting during fast, repeated entry (select

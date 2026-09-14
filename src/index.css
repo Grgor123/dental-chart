@@ -6,6 +6,23 @@ body {
   margin: 0;
 }
 
+/* Reserves the vertical scrollbar's own width permanently, instead of it
+   appearing/disappearing based on whether the page's content currently
+   overflows. Needed for PatientPageMockup.tsx's DentalChart fitWidth
+   feature: that chart measures its column's available width live and
+   scales to fill it — if the scrollbar toggles on/off as the chart's own
+   height crosses the viewport threshold, that toggle itself changes the
+   available width (by the scrollbar's own ~15-17px), which re-triggers
+   the fit calculation, which changes the height again — an oscillating
+   feedback loop Gregor saw as the chart visibly "shaking." Reserving the
+   gutter unconditionally removes the toggle this loop depended on.
+   scrollbar-gutter is broadly supported in current browsers; the one
+   real user of this app (Monika, on her own machine) uses a current
+   Chromium build. */
+html {
+  scrollbar-gutter: stable;
+}
+
 /* react-phone-number-input (PatientList.tsx's "Telefon" field) — styled to
    match every other text input on this page (same border/radius/padding/
    text color as the plain Tailwind-classed inputs right next to it), and

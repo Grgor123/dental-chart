@@ -1,10 +1,9 @@
-import { useState, type MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import PhoneInput from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import { DentalChart } from '../components/chart/DentalChart';
 import { hidesSurfaceDetail } from '../components/chart/ToothTopView';
 import { StatusToolbar } from '../components/ui/StatusToolbar';
-import { StatusLegend } from '../components/ui/StatusLegend';
 import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../data/toothMeta';
 import type {
   Surface,
@@ -128,6 +127,31 @@ const MOCK_TOOTH_HISTORY: Record<string, { date: string; opis: string }[]> = {
   46: [{ date: '12. 4. 2020', opis: 'Zob manjka — evidentirano ob prvem pregledu.' }],
 };
 
+// Frame 8 (left column, below the patient info card): per-visit rollup of
+// the exact same events MOCK_TOOTH_HISTORY already lists per-tooth —
+// deliberately built from that same data (grouped by date instead of by
+// FDI) rather than a second, independent mock dataset, so the two never
+// disagree with each other the way CLAUDE.md warns two unrelated mock
+// datasets eventually do (see its "Primeri — cel zob" removal note).
+// Newest first, per the spec.
+const MOCK_VISIT_HISTORY: { date: string; storitve: string[] }[] = [
+  { date: '19. 8. 2024', storitve: ['Ugotovljen karies na več ploskvah (zob 36)', 'Vstavljen zobni zatiček (zob 36)'] },
+  { date: '18. 6. 2024', storitve: ['Ugotovljen karies (zob 16)'] },
+  { date: '5. 11. 2023', storitve: ['Karies saniran — plomba (zob 25)'] },
+  {
+    date: '3. 1. 2023',
+    storitve: [
+      'Nameščena prevleka (krona) — sidro mostu 13–15',
+      'Izdelan člen mostu med 13 in 15',
+      'Nameščena prevleka (krona) (zob 26)',
+      'Vstavljen zobni zatiček (zob 26)',
+    ],
+  },
+  { date: '22. 9. 2022', storitve: ['Vstavljen zobni implantat (zob 21)'] },
+  { date: '10. 2. 2021', storitve: ['Opravljeno zdravljenje korenin — kanal (zob 36)'] },
+  { date: '12. 4. 2020', storitve: ['Zob manjka — evidentirano ob prvem pregledu (zob 46)'] },
+];
+
 // Frame 3 (right column, bottom tabbed frame): entirely fabricated content
 // for all four tabs, same "pins down where the future feature would live"
 // role as MOCK_TOOTH_HISTORY above — no real RTG/photo storage, SMS log, or
@@ -150,6 +174,109 @@ const MOCK_EMAILS = [
   { date: '12. 10. 2026', subject: 'Potrditev termina 14. 3. 2026', snippet: 'Pozdravljeni, obveščamo vas, da je vaš termin potrjen…' },
   { date: '2. 1. 2023', subject: 'Napotnica za rentgensko slikanje', snippet: 'V prilogi vam pošiljamo napotnico za OPG posnetek…' },
 ];
+
+// Frame 5 (right column, appointment card): the five-state machine from
+// docs/patient-record-spec.md. Colors are read straight off that spec's
+// own table — grey/yellow/green/red for Naročen/Poslana potrditev/
+// Potrjen/Zavrnjen, white-with-grey-outline for Ni termina — reusing the
+// app's existing red (#e0231c, the top banner's own color) for Zavrnjen
+// rather than inventing a second red, same "one meaning, one color"
+// reasoning CLAUDE.md documents for the dental chart's own status colors.
+type AppointmentStatus = 'ni_termina' | 'narocen' | 'poslana_potrditev' | 'potrjen' | 'zavrnjen';
+
+const APPOINTMENT_STATUS_META: Record<AppointmentStatus, { label: string; pillClass: string }> = {
+  ni_termina: { label: 'Ni termina', pillClass: 'border-2 border-[#9CA3AF] bg-white text-[var(--ink,#1c2624)]' },
+  narocen: { label: 'Naročen', pillClass: 'bg-[#9CA3AF] text-white' },
+  poslana_potrditev: { label: 'Poslana potrditev', pillClass: 'bg-[#F5A623] text-white' },
+  potrjen: { label: 'Potrjen', pillClass: 'bg-[#4CAF50] text-white' },
+  zavrnjen: { label: 'Zavrnjen', pillClass: 'bg-[#e0231c] text-white' },
+};
+
+// Not user-selectable — per Gregor's explicit request, this status is
+// never something a person clicks on this card; it's derived automatically
+// from the calendar:
+//   - "Ni termina" whenever the patient has no upcoming appointment at all.
+//   - Otherwise, "Naročen"/"Poslana potrditev"/"Potrjen"/"Zavrnjen" all
+//     read off that patient's own NEXT (earliest) upcoming appointment
+//     specifically — a patient can have several appointments booked at
+//     once, but only the first one drives this card's status.
+//   - "Zavrnjen" stays showing until that appointment's own date/hour
+//     passes (at which point — once real scheduling data exists — the
+//     card would presumably fall through to whatever the new "first
+//     upcoming appointment" is, or back to "Ni termina" if none remain).
+// None of that derivation exists yet (no real calendar/appointments table
+// — see docs/patient-record-spec.md's own open questions), so this is a
+// fixed mock value standing in for "today's real answer," same role as
+// every other MOCK_* constant on this page.
+const MOCK_APPOINTMENT_STATUS: AppointmentStatus = 'potrjen';
+
+// Entirely fabricated, same role as every other MOCK_* constant on this
+// page — no real invoicing/billing table exists yet.
+const MOCK_INVOICES = [
+  { id: 'R-2026-014', date: '14. 3. 2026', storitev: 'Pregled + čiščenje', amount: 45, paid: false },
+  { id: 'R-2025-098', date: '2. 11. 2025', storitev: 'Zalitje fisur', amount: 30, paid: false },
+  { id: 'R-2025-072', date: '5. 8. 2025', storitev: 'Plomba', amount: 60, paid: true },
+];
+
+// Frame 6 (nav shell): visual only, no real routing — colors/positions
+// pixel-matched off design/PatientRecordMockup.svg's own header bars
+// (#5CE1E6 turquoise, #C8D1D9 grey "active" pill, both sampled directly
+// off the rendered mockup). "CRM" and "Storitve" are hardcoded active
+// since this page IS the CRM → Storitve → patient record path; there's
+// nowhere else in the app to navigate to yet, so every item is inert.
+const SUBMENU_ITEMS = [
+  { key: 'koledar', label: 'Koledar' },
+  { key: 'storitve', label: 'Storitve' },
+  { key: 'sporocila', label: 'Sporočila' },
+  { key: 'eposta', label: 'El. pošta' },
+  { key: 'nastavitve', label: 'Nastavitve' },
+] as const;
+
+function AppNavShell() {
+  return (
+    <div className="flex w-full flex-col">
+      <div className="flex items-center justify-between bg-[#5CE1E6] px-4 py-2">
+        <div className="flex items-center gap-2">
+          <button type="button" className="rounded-full px-3 py-1 text-sm font-medium text-white hover:bg-white/10">
+            Domov
+          </button>
+          <button type="button" className="rounded-full bg-[#C8D1D9] px-3 py-1 text-sm font-semibold text-[var(--ink,#1c2624)]">
+            CRM
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-white">Uporabnik: Monika Goslar</span>
+          <button
+            type="button"
+            aria-label="Odjava"
+            className="flex h-7 w-7 flex-none items-center justify-center rounded bg-white text-[var(--ink,#1c2624)] hover:opacity-80"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center gap-1 border-b border-[var(--line,#ccd6d4)] bg-white px-4 py-2">
+        {SUBMENU_ITEMS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+              key === 'storitve'
+                ? 'bg-[#C8D1D9] text-[var(--ink,#1c2624)]'
+                : 'text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
   'abrasion',
@@ -228,6 +355,10 @@ export function PatientPageMockup() {
   // anywhere on a tooth's tloris square, same as PatientChart.tsx's own
   // selectedFdi (there, it drives the detail panel; here, the history tab).
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
+  // Frame 7: "Legenda" (now holding the clickable status toolbar — see
+  // below) is the first/default tab; swapped back per Gregor's explicit
+  // follow-up request after an earlier round briefly had them the other
+  // way around.
   const [activeTab, setActiveTab] = useState<'legenda' | 'storitve'>('legenda');
   const [phone, setPhone] = useState('+38641234567');
   // Frame 1 (top banner): "Vprašalnik" opens a placeholder modal — the real
@@ -284,6 +415,16 @@ export function PatientPageMockup() {
   // wins). "Rentgeni" defaults active, matching the mockup's own screenshot.
   const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sms' | 'eposta'>('rentgeni');
   const [rtgGalleryOpen, setRtgGalleryOpen] = useState(false);
+
+  // Frame 5 (right column, appointment card): status is not user-selectable
+  // (see MOCK_APPOINTMENT_STATUS's own comment for the real derivation
+  // rules) — an earlier version had a dev-only selector here, removed per
+  // Gregor's explicit request once the state machine itself was confirmed.
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [rescheduleModalOpen, setRescheduleModalOpen] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<(typeof MOCK_INVOICES)[number] | null>(null);
+  const unpaidInvoices = MOCK_INVOICES.filter((inv) => !inv.paid);
+  const totalUnpaid = unpaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
 
   function redirectsSurfaceEditToWholeTooth(status: ToothStatus): boolean {
     return WHOLE_TOOTH_MARKER_STATUSES.includes(status) || hidesSurfaceDetail(status);
@@ -384,6 +525,22 @@ export function PatientPageMockup() {
     setBridgeMessage(null);
   }
 
+  // Escape clears the selection — the "Prekliči izbiro (Esc)" button
+  // (frame 7) promises this shortcut, but it was never actually wired up
+  // on this page (PatientChart.tsx has the real version this mirrors).
+  // Guarded the same way: ignored while focus is in a text input/textarea
+  // (Opombe, an edit-mode field) so Escape there doesn't also clear a
+  // chart selection the user isn't even looking at.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+      if (e.key === 'Escape') handleClearSelection();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
+
   function handleTogglePost() {
     const fdis = [...new Set(selection.map((t) => t.fdi))];
     if (fdis.length === 0) return;
@@ -412,7 +569,12 @@ export function PatientPageMockup() {
   const selectedHistory = selectedFdi ? MOCK_TOOTH_HISTORY[selectedFdi] : undefined;
 
   return (
-    <div className="flex w-full flex-col gap-3 py-4">
+    <>
+      <AppNavShell />
+      {/* Space above the banner and below it both set to the same 6px, per
+          Gregor's explicit request (a first pass halved them independently
+          — 8px/6px — and left them slightly mismatched). */}
+      <div className="flex w-full flex-col gap-1.5 pb-4 pt-1.5">
       <style>{PHONE_COMPACT_CSS}</style>
       {/* Row 1: back button + health-questionnaire alert banner — entirely
           illustrative, see the file-level comment above. Keeps its own
@@ -502,8 +664,16 @@ export function PatientPageMockup() {
           etc.) — the fr-based track sizes re-portion themselves against
           whatever width is actually available, so the 12px left/right
           margins below don't need any separate ratio recalculation to
-          preserve 1:2:1. */}
-      <div className="grid grid-cols-[1fr_2fr_1fr] items-start gap-3 px-3">
+          preserve 1:2:1.
+          minmax(0, …fr), not bare …fr — a bare fr track's implicit
+          minimum is its content's own min-content size, so wide-enough
+          content (the fitWidth dental chart below, which sizes itself
+          off *this same column's* measured width) can grow the track
+          past its intended fr share, squeezing the other two columns —
+          exactly the runaway feedback loop Gregor caught live once
+          fitWidth was added. minmax(0, …fr) pins each track to its
+          fr-proportional share regardless of content size. */}
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-start gap-3 px-3">
         {/* ---- Left column: identity/contact fields + past appointments ---- */}
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-4 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
@@ -652,7 +822,7 @@ export function PatientPageMockup() {
                 )}
               </div>
               <div className="flex flex-col gap-1">
-                <span className={VIEW_LABEL_CLASSES}>Št. Interne evidence</span>
+                <span className={VIEW_LABEL_CLASSES}>Št. interne evidence</span>
                 {editMode ? (
                   <input
                     value={patientInfo.evidenca}
@@ -703,16 +873,36 @@ export function PatientPageMockup() {
             </div>
           </div>
 
-          <div className="min-h-[220px] flex-1 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
-            <p className="mt-2 text-sm italic text-[var(--muted,#6f7c79)]">
-              Mockup — tu bo kronološki seznam preteklih obiskov in opravljenih storitev za tega pacienta.
-            </p>
+          {/* ---- Frame 8: chronological visit history, newest first ----
+              Fixed height, 271px — re-anchored to Frame 7's own natural
+              (unpadded) bottom edge, per Gregor's explicit follow-up:
+              shrink the taller frames down to match the shortest one's
+              real content height, rather than growing the shorter ones
+              up to a taller one. This also lowers the page's own total
+              height (unlike the earlier "grow to match Frame 3" version),
+              which is the whole point — fewer px to scroll through. */}
+          <div className="flex h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+            <h2 className="mb-3 flex-none text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
+            <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+              {MOCK_VISIT_HISTORY.map((visit, i) => (
+                <li key={i} className="flex-none rounded-md bg-[#e7e7e7] p-3">
+                  <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{visit.date}</span>
+                  <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
+                    {visit.storitve.map((s, j) => (
+                      <li key={j}>• {s}</li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 
-        {/* ---- Middle column: the real, clickable chart + status toolbar + tabs ---- */}
-        <div className="flex flex-col gap-3">
+        {/* ---- Middle column: the real, clickable chart + status toolbar + tabs ----
+            gap-1.5 (was gap-3) between the chart and Frame 7 below it —
+            tightened per Gregor's explicit request, freeing a few more px
+            toward the same bottom-alignment goal. */}
+        <div className="flex flex-col gap-1.5">
           <DentalChart
             instructionText={
               <div className="flex items-center justify-between gap-3">
@@ -739,52 +929,99 @@ export function PatientPageMockup() {
             isFdiSelected={isFdiSelected}
             hideArchLabels
             compact
+            fitWidth
           />
 
-          <StatusToolbar
-            className="w-full"
-            selectionCount={selection.length}
-            onStatusClick={handleStatusClick}
-            onClearSelection={handleClearSelection}
-            onTogglePost={handleTogglePost}
-            onSetEndoStage={handleSetEndoStage}
-            bridgeMessage={bridgeMessage}
-          />
-
-          <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            {/* Two tabs, per Gregor's explicit request — "Legenda" (the
-                real, already-built component) and "Storitve po zobeh"
-                (renamed from the first pass's single combined heading),
-                which shows the clicked tooth's chronological history. */}
-            <div className="mb-3 flex gap-1 border-b border-[var(--line,#ccd6d4)]">
-              <button
-                type="button"
-                onClick={() => setActiveTab('legenda')}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
-                  activeTab === 'legenda'
-                    ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
-                    : 'border-transparent text-[var(--ink-soft,#45524f)]'
-                }`}
-              >
-                Legenda
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('storitve')}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
-                  activeTab === 'storitve'
-                    ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
-                    : 'border-transparent text-[var(--ink-soft,#45524f)]'
-                }`}
-              >
-                Storitve po zobeh
-              </button>
+          {/* ---- Frame 7: Legenda/Storitve po zobeh, merged with the
+              status toolbar ----
+              Back to natural/auto height (no fixed height) — Gregor chose
+              the "shrink the taller frames down to this one's natural
+              height" side of the trade-off instead of growing this one to
+              match Frame 3, per his follow-up. Frame 8 and Frame 3 are
+              now the ones sized to match THIS card's own bottom edge. */}
+          <div className="flex flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+            {/* "Legenda" (holding the clickable status toolbar, moved out
+                of its own standalone row above this card, instead of the
+                old read-only StatusLegend swatch grid — that grid and the
+                toolbar's own buttons showed every service twice, per
+                Gregor's explicit feedback) is the first/default tab.
+                The toolbar's own header block — both the idle-state
+                prompt AND the "n izbranih… / Prekliči izbiro" pair once
+                something's selected — is hidden (hideHeader) and
+                re-rendered right here instead, on the same line as the
+                tab buttons, right-aligned to this card's own right edge,
+                and (per Gregor's explicit request) kept on one line even
+                in the "n izbranih" state rather than stacking the message
+                above the button. Pulling both states up out of the tab
+                panel below is what keeps this whole card short enough
+                that the page doesn't need a scroll to see the rest of
+                it. */}
+            <div className="mb-3 flex flex-none items-center justify-between gap-3 border-b border-[var(--line,#ccd6d4)]">
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('legenda')}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                    activeTab === 'legenda'
+                      ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
+                      : 'border-transparent text-[var(--ink-soft,#45524f)]'
+                  }`}
+                >
+                  Legenda
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('storitve')}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                    activeTab === 'storitve'
+                      ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
+                      : 'border-transparent text-[var(--ink-soft,#45524f)]'
+                  }`}
+                >
+                  Storitve po zobeh
+                </button>
+              </div>
+              {activeTab === 'legenda' && (
+                <div className="mb-2 flex flex-none items-center gap-2">
+                  {selection.length > 0 ? (
+                    <>
+                      <span className="text-xs text-[var(--ink,#1c2624)]">
+                        <strong>{selection.length}</strong>{' '}
+                        {selection.length === 1 ? 'izbrana ploskev/zob' : 'izbranih'} — kliknite status za uporabo.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleClearSelection}
+                        className="flex-none rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-xs text-[var(--ink-soft,#45524f)]"
+                      >
+                        Prekliči izbiro (Esc)
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-right text-xs text-[var(--ink-soft,#45524f)]">
+                      Kliknite ploskev ali cel zob na karti (Ctrl/Cmd za več), nato status spodaj za uporabo.
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
-            {activeTab === 'legenda' && <StatusLegend />}
+            {activeTab === 'legenda' && (
+              <StatusToolbar
+                bare
+                hideHeader
+                className="w-full"
+                selectionCount={selection.length}
+                onStatusClick={handleStatusClick}
+                onClearSelection={handleClearSelection}
+                onTogglePost={handleTogglePost}
+                onSetEndoStage={handleSetEndoStage}
+                bridgeMessage={bridgeMessage}
+              />
+            )}
 
             {activeTab === 'storitve' && (
-              <div>
+              <div className="max-h-[220px] overflow-y-auto">
                 {!selectedFdi && (
                   <p className="text-sm italic text-[var(--muted,#6f7c79)]">
                     Kliknite zob na karti zgoraj, da vidite kronološko zgodovino storitev.
@@ -818,14 +1055,79 @@ export function PatientPageMockup() {
         <div className="flex flex-col gap-3">
           <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
             <h2 className="mb-3 text-lg font-bold text-[var(--ink,#1c2624)]">Podrobnosti termina</h2>
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-[#4CAF50] px-4 py-1.5 text-base font-semibold text-white">Potrjen</span>
-              <span className="rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">Računi plačani</span>
-            </div>
-            <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
-              <span>Datum: 14. 3. 2026</span>
-              <span>Ura: 10:30</span>
-              <span>Predvidena storitev: Pregled + čiščenje</span>
+
+            <div className="flex items-start justify-between gap-3">
+              {/* Left: status pill (not clickable — see
+                  MOCK_APPOINTMENT_STATUS's own comment above), the
+                  schedule/reschedule button in that same slot either way,
+                  and — for every status except "Ni termina" — the booked
+                  appointment's own details below that. */}
+              <div className="flex flex-1 flex-col items-start gap-2">
+                <span
+                  className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].pillClass}`}
+                >
+                  {APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].label}
+                </span>
+
+                {MOCK_APPOINTMENT_STATUS === 'ni_termina' ? (
+                  <button
+                    type="button"
+                    onClick={() => setScheduleModalOpen(true)}
+                    className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                  >
+                    Naroči naslednji termin
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleModalOpen(true)}
+                    className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                  >
+                    Prestavi termin
+                  </button>
+                )}
+
+                {MOCK_APPOINTMENT_STATUS !== 'ni_termina' && (
+                  <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
+                    <span>Datum: 14. 3. 2026</span>
+                    <span>Ura: 10:30</span>
+                    <span>Predvidena storitev: Pregled + čiščenje</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: unpaid-invoices indicator — "same frame, to the
+                  right" per the spec. */}
+              <div className="flex w-[150px] flex-none flex-col gap-1.5">
+                {unpaidInvoices.length > 0 ? (
+                  <>
+                    <span className="w-fit rounded-full bg-[#e0231c] px-3 py-1 text-xs font-semibold text-white">
+                      Neplačani račun
+                    </span>
+                    <ul className="flex flex-col gap-1">
+                      {unpaidInvoices.map((inv) => (
+                        <li key={inv.id}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInvoice(inv)}
+                            className="w-full rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+                          >
+                            <div className="font-medium">{inv.date}</div>
+                            <div className="text-[var(--muted,#6f7c79)]">{inv.amount.toFixed(2)} €</div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <span className="mt-1 text-xs font-semibold text-[var(--ink,#1c2624)]">
+                      Skupaj: {totalUnpaid.toFixed(2)} €
+                    </span>
+                  </>
+                ) : (
+                  <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
+                    Računi plačani
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -836,10 +1138,17 @@ export function PatientPageMockup() {
               Gregor's "model it the same way" instruction for this page).
               Same active-tab underline pattern as the Legenda/Storitve po
               zobeh tabs in the middle column.
-              Fixed height (h-[492px], pixel-matched to the Rentgeni tab's
-              own natural height — the tallest of the four) so switching
-              tabs never resizes the card, per Gregor's explicit request. */}
-          <div className="flex h-[492px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+              Fixed height, originally 492px (pixel-matched to the
+              Rentgeni tab's own natural height, the tallest of the four),
+              then grown to 618px to match an earlier, taller version of
+              Frame 8/Frame 7 — now 589px instead, shrunk back down to
+              match Frame 7's own natural (shortest) bottom edge per
+              Gregor's explicit follow-up request (shrink the taller
+              frames to the shortest one's real content height, instead
+              of growing the shorter ones up). The Rentgeni image
+              placeholder below is flex-1, so it simply fills whatever
+              room is left after the tab bar. */}
+          <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
             <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
               <div className="flex gap-1">
                 {(
@@ -969,6 +1278,104 @@ export function PatientPageMockup() {
           </div>
         </div>
       )}
-    </div>
+
+      {scheduleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setScheduleModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Naroči naslednji termin</h2>
+              <button
+                type="button"
+                onClick={() => setScheduleModalOpen(false)}
+                className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-sm italic text-[var(--muted,#6f7c79)]">
+              Mockup — tu bo obrazec za naročanje naslednjega termina (datum, ura, predvidena storitev), povezan s
+              koledarjem.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {rescheduleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setRescheduleModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Prestavi termin</h2>
+              <button
+                type="button"
+                onClick={() => setRescheduleModalOpen(false)}
+                className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-sm italic text-[var(--muted,#6f7c79)]">
+              Mockup — tu bo obrazec za prestavitev tega termina na nov datum/uro, povezan s koledarjem.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {selectedInvoice && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setSelectedInvoice(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Račun {selectedInvoice.id}</h2>
+              <button
+                type="button"
+                onClick={() => setSelectedInvoice(null)}
+                className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex flex-col gap-2 text-sm text-[var(--ink,#1c2624)]">
+              <div>
+                <span className="font-semibold">Datum: </span>
+                {selectedInvoice.date}
+              </div>
+              <div>
+                <span className="font-semibold">Storitev: </span>
+                {selectedInvoice.storitev}
+              </div>
+              <div>
+                <span className="font-semibold">Znesek: </span>
+                {selectedInvoice.amount.toFixed(2)} €
+              </div>
+              <div>
+                <span className="font-semibold">Status: </span>
+                {selectedInvoice.paid ? 'Plačano' : 'Neplačano'}
+              </div>
+            </div>
+            <p className="mt-4 text-xs italic text-[var(--muted,#6f7c79)]">
+              Mockup — tu bo celoten podroben pregled računa.
+            </p>
+          </div>
+        </div>
+      )}
+      </div>
+    </>
   );
 }
