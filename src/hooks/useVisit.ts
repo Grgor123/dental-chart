@@ -20,21 +20,18 @@ interface Snapshot {
   bridgeGroupByFdi: Record<string, string>;
 }
 
-// Loads and saves one visit's tooth_records — see CLAUDE.md's "Visit
-// lifecycle" section: ONE ROW PER TOOTH PER VISIT, upserted in place while
-// a visit stays open (never a new row per save). `visitId` now comes from
-// useOpenVisit.ts's own "resume today's open visit, or start a new one"
-// resolution (driven by a real patient picked in PatientList.tsx) rather
-// than a hardcoded test constant — this hook still doesn't care where it
-// comes from, only that it's a real, already-existing `visits.id`.
+// Loads the chart's CURRENT state and saves new changes into one visit's
+// own tooth_records — see CLAUDE.md's "Visit lifecycle" section: ONE ROW
+// PER TOOTH PER VISIT, upserted in place while a visit stays open (never a
+// new row per save). `visitId` comes from useOpenVisit.ts's own "resume the
+// open visit, or start a new one" resolution — this hook doesn't care where
+// it comes from, only that it's a real, already-existing `visits.id`.
 // `visitId` is `string | null` specifically because that resolution is
 // itself asynchronous: PatientChart.tsx calls this hook before
-// useOpenVisit's own id has arrived, so the load effect below simply waits
-// (stays in its initial loading state) until a real id shows up.
-//
-// Deliberately does NOT yet implement CLOSING a visit — nothing here ever
-// sets `visits.closed_at`; that's the other half of the lifecycle
-// useOpenVisit.ts's own comment also flags as still a future step.
+// useOpenVisit's own id has arrived, so flush() below simply waits (see its
+// own guard) until a real id shows up. Only flush() needs `visitId` at all
+// — see `patientId`'s own comment on the load effect below for why LOAD no
+// longer does.
 //
 // Now also persists `bridgeGroupByFdi` (which teeth are explicitly linked
 // into one bridge — see CLAUDE.md's "Bridge display") via `tooth_records
@@ -44,7 +41,7 @@ interface Snapshot {
 //
 // Every Supabase call lives here, not in PatientChart.tsx directly, per
 // CLAUDE.md's own "Coding Conventions" rule.
-export function useVisit(visitId: string | null) {
+export function useVisit(patientId: string, visitId: string | null) {
   const [surfacesByFdi, setSurfacesByFdi] = useState<Record<string, SurfaceMap>>({});
   const [postByFdi, setPostByFdi] = useState<Record<string, boolean>>({});
   const [endoByFdi, setEndoByFdi] = useState<Record<string, EndoStage>>({});
@@ -87,13 +84,35 @@ export function useVisit(visitId: string | null) {
     let cancelled = false;
     setLoading(true);
     setLoaded(false);
-    // No visit resolved yet (useOpenVisit.ts is still working out which
-    // visits.id to use) — stay in the loading state rather than querying
-    // with a null visit_id, which would either error or (worse) silently
-    // match nothing and look like an empty, freshly-loaded visit.
-    if (!visitId) return;
+    // Scoped by patientId, not visitId — see this function's own comment
+    // below for why. patientId is a plain required prop (not async-resolved
+    // like visitId), so there's nothing to wait for here.
     async function load() {
-      const { data, error } = await supabase.from('tooth_records').select('*').eq('visit_id', visitId);
+      // The live chart's "current state" for a tooth is its row from the
+      // patient's MOST RECENT visit that touched it — not necessarily the
+      // currently-open visit (see CLAUDE.md's "Visit lifecycle" section).
+      // Querying by visit_id alone (the original version of this hook, from
+      // before visits actually closed) happened to also show the right
+      // "current state" purely because there was only ever ONE visit per
+      // patient in practice — closing was unimplemented, so nothing ever
+      // started a second one. Now that closeVisit() (PatientChart.tsx) is
+      // real, a patient's SECOND visit onward starts with zero rows of its
+      // own; loading by that visit_id alone would make every
+      // previously-treated tooth appear to silently revert to "healthy" —
+      // exactly the regression this rewrite exists to prevent. Fetching
+      // every tooth_records row across ALL of this patient's visits and
+      // reducing to the latest per tooth_id (below) is the fix — no new
+      // migration/view needed, since PostgREST/supabase-js has no
+      // `DISTINCT ON`, but a single dentist's per-patient row count is small
+      // enough that reducing client-side is completely fine.
+      // visits!inner(...) (an INNER join, not a plain embed) is what lets
+      // .eq('visits.patient_id', ...) actually filter which rows come back,
+      // same reasoning as useToothHistory.ts's own identical pattern.
+      const { data, error } = await supabase
+        .from('tooth_records')
+        .select('*, visits!inner(patient_id, created_at)')
+        .eq('visits.patient_id', patientId)
+        .order('created_at', { foreignTable: 'visits', ascending: true });
       if (cancelled) return;
       if (error) {
         setLoadError(error.message);
@@ -110,18 +129,32 @@ export function useVisit(visitId: string | null) {
       const nextBleedingLingual: Record<string, BleedingPoints> = {};
       const nextNotes: Record<string, string> = {};
       const nextBridgeGroup: Record<string, string> = {};
+      // Ascending visit order means, for any tooth touched in more than one
+      // visit, later iterations simply overwrite earlier ones below — so
+      // whatever's left once the loop finishes is each tooth's LATEST row,
+      // with no extra bookkeeping needed to track "latest so far" by hand.
       for (const row of data ?? []) {
         const fdi = row.tooth_id as string;
         if (row.surfaces && Object.keys(row.surfaces).length > 0) nextSurfaces[fdi] = row.surfaces;
+        else delete nextSurfaces[fdi];
         if (row.post) nextPost[fdi] = true;
+        else delete nextPost[fdi];
         if (row.endo) nextEndo[fdi] = row.endo;
+        else delete nextEndo[fdi];
         if (row.pockets_buccal) nextPocketsBuccal[fdi] = row.pockets_buccal;
+        else delete nextPocketsBuccal[fdi];
         if (row.pockets_lingual) nextPocketsLingual[fdi] = row.pockets_lingual;
+        else delete nextPocketsLingual[fdi];
         if (row.gum_margin_buccal) nextGumMargin[fdi] = row.gum_margin_buccal;
+        else delete nextGumMargin[fdi];
         if (row.bleeding_buccal) nextBleedingBuccal[fdi] = row.bleeding_buccal;
+        else delete nextBleedingBuccal[fdi];
         if (row.bleeding_lingual) nextBleedingLingual[fdi] = row.bleeding_lingual;
+        else delete nextBleedingLingual[fdi];
         if (row.notes) nextNotes[fdi] = row.notes;
+        else delete nextNotes[fdi];
         if (row.bridge_group_id) nextBridgeGroup[fdi] = row.bridge_group_id;
+        else delete nextBridgeGroup[fdi];
       }
       setSurfacesByFdi(nextSurfaces);
       setPostByFdi(nextPost);
@@ -157,7 +190,7 @@ export function useVisit(visitId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [visitId]);
+  }, [patientId]);
 
   // Real dirty-tracking: only writes teeth whose data actually differs from
   // `lastSavedRef` (what was last successfully written, or — right after
@@ -268,6 +301,23 @@ export function useVisit(visitId: string | null) {
     bridgeGroupByFdi,
   ]);
 
+  // Closes this visit — `closed_at` set once, never un-set — per CLAUDE.md's
+  // "Visit lifecycle" design: an explicit "leaving this workspace" action
+  // (PatientChart.tsx's handleBackClick/handleSignOutClick, both call
+  // flush() first so nothing pending is lost) or a longer safety-net
+  // inactivity timeout (PatientChart.tsx's own effect). Once closed,
+  // useOpenVisit.ts's own resolution (`.is('closed_at', null)`) will no
+  // longer find this visit, so the next time this patient's chart is
+  // opened, a fresh visit gets created — which is what actually makes
+  // per-tooth history (useToothHistory.ts) start accumulating more than
+  // one entry over time. Doesn't itself flush — callers that need pending
+  // changes saved first call flush() before this, same as every existing
+  // call site already does for other reasons.
+  const closeVisit = useCallback(async () => {
+    if (!visitId) return;
+    await supabase.from('visits').update({ closed_at: new Date().toISOString() }).eq('id', visitId);
+  }, [visitId]);
+
   return {
     surfacesByFdi,
     setSurfacesByFdi,
@@ -293,5 +343,6 @@ export function useVisit(visitId: string | null) {
     loadError,
     saveStatus,
     flush,
+    closeVisit,
   };
 }

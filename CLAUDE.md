@@ -7,10 +7,10 @@
 
 ## Project Overview
 
-A web-based dental practice management application for a single-dentist private practice in Slovenia. The primary user is **Monika** (the dentist). The app replaces paper-based patient records (EL 81 form) and must be usable during a clinical appointment — fast, clear, touch-friendly.
+A web-based dental practice management application, originally built for one single-dentist private practice in Slovenia (**Monika**, the primary user/dentist) but since turned into a genuine multi-practice product — Gregor's explicit goal is a CRM + charting + invoicing platform sold to multiple dental practices, not just Monika's own. The app replaces paper-based patient records (EL 81 form) and must be usable during a clinical appointment — fast, clear, touch-friendly. See "Multi-tenancy" below for how the data model keeps every practice's data isolated from every other's.
 
 **Phase 1 scope: Dental Chart only.**
-Everything else (billing, appointments, ZZZS reporting) comes later.
+Everything else (billing, CRM, appointments, ZZZS reporting) comes later — the multi-tenancy foundation is built ahead of those specifically so none of them need a disruptive schema migration once they start.
 
 ---
 
@@ -86,6 +86,37 @@ src/
                                 # parameterized by EndoStage — three grid
                                 # entries (planned/done/existing)
       PatientBadge.tsx         # Name, age, diagnoses (not built yet)
+      AppNavShell.tsx          # Shared turquoise top bar + white submenu —
+                                # used by every signed-in page (real
+                                # onSignOut + userLabel from
+                                # usePracticeContext()) and
+                                # PatientPageMockup.tsx (dev-only, zero
+                                # props, fully inert) — see "Patient Record
+                                # page" below
+    calendar/
+      TimeGrid.tsx             # Day/Week's shared hour grid — full 00-24h
+                                # range inside its own fixed-height,
+                                # internally-scrolling frame (sticky day/
+                                # column header), column-agnostic (Day
+                                # passes one column per therapist, Week one
+                                # per day) — see "Native scheduling
+                                # calendar" below
+      AppointmentChip.tsx      # One appointment block — solid therapist
+                                # color, tick/cross status badge, dashed
+                                # border for "sent" — see "Native
+                                # scheduling calendar" below
+      TherapistPanel.tsx       # Sidebar "Terapevti:" panel — solid-color
+                                # name chips (click to hide/show that
+                                # therapist everywhere, not just Day), its
+                                # own scrollable overflow, "+" add-
+                                # therapist modal (fixed color palette)
+      CalendarSearch.tsx       # Persistent, always-visible cross-date
+                                # patient-name search box
+      MonthOverview.tsx        # Lightweight month grid — day cells with
+                                # small therapist-colored chips, click a
+                                # day to jump into Day view
+      MiniCalendar.tsx         # Sidebar mini month-picker, its own frame
+                                # bottom-aligned with TherapistPanel's
   data/
     toothProfiles.ts           # Per-FDI silhouette/detail paths + on-screen
                                 # sizing (real mm, not photo pixels — see
@@ -100,33 +131,84 @@ src/
     statusStyles.ts            # Fill/border/symbol per ToothStatus
   types/
     dental.ts                  # All TypeScript types (see below)
+  contexts/
+    PracticeContext.tsx        # PracticeProvider + usePracticeContext() —
+                                # wraps usePractice.ts so practiceId/
+                                # practiceName are readable anywhere under
+                                # the signed-in app without prop-threading —
+                                # see "Multi-tenancy" below
   hooks/
     useAuth.ts                 # Supabase session state + signIn/signOut
-    usePatients.ts              # Loads every patient + createPatient() —
-                                # see "Patient list" below
+    usePractice.ts             # Resolves the signed-in user's own practice
+                                # (practice_members joined to practices) —
+                                # see "Multi-tenancy" below
+    usePatients.ts              # Loads every patient (RLS-scoped to the
+                                # signed-in practice) + createPatient()/
+                                # updatePatient() — see "Patient list" below
     useOpenVisit.ts             # Resolves/creates the visit a chosen
                                 # patient's chart should load/save against
                                 # — see "Visit lifecycle" below
-    useVisit.ts                # Loads + saves one visit's tooth_records —
-                                # see "Visit lifecycle" below for what's
-                                # actually built vs. still just designed
+    useVisit.ts                # Loads + saves one visit's tooth_records,
+                                # plus closeVisit() — see "Visit lifecycle"
+                                # below (fully built, not just designed)
+    useToothHistory.ts          # One tooth's tooth_records rows across
+                                # every one of a patient's visits, newest
+                                # first — see "Visit lifecycle" below
+    usePatientHistory.ts        # Same join, minus the tooth filter, grouped
+                                # by visit instead — backs Frame 8 on the
+                                # Patient Record page — see "Visit
+                                # lifecycle" below
+    useTherapists.ts            # Practice-scoped therapist list + create —
+                                # see "Native scheduling calendar" below
+    useAppointments.ts          # Appointment CRUD + range queries (one day,
+                                # one week, or an arbitrary range for Month)
+                                # — see "Native scheduling calendar" below
+    useAppointmentSearch.ts     # Cross-date patient-name search backing
+                                # CalendarSearch.tsx
   lib/
     supabase.ts                # Supabase client
+    describeToothRecord.ts     # One tooth_records row -> its bullet-point
+                                # summary strings — shared by
+                                # ToothDetailPanel's "Zgodovina" tab and
+                                # usePatientHistory.ts so the two can never
+                                # disagree — see "Visit lifecycle" below
+    appointmentStatus.ts        # Shared appointment status label/color/
+                                # badge vocabulary — used by both
+                                # Calendar.tsx's grid chips and
+                                # PatientChart.tsx's Frame 5, so one status
+                                # can never render two different ways — see
+                                # "Native scheduling calendar" below
+    calendarLayout.ts           # layoutOverlappingEvents() — pure column-
+                                # packing algorithm for side-by-side
+                                # overlapping appointments, shared by
+                                # Day/Week — see "Native scheduling
+                                # calendar" below
   pages/
     Login.tsx                  # Email/password sign-in screen
     PatientList.tsx             # Landing page after login — search/pick a
                                 # patient or add a new one — see "Patient
                                 # list" below
-    PatientChart.tsx           # Main page — full interactive chart (status
-                                # selection/toolbar, perio data entry,
-                                # bridge creation) for one chosen patient,
-                                # loading from and autosaving to that
-                                # patient's own resolved-or-created Supabase
-                                # visit via useOpenVisit.ts + useVisit.ts —
-                                # see "Visit lifecycle" below for exactly
-                                # what's real vs. still not built
+    PatientChart.tsx           # Main page — the full Patient Record layout
+                                # (chart + status toolbar + perio entry +
+                                # bridge creation + patient info + visit
+                                # history + placeholder frames) for one
+                                # chosen patient, loading from and
+                                # autosaving to that patient's own
+                                # resolved-or-created Supabase visit via
+                                # useOpenVisit.ts + useVisit.ts — see
+                                # "Patient Record page" and "Visit
+                                # lifecycle" below
+    PatientPageMockup.tsx       # Dev-only design sandbox for the Patient
+                                # Record page layout — zero real data, same
+                                # role StatusShowcase.tsx plays for the
+                                # chart itself — see "Patient Record page"
+                                # below
     StatusShowcase.tsx         # Temporary dev-only review page for visual QA —
                                 # not part of the app's real navigation
+    Calendar.tsx                # Native Day/Week/Month scheduling calendar
+                                # (therapist columns, appointment creation/
+                                # editing incl. inline new-patient) — see
+                                # "Native scheduling calendar" below
 ```
 
 ---
@@ -305,14 +387,40 @@ than the `migrations/` folder, which stays in the repo only for reference/
 any other project that might ever need to catch up incrementally instead.
 Everything added *after* that initial run (restricting `sex` to M/F,
 `phone`/`email`/`address`/`postal_code`/`city`/`health_card_number` on
-`patients`) landed on the live project as its own migrations —
-`007_restrict_sex_to_mf.sql`, `008_add_patient_contact_fields.sql`,
-`009_split_address_fields.sql` — confirmed run.
+`patients`, then `assigned_dentist`/`internal_record_number`, then the full
+multi-tenancy foundation below, then the native scheduling calendar's
+`appointments`/`therapists` tables — see "Native scheduling calendar"
+below) landed on the live project as its own migrations —
+`007_restrict_sex_to_mf.sql` through `014_add_therapists.sql` — all
+confirmed run. `supabase/schema.sql` itself is kept in sync to bake in
+everything through the latest migration, so a brand-new project only ever
+needs that one file.
+
+**Multi-tenancy (011/012) is the big structural change here — see its own
+section below** for the full reasoning; the short version: every table now
+carries a `practice_id`, and RLS scopes every read/write to the signed-in
+user's own practice instead of "any authenticated user sees everything."
 
 ```sql
+-- Practices (multi-tenancy — see "Multi-tenancy" below)
+create table practices (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table practice_members (
+  practice_id uuid not null references practices(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'owner' check (role in ('owner','staff')),
+  created_at timestamptz not null default now(),
+  primary key (practice_id, user_id)
+);
+
 -- Patients
 create table patients (
   id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),
   first_name text not null,
   last_name text not null,
   dob date not null,
@@ -323,6 +431,8 @@ create table patients (
   postal_code text,
   city text,
   health_card_number text,  -- št. zdravstvene kartice (ZZZS) — captured for future use, not read anywhere in the app yet
+  assigned_dentist text,          -- Izbran terapevt — plain editable text, not hardcoded (see "Patient Record page" below)
+  internal_record_number text,    -- Št. interne evidence — this practice's own internal patient record number
   diagnoses text[] default '{}',
   created_at timestamptz default now()
 );
@@ -330,6 +440,7 @@ create table patients (
 -- Visits
 create table visits (
   id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from the parent patient row — see "Multi-tenancy" below
   patient_id uuid references patients(id) on delete cascade,
   date date not null,
   notes text,
@@ -348,6 +459,7 @@ create table visits (
 -- written to again.
 create table tooth_records (
   id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from the parent visit row — see "Multi-tenancy" below
   visit_id uuid references visits(id) on delete cascade,
   tooth_id text not null,           -- FDI: '11', '36', etc.
   surfaces jsonb not null default '{}',
@@ -369,9 +481,11 @@ create table tooth_records (
 create unique index if not exists tooth_records_visit_tooth_unique
   on tooth_records (visit_id, tooth_id);  -- enables the upsert-while-open behavior described above
 
--- Treatment plan entries
+-- Treatment plan entries (schema only — no application code reads/writes
+-- this table yet; the invoicing feature will be its first real consumer)
 create table treatment_entries (
   id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from the parent visit row — see "Multi-tenancy" below
   visit_id uuid references visits(id) on delete cascade,
   tooth_id text not null,
   surfaces text[],
@@ -382,18 +496,178 @@ create table treatment_entries (
   created_at timestamptz default now()
 );
 
+-- Terapevti (therapists) — practice-scoped resources for the calendar's Day-
+-- view columns. Like `patients`, a therapist has no parent row to derive
+-- practice_id from, so the client sets it explicitly on insert (from
+-- usePracticeContext()) rather than an auto-stamp trigger. Defined before
+-- appointments below since appointments.therapist_id references it
+-- (historically added the other way around, via an ALTER TABLE in a later
+-- migration — see 013/014_*.sql — but a fresh schema.sql needs the
+-- referenced table first).
+create table therapists (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),
+  name text not null,
+  color text not null default '#2e6e62',  -- hex — column header dot + that therapist's appointment-chip color
+  created_at timestamptz not null default now()
+);
+create index therapists_practice_id_idx on therapists(practice_id);
+
+-- Appointments (native scheduling calendar — see "Native scheduling
+-- calendar" below). Same pattern as visits/tooth_records/treatment_entries:
+-- practice_id is auto-stamped by a BEFORE INSERT/UPDATE trigger copied from
+-- set_visit_practice_id(), resolved from patient_id, never sent by client
+-- code.
+create table appointments (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped, see trigger below
+  patient_id uuid not null references patients(id) on delete cascade,
+  therapist_id uuid references therapists(id) on delete set null,  -- nullable — "Neuvrščeno" if unset
+  starts_at timestamptz not null,
+  ends_at timestamptz not null check (ends_at > starts_at),
+  status text not null default 'scheduled'
+    check (status in ('scheduled','sent','confirmed','completed','cancelled','no_show')),
+  service text,  -- "Predvidena storitev" — free text; no services catalog exists yet
+  notes text,
+  created_at timestamptz not null default now()
+);
+create index appointments_practice_id_idx on appointments(practice_id);
+create index appointments_patient_id_idx on appointments(patient_id);
+create index appointments_therapist_id_idx on appointments(therapist_id);
+create index appointments_starts_at_idx on appointments(starts_at);
+
 -- Row Level Security — enable on all tables
+alter table practices enable row level security;
+alter table practice_members enable row level security;
 alter table patients enable row level security;
 alter table visits enable row level security;
 alter table tooth_records enable row level security;
 alter table treatment_entries enable row level security;
+alter table appointments enable row level security;
+alter table therapists enable row level security;
 
--- Policy: only authenticated users (the dentist) can access
-create policy "auth_only" on patients for all using (auth.role() = 'authenticated');
-create policy "auth_only" on visits for all using (auth.role() = 'authenticated');
-create policy "auth_only" on tooth_records for all using (auth.role() = 'authenticated');
-create policy "auth_only" on treatment_entries for all using (auth.role() = 'authenticated');
+-- Policy: each practice can only see/write its own rows — see
+-- "Multi-tenancy" below for current_practice_id() and the full reasoning.
+-- Split into 4 explicit per-operation policies per table (select/insert/
+-- update/delete), not one "for all", so a future tightening of one
+-- operation can never silently affect the other three. Shown once for
+-- patients; visits/tooth_records/treatment_entries repeat the identical
+-- shape, keyed on that table's own practice_id column.
+create policy patients_select on patients for select
+  using (practice_id = current_practice_id());
+create policy patients_insert on patients for insert
+  with check (practice_id = current_practice_id());
+create policy patients_update on patients for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy patients_delete on patients for delete
+  using (practice_id = current_practice_id());
+-- [visits_*, tooth_records_*, treatment_entries_*, appointments_*,
+--  therapists_* — identical shape, keyed on that table's own practice_id
+--  column — see supabase/schema.sql / migrations/012_replace_rls_policies.sql
+--  and 013_add_appointments.sql/014_add_therapists.sql]
 ```
+
+---
+
+## Multi-tenancy
+
+**Status: built and confirmed live (2026-09-15).** The app was built for
+exactly one dental practice (Monika's) — every table had RLS "enabled" but
+every policy was `auth.role() = 'authenticated'`, meaning any signed-in
+user could read/write every practice's data. That was fine with one real
+login; it stopped being fine the moment Gregor's actual goal — a CRM +
+charting + invoicing product sold to multiple dental practices — became
+explicit. This is medical PII, so tenant isolation had to be correct before
+any CRM/invoicing feature gets built on top of it.
+
+**Design: flat `practice_id` on every table, not join-based RLS.** The
+naturally-tempting alternative — `practice_id` only on `patients`, with
+`visits`/`tooth_records`/`treatment_entries` scoped via nested subqueries
+through their existing foreign keys — was considered and rejected: each
+nested subquery would re-evaluate the referenced table's *own* RLS policy,
+so `tooth_records` (upserted on every 30s autosave — the hottest table)
+would re-evaluate `visits`' RLS, which re-evaluates `patients`' RLS, on
+every read/write. It's also harder to audit at a glance, which matters for
+medical data. Instead, every table gets its own flat, indexed `practice_id`
+column — but application code never sets it on the three child tables:
+
+- **`patients.practice_id`** is the one column application code sets
+  explicitly — `usePatients.ts`'s `createPatient()` stamps it from
+  `usePracticeContext()` (the only top-level insert with no parent row to
+  inherit a practice from).
+- **`visits`/`tooth_records`/`treatment_entries`** each have a
+  `BEFORE INSERT/UPDATE` trigger (`set_visit_practice_id()`,
+  `set_tooth_record_practice_id()`, `set_treatment_entry_practice_id()`)
+  that copies `practice_id` down from the parent row (`visits` from its
+  `patients` row, the other two from their `visits` row) — **zero code
+  changes were needed in `useOpenVisit.ts`/`useVisit.ts`**, neither of
+  which has ever sent a `practice_id`. A real security bonus falls out of
+  this too: since the trigger *overwrites* whatever `practice_id` a client
+  sends, a buggy or malicious client can't smuggle a row into another
+  practice by attaching a fabricated `practice_id`.
+- **`current_practice_id()`** is a `SECURITY DEFINER`,
+  `search_path`-pinned SQL function reading a new `practice_members` join
+  table (`user_id` → `practice_id`) — the standard Supabase-recommended
+  pattern for RLS helper functions, avoiding the cross-table RLS
+  re-evaluation problem above. Every policy is a single flat
+  `practice_id = current_practice_id()` check — fast, and auditable at a
+  glance.
+
+**Signup: a `SECURITY DEFINER` trigger on `auth.users`, not client-side
+inserts.** `handle_new_user_practice()` fires `AFTER INSERT ON auth.users`
+and atomically creates a new `practices` row (named from
+`raw_user_meta_data->>'practice_name'`, defaulting to "New practice" if
+absent) plus a `practice_members` row linking the new user as owner. This
+fires regardless of whether Supabase's email-confirmation setting is on or
+off, and regardless of whether the account was created via a future
+self-serve signup form or (today's actual path) the Supabase dashboard's
+"Add user" — a new login can never end up with no practice.
+
+**No self-serve signup page exists yet — deliberate, per Gregor's explicit
+answer.** A live medical-records app with zero-vetting open registration is
+a product decision to make on purpose later (invite codes? billing gate?
+manual approval?), not a side effect of this migration. New practices are
+created manually via Supabase Dashboard → Authentication → Add user for
+now, which still exercises the same trigger.
+
+**Footguns, deliberately held to:**
+- Every `SECURITY DEFINER` function pins `set search_path = public,
+  pg_temp` — closes the classic search-path-hijack privilege-escalation
+  vector. Don't drop this if any of this SQL gets hand-edited.
+- **Never add a self-service INSERT policy on `practice_members`.** A naive
+  `with check (user_id = auth.uid())` would let any authenticated user add
+  themselves to *any* `practice_id` they can guess — instant full access to
+  that practice's entire patient database. All provisioning goes through
+  the trigger; leave it that way until a real, validated invite flow
+  exists (not built yet — `practice_members`' composite PK and `role`
+  column already support a user belonging to >1 practice / being "staff"
+  rather than "owner," but nothing in the UI uses either yet).
+- `practices`/child-table foreign keys have no `on delete cascade` —
+  deleting a practice while patients reference it fails loudly instead of
+  silently cascading into patient-record deletion. Deliberate.
+
+**Backfill note**: the one pre-existing practice ("Monikina ordinacija")
+links both real accounts as owners — `goslar.monika@gmail.com` and
+`gregor.goslar@gmail.com` — so backfilling only one wouldn't silently lock
+the other out.
+
+**Verified live**: `scripts/verify-tenant-isolation.mjs` (throwaway, not
+shipped as part of the app) scripts the actual security property against
+the live project — a second practice's account sees zero patients, can't
+read or write a specific patient/visit id belonging to the first practice,
+and the first practice can't see what the second one creates. All 7
+assertions passed against Monika's real account + one throwaway test
+account created via the dashboard. A manual pass on `localhost:5181`,
+signed in as each account in turn, confirmed the same thing visually — see
+`AppNavShell`'s "Uporabnik: <practice name>" label, now sourced from
+`usePracticeContext()` instead of a hardcoded `'Monika Goslar'`.
+
+**Explicitly not part of this pass** (flagged, not forgotten): a self-serve
+`Signup.tsx` page, staff-invite UI for `practice_members`, practice
+branding/settings beyond a plain name, billing/subscriptions, and any
+actual CRM/invoicing feature work — this was purely the tenancy foundation
+those sit on.
 
 ---
 
@@ -2353,17 +2627,16 @@ if the underlying data model has to stay a separate field (as `post` and
 
 ### Visit lifecycle (open/close) and per-tooth history
 
-**Status: first slice built and confirmed working; the full lifecycle
-below is still only designed.** `src/hooks/useVisit.ts` now actually loads
-a visit's `tooth_records` on mount and saves back to Supabase — confirmed
-live by Monika (a change made on `PatientChart.tsx`, saved, survives a
-sign-out/sign-in round trip, and shows up as a real row in the Supabase
-Table Editor). This is the agreed shape reached through direct discussion
-about when saving should actually happen, and supersedes the earlier,
-vaguer "Two record layers" sketch (`initial_status` + `visit_entries[]`)
-with a concrete mechanism built on the schema's own existing shape, not a
-new one — but **what's actually built today is a deliberately narrower
-slice of the full design**, spelled out below.
+**Status: fully built and confirmed live — every piece of the design
+below is implemented, not just the first slice.** `src/hooks/useVisit.ts`
+loads a visit's `tooth_records` on mount and saves back to Supabase —
+confirmed live repeatedly (a change made on `PatientChart.tsx`, saved,
+survives a sign-out/sign-in round trip, and shows up as a real row in the
+Supabase Table Editor). This is the agreed shape reached through direct
+discussion about when saving should actually happen, and supersedes the
+earlier, vaguer "Two record layers" sketch (`initial_status` +
+`visit_entries[]`) with a concrete mechanism built on the schema's own
+existing shape, not a new one.
 
 **What's built and confirmed:**
 - `useVisit(visitId)` loads every `tooth_records` row for one visit into
@@ -2401,40 +2674,66 @@ slice of the full design**, spelled out below.
   object/array rather than mutating one in place, so an untouched tooth's
   reference never changes on its own. Replaces the earlier version, which
   rewrote every tooth with any data at all on every single save.
-- **A real patient list (`PatientList.tsx`/`usePatients.ts`) now exists**,
+- **A real patient list (`PatientList.tsx`/`usePatients.ts`) exists**,
   replacing the single hardcoded `TEST_VISIT_ID` this section used to
   describe — see "Patient list" below for the full feature. `useOpenVisit
-  (patientId)` (new hook) resolves which visit a chosen patient's chart
-  should actually load/save against: a visit for that patient dated today
-  with `closed_at` still null, reused if one already exists (e.g. reopening
-  the chart later the same day), otherwise a fresh one inserted with
-  today's date. `useVisit`'s own `visitId` parameter is now `string | null`
-  specifically to accommodate this — `PatientChart.tsx` calls it before
-  `useOpenVisit`'s id has arrived, and the load effect just waits.
+  (patientId)` resolves which visit a chosen patient's chart should
+  actually load/save against — see below, since this resolution rule
+  changed once closing was actually built.
+- **Closing a visit is fully built.** `useOpenVisit(patientId)` resolves an
+  "open" visit as one with no `closed_at` at all — **not** scoped to
+  today's date (an earlier version filtered on `.eq('date', today)`, which
+  meant a patient's chart silently started a brand-new, empty visit every
+  time it was opened on a later calendar day, hiding all previously-entered
+  data behind an unrelated fresh visit — caught live, fixed by dropping the
+  date filter: as long as nothing has closed a patient's visit, there is
+  only ever one open one for them, no matter how many days pass).
+  `useVisit.ts` exposes `closeVisit()`, which sets `closed_at`; a visit
+  closes on an explicit "leaving this workspace" action (back-to-list,
+  sign-out — `handleBackClick`/`handleSignOutClick` in
+  `PatientChart.tsx`, both `flush()` then `closeVisit()` before navigating
+  away) or a 30-minute inactivity safety-net timer, matching the design
+  below exactly.
+- **A critical load-query fix this depended on**: `useVisit.ts`'s original
+  load effect queried `.eq('visit_id', visitId)` only — this "worked" only
+  by accident, because closing was unimplemented at the time (one eternal
+  visit per patient, so "this visit's rows" and "this patient's current
+  state" were the same set). Once closing became real, a patient's *second*
+  visit starts with zero rows of its own, so that same query would have
+  made the live chart appear to reset to blank the moment a patient's visit
+  actually closed. Fixed before ever shipping live: the load effect now
+  queries every one of a patient's `tooth_records` across **all** of their
+  visits (`visits!inner(...)`, filtered by `patient_id`, ordered ascending
+  by the visit's `created_at`), reducing client-side so each tooth's latest
+  row wins — with explicit "delete the field" branches so a later visit's
+  *absence* of e.g. `post` correctly clears an earlier visit's `post: true`,
+  rather than a naive merge leaving stale data behind.
+- **"Zgodovina zdravljenja" (treatment history) is built, in two places**:
+  a per-tooth tab (`ToothDetailPanel.tsx`'s "Zgodovina" tab, driven by
+  `useToothHistory(patientId, fdi)` — every `tooth_records` row for that
+  one tooth across every visit, newest first, each labeled with its date
+  and "(trenutni obisk)" if that visit is still open) and a per-patient
+  rollup across every tooth (`usePatientHistory(patientId)` — same join
+  pattern minus the `tooth_id` filter, grouped by visit instead of by
+  tooth; backs Frame 8, "Pretekli termini in storitve," on the real
+  Patient Record page — see "Patient Record page" below). Both read the
+  same underlying rows through one shared formatter,
+  `src/lib/describeToothRecord.ts` (`describeToothRecord(entry, fdi):
+  string[]`), so the two views can never disagree about what a given
+  `tooth_records` row actually means.
+- **Patient-detail/edit view is built** — Frame 2 of the Patient Record
+  page (see below), reading/writing every patient field via
+  `updatePatient()` (`usePatients.ts`), including two fields added
+  specifically for this — `assigned_dentist` ("Izbran terapevt") and
+  `internal_record_number` ("Št. interne evidence") — both real, editable
+  `patients` columns rather than hardcoded (per Gregor's explicit request:
+  "don't like hardcoded solutions," even for a field that today only ever
+  has one real value).
 
-**What's still only hardcoded or not built at all** — this is a proof
-that the pipeline works end to end, not the finished feature:
-- **Closing a visit is still fully unimplemented** — nothing anywhere ever
-  sets `visits.closed_at`. `useOpenVisit`'s date-scoped resolution (see
-  above) means a visit from a previous day is simply never revisited or
-  closed by anything; it just sits there permanently "open" while a fresh
-  one gets created for today. The full lifecycle design below (an
-  inactivity-timeout close, an explicit "leaving this workspace" close)
-  remains just a design.
-- **No "Zgodovina zdravljenja" (treatment history) tab exists yet.** The
-  data model already supports it for free (see below), but nothing in the
-  UI reads a tooth's *other* visits' rows yet — only its current/latest
-  one.
-- **No patient-detail/edit view exists.** `phone`/`email`/`address`/
-  `postalCode`/`city`/`healthCardNumber` are only ever entered once, at
-  patient creation (`PatientList.tsx`'s "+ Nov pacient" form) — nothing
-  lets you view or change them again afterward, except the list row's own
-  phone number (shown under the patient's name when one's on file).
-
-**The problem that shaped this**: an early proposal was to save (and log
-one history entry) every time the selected tooth changes — click a
-different tooth, flush whatever changed on the previous one. Monika
-rejected this once she walked through her actual workflow: a real
+**The problem that shaped the design below**: an early proposal was to
+save (and log one history entry) every time the selected tooth changes —
+click a different tooth, flush whatever changed on the previous one.
+Monika rejected this once she walked through her actual workflow: a real
 appointment touches many teeth, often revisiting the same one more than
 once, and a chart note is naturally written per *visit*, not per
 tooth-glance — saving on every tooth switch would fragment one visit's
@@ -2443,36 +2742,33 @@ also flagged a separate, practical problem with the interaction itself:
 "I clicked the wrong service" needs a window to correct a mistake before
 anything commits, which argues for saving less eagerly, not more.
 
-**The resolution (design — not yet implemented; see "What's still only
-hardcoded or not built at all" above for what actually exists today) — a
-visit is either open (still being worked on) or closed (finished,
-permanent) — `visits.closed_at`** (migration
-`005_add_visit_lifecycle.sql`), null while open:
-- Opening a patient's chart resumes their most recent visit if it's still
-  open, or starts a new one if the last one was already closed. There's no
+**The resolution, now fully implemented as designed — a visit is either
+open (still being worked on) or closed (finished, permanent) —
+`visits.closed_at`** (migration `005_add_visit_lifecycle.sql`), null while
+open:
+- Opening a patient's chart resumes their one open visit if one exists, or
+  starts a new one if their last one was already closed. There's no
   explicit "start visit" button — opening the chart to work on it *is*
   starting (or resuming) one.
-- While a visit is open, an inactivity timer (~30s since the last change)
-  flushes whatever's changed to Supabase — a safety net against losing
-  work to a crash or interruption, not a "commit," since the visit itself
-  is still open. Every flush **updates the same visit's own rows** rather
-  than creating new ones (see the unique constraint below) — nothing is
-  fragmented by how many times the 30s timer happens to fire during one
-  sitting.
+- While a visit is open, a 30-second-since-the-last-change debounce flushes
+  whatever's changed to Supabase (the standard React reset-the-timer-in-a-
+  cleanup pattern) — a safety net against losing work to a crash or
+  interruption, not a "commit," since the visit itself is still open. Every
+  flush **updates the same visit's own rows** rather than creating new ones
+  (see the unique constraint below) — nothing is fragmented by how many
+  times the 30s timer happens to fire during one sitting.
 - A visit **closes** — `closed_at` set once, never un-set — on an explicit
-  "leaving this workspace" action (signing out today; switching to a
-  different patient or a future section like invoicing, later) or a
-  longer safety-net inactivity timeout (tens of minutes, in case a tab is
-  left open and forgotten) — whichever happens first. Once closed, its
-  rows are never written to again; the next edit anywhere starts a fresh
-  visit.
-- **Known limitation, accepted deliberately for now**: until "close a
-  visit" is reliably tied to a real action (rather than only a timeout),
-  a visit that's reopened after a long natural pause — hours, not
-  30-plus minutes — could in principle still be "the same open visit"
-  rather than a new one, which isn't quite right. Monika accepted this
-  tradeoff explicitly rather than block all saving on solving it
-  perfectly first.
+  "leaving this workspace" action (back-to-list, sign-out) or a 30-minute
+  safety-net inactivity timeout (in case a tab is left open and forgotten),
+  whichever happens first. Once closed, its rows are never written to
+  again; the next edit anywhere starts a fresh visit.
+- **Known limitation, accepted deliberately**: until "close a visit" is
+  tied to more real actions (e.g. an explicit "end appointment" button),
+  a visit reopened after a long natural pause — hours, not 30-plus
+  minutes, but before the safety-net timeout would have fired — could in
+  principle still be "the same open visit" rather than a new one, which
+  isn't quite right. Accepted rather than blocking all saving on solving
+  it perfectly first.
 
 **No separate event-log table — `tooth_records` already has the right
 shape.** It's one row *per tooth per visit*, not one shared row per tooth
@@ -2513,12 +2809,13 @@ app's actual landing page after login — `App.tsx` holds a small two-value
 instead of going straight to `PatientChart`.
 
 - `usePatients()` loads every patient (sorted by last name, then first —
-  RLS already scopes this to the one authenticated dentist/account, so
-  there's no per-practice filtering to add), and exposes `createPatient()`.
+  RLS already scopes this to the signed-in user's own practice, see
+  "Multi-tenancy" above, so there's no explicit practice filter to add in
+  the query itself), and exposes `createPatient()`/`updatePatient()`.
   Search is a plain client-side filter over that in-memory list
-  (`PatientList.tsx`'s own `query` state) — a single-dentist practice's
-  patient list is small enough that a server-side search round trip isn't
-  solving a real problem yet.
+  (`PatientList.tsx`'s own `query` state) — one practice's patient list is
+  small enough that a server-side search round trip isn't solving a real
+  problem yet.
 - "+ Nov pacient" is an inline form, not a separate page: ime/priimek/datum
   rojstva are required (the three columns `patients` itself requires
   not-null); spol, telefon, e-pošta, naslov/poštna št./kraj, and the ZZZS
@@ -2551,12 +2848,345 @@ instead of going straight to `PatientChart`.
   up with Priimek/Spol/E-pošta), with `Poštna št.`/`Kraj` sharing the left
   half between them (lined up with Ime/Datum rojstva/Telefon), since
   neither needs a full half-width field to itself.
-- Selecting a patient (or successfully adding one) hands `patientId` plus
-  a display label (`"Priimek Ime"`) up to `App.tsx`, which switches
-  `Route` to `{ page: 'chart', patientId, patientLabel }` — `PatientChart`
-  itself resolves/creates that patient's own visit via `useOpenVisit` (see
-  above) rather than the route carrying a `visitId` directly.
-- **No patient-detail/edit view yet** — see the "not built" list above.
+- Selecting a patient (or successfully adding one) hands the whole
+  `PatientListItem` object (not just `patientId`) up to `App.tsx`, which
+  switches `Route` to `{ page: 'chart', patientId, patientLabel, patient }`
+  — `PatientChart` itself resolves/creates that patient's own visit via
+  `useOpenVisit` (see above) rather than the route carrying a `visitId`
+  directly, and renders Frame 2's patient-info fields immediately from
+  `patient` with no extra fetch.
+- **Patient-detail/edit view is built** — see "Patient Record page" below
+  for Frame 2, which replaces this bullet's old "not built" status.
+
+---
+
+### Patient Record page
+
+**Status: built and confirmed live (2026-09-15).** `PatientChart.tsx` was,
+until this point, just the interactive chart + a status-toolbar sidebar —
+functional, but visually nothing like the richer 8-frame design mocked up
+separately in `PatientPageMockup.tsx` (`npm run dev:patient-mockup`, port
+5182 — a dev-only design sandbox with zero real data, the same role
+`StatusShowcase.tsx` already plays; **not** deleted or replaced by this
+work, still useful for iterating on layout in isolation). Gregor asked for
+the real, Supabase-backed patient flow to land on that nicer layout instead
+of having two disconnected pages.
+
+**Approach**: `PatientChart.tsx` stayed the one real page (same component,
+same route) — its `return (...)` was replaced with the mockup's frame
+layout, with every frame wired to real data where real data exists, and
+copied verbatim (including its own local mock state) where it doesn't. None
+of the existing chart/toolbar/perio-entry/autosave logic changed — this was
+a JSX/layout port around code that already worked, not a rewrite.
+
+- **Real frames**: Frame 2 (patient info — see "Patient-detail/edit view"
+  above), Frame 8 ("Pretekli termini in storitve" — real cross-tooth visit
+  history via `usePatientHistory`, see "Visit lifecycle" above), and Frame
+  7 (the chart + `StatusToolbar` + a "Storitve po zobeh" tab reading real
+  per-tooth history via `useToothHistory`) are all real, backed by the same
+  hooks/handlers `PatientChart.tsx` already had.
+- **Placeholder frames, deliberately**: the health-questionnaire banner
+  (Frame 1), Rentgeni/Fotografije/SMS/E-pošta tabs (Frame 3), and
+  Podrobnosti termina/appointment+invoice card (Frame 5) all stay clearly
+  fabricated placeholder content — per Gregor's explicit choice, since no
+  real questionnaire/imaging/messaging/appointments/billing backend exists
+  yet (see "Out of Scope for Phase 1" below). Building any of those for
+  real is future work, not an oversight.
+- **`ToothDetailPanel` still renders separately below the frame grid**,
+  unchanged — a deliberately different, more detailed surface (editable
+  chips + picker + notes + its own "Zgodovina" tab) than Frame 7's quick
+  read-only "Storitve po zobeh" glance. Both read the same
+  `useToothHistory` data underneath via the shared
+  `describeToothRecord()` formatter, so they can't disagree; reconciling
+  the two into one surface is a separate future decision.
+- **`AppNavShell.tsx`** (`src/components/ui/AppNavShell.tsx`) was extracted
+  out of the mockup into a shared component both pages import, so the two
+  can never visually drift apart. Its `userLabel` prop now shows the
+  signed-in user's real practice name (`usePracticeContext()`) on the real
+  page — see "Multi-tenancy" above for why this couldn't stay a hardcoded
+  `'Monika Goslar'` default once other practices could exist; the mockup's
+  own zero-prop usage still falls back to a generic placeholder.
+- **A layout regression, caught and fixed**: an early version of this port
+  added a standalone title/autosave status row above Frame 1 that the
+  mockup never had — ~50px of extra height invisible on a large monitor,
+  but enough to tip a 17"-class screen into vertical scroll the mockup
+  never had. Caught by Gregor comparing the two side by side; fixed by
+  folding the autosave status into the existing back-link row instead of a
+  new row of its own. Worth remembering as a class of bug: a port that's
+  logically identical can still regress on total page height in a way that
+  only shows up at a specific viewport size, not in a quick glance at a
+  wide monitor.
+- **Responsive breakpoints ported verbatim** from the mockup:
+  `grid-cols-1 → sm:grid-cols-2 → min-[1400px]:grid-cols-[minmax(0,1fr)
+  _minmax(0,2fr)_minmax(0,1fr)]`, `contents`-dissolving wrappers so a
+  frame's children become independent grid items only below 1400px, and a
+  chart width cap (`max-[1399px]:max-w-[990px]`) so the chart doesn't
+  dominate the page on a 13"-class laptop screen — confirmed live at both
+  a 17"-class (~1920px) and 13"-class (~1280px) width.
+
+---
+
+### App Shell — top navigation frame (AppNavShell)
+
+**Status: built and rolled out to every signed-in page (2026-09-16).**
+`AppNavShell.tsx` (`src/components/ui/AppNavShell.tsx`) is a fixed two-row
+header — a turquoise (`#5CE1E6`) top bar with "Domov"/"CRM" on the left and
+the signed-in user's practice name + an Odjava (sign-out) icon button on
+the right, then a white submenu row (Koledar / Storitve / Sporočila /
+El. pošta / Nastavitve) with one pill highlighted grey (`#C8D1D9`) to show
+which section is active — pixel-matched off the original design mockup
+Gregor supplied for the Patient Record page (see "Patient Record page"
+above for how it was first extracted out of `PatientPageMockup.tsx`).
+
+**Every real page in the signed-in app renders this at the very top, full
+width, above its own content** — `PatientList.tsx` (the landing page),
+`PatientChart.tsx`, and `Calendar.tsx` all do, per Gregor's explicit
+request that the app have one consistent frame rather than each page
+inventing its own header/back-link/sign-out button. `PatientPageMockup.tsx`
+(the dev-only design sandbox, port 5182) keeps its own zero-prop, fully
+inert `<AppNavShell />` — nothing here changes that.
+
+- **`activeSubmenu` prop** (one of the five submenu keys — `'koledar'`,
+  `'storitve'`, `'sporocila'`, `'eposta'`, `'nastavitve'` — defaults to
+  `'storitve'`) picks which pill renders as the active grey one:
+  `'storitve'` for `PatientList.tsx`/`PatientChart.tsx` (the patient-record
+  path), `'koledar'` for `Calendar.tsx` (its own section — the native
+  scheduling calendar, see "Native scheduling calendar" below — not nested
+  under Storitve). A PNG mockup Gregor supplied at one point showed
+  "Storitve" highlighted even on the calendar page, which was briefly
+  implemented that way before Gregor's explicit correction: that was a
+  quirk/inconsistency in the mockup screenshot itself, not the intended
+  design — Koledar and Storitve are genuinely separate active states.
+  Sporočila/El. pošta/Nastavitve have no real page behind them yet, so
+  they're never passed as `activeSubmenu` and stay permanently inert (no
+  `onClick` at all).
+- **Both "Koledar" and "Storitve" are clickable from wherever they aren't
+  already the active pill** — `onNavigateCalendar` fires when
+  `activeSubmenu !== 'koledar'`, `onNavigateStoritve` when
+  `activeSubmenu !== 'storitve'`; either prop being omitted just leaves
+  that pill inert. Only `Calendar.tsx` passes `onNavigateStoritve` (wired
+  to its own existing `onBack`, which already returns to the patient list)
+  — `PatientList.tsx`/`PatientChart.tsx` have Storitve as their *active*
+  pill already, so clicking it there would be a pointless self-navigation,
+  same reasoning `Calendar.tsx` itself omits `onNavigateCalendar`.
+- **"Domov" (`onNavigateHome`) takes the user back to the patient list**
+  from wherever they are — `PatientChart.tsx` wires it to the same
+  `handleBackClick` its own "← Nazaj na seznam pacientov" link already
+  calls (flushes pending edits, closes the open visit, then navigates), and
+  `Calendar.tsx` wires it straight to its existing `onBack` prop.
+  `PatientList.tsx` itself is already home, so it doesn't pass this prop —
+  clicking "Domov" there is a no-op, same as every other page's inert
+  submenu items.
+- **`userLabel`** is the signed-in user's real practice name
+  (`usePracticeContext()`) on all three real pages — see "Multi-tenancy"
+  above for why this can't be a hardcoded name once more than one practice
+  can exist. The mockup's zero-prop usage falls back to a generic
+  `'Uporabnik'` placeholder, since it has no session/practice to read from.
+- **`PatientList.tsx` and `Calendar.tsx` each lost their own bespoke
+  header row** (title + inline "Koledar"/"Odjava" buttons on the list;
+  title + back-link + "Odjava" button on the calendar) in favor of this
+  shared component — each page's own remaining content starts directly
+  below it with no back-link/sign-out of its own, since AppNavShell covers
+  both. `Calendar.tsx`'s own plain "Koledar" `<h1>` was later removed
+  entirely too, once its Day/Week/Month toolbar (Danes/‹/›/date heading)
+  took over that role — see "Native scheduling calendar" below.
+- **No dedicated design-spec file exists separately from this one** — this
+  section (and "Dental Chart — Visual Specification" above, for the chart
+  itself) *is* the project's design reference; there's no second `.md` to
+  keep in sync.
+
+---
+
+### Native scheduling calendar (Koledar)
+
+**Status: built and live on `localhost:5181` (2026-09-17).** `Calendar.tsx`
+is a real Google-Calendar-style Day/Week/Month scheduling calendar, backed
+by the `appointments`/`therapists` tables (migrations
+`013_add_appointments.sql`/`014_add_therapists.sql`, both confirmed run —
+see "Supabase Schema" above), following the exact same multi-tenancy
+pattern (flat `practice_id`, `current_practice_id()` RLS) as every other
+table — see "Multi-tenancy" above. **This is a completely different thing
+from the separate, unrelated Google-Calendar-*backed* public booking widget
+documented at `C:\Users\Uporabnik\Documents\Claude code dental calendar`**
+(a patient-facing slot picker embedded on the practice's own website,
+writing to an actual external Google Calendar) — this section's calendar is
+this app's own internal staff-facing scheduling tool, storing appointments
+in this app's own Supabase project. The two are not integrated, synced, or
+fed from one another in any way; don't conflate them.
+
+- **Status vocabulary** (`src/lib/appointmentStatus.ts`) is the single
+  source of truth for every status's label/color/badge treatment, shared by
+  both `Calendar.tsx`'s grid chips and `PatientChart.tsx`'s Frame 5
+  ("Podrobnosti termina") — the same status can never render two different
+  ways depending which page you're looking at it from. Six statuses:
+  `scheduled` ("Naročen", default), `sent` ("Poslano" — a confirmation
+  request has gone out, awaiting reply; purely staff-set, no real
+  notification-sending exists), `confirmed` ("Potrjen"), `completed`
+  ("Opravljen"), `cancelled` ("Odpovedan"), `no_show` ("Ni se
+  zglasil/-a"). `appointmentBadge()` maps `confirmed` → a tick and
+  `cancelled` → a cross, both rendered in the same red (both badges are the
+  same color deliberately — shape, not color, is what tells confirmed from
+  declined apart, per Gregor's explicit instruction) as a small circular
+  badge in a chip's top-right corner. `appointmentChipStyle()` gives `sent`
+  a dashed chip border. **`cancelled` used to also render the chip
+  blurred/dimmed** — removed per Gregor's explicit request: a declined
+  appointment should look like any other chip, marked only by its cross
+  badge, not visually degraded.
+- **Day view**: one resource column per therapist (plus a trailing
+  "Neuvrščeno" column for appointments with no therapist, or with none at
+  all if no therapists exist yet) — a multi-chair scheduling layout, not a
+  Google-style single overlaid column. **Week view**: one column per
+  visible day instead, Monday-first with Saturday/Sunday as the two
+  rightmost columns when weekends are shown (`showWeekends` toggle, in the
+  "Teden ▾" dropdown) — `startOfWeekIso()`/`weekDayIsos` in `Calendar.tsx`.
+  **Month view** (`MonthOverview.tsx`): a lightweight, read-only 7-column
+  day-cell grid (also Monday-first) — day number + up to 3 small
+  appointment chips + a "+N več" overflow label per cell, click a day to
+  jump into Day view. No click-to-create or drag in Month, per the
+  confirmed "lightweight" scope.
+- **`TimeGrid.tsx`** is the shared hour-grid renderer behind both Day and
+  Week (Month uses its own `MonthOverview.tsx` instead). Covers the full
+  **00:00–24:00** range (`GRID_START_HOUR`/`GRID_END_HOUR`, widened from an
+  initial business-hours-only 07–20 window) inside its own fixed-height,
+  internally-scrolling frame — a sticky day/column header row stays pinned
+  to the top of an `overflow-auto` body as you scroll through the hours,
+  Google-Calendar-style, opening pre-scrolled to 07:00 (`DEFAULT_SCROLL_HOUR`)
+  rather than midnight. **The calendar's own outer frame is a fixed
+  viewport-driven size, not content-driven** — `Calendar.tsx`'s whole page
+  is `h-screen` + `overflow-hidden` (no page-level scroll at all), so the
+  calendar area always fills exactly what's left below the header/toolbar
+  regardless of which view is showing; switching Day ↔ Week ↔ Month never
+  changes the page's own layout dimensions, only what's inside that fixed
+  frame. The frame's bottom edge lands exactly `pb-3` (12px) above the
+  viewport bottom — there's no pre-existing "100vh minus header, 12px
+  margin" convention on the dental-chart page to match here (checked — that
+  page uses fixed per-card pixel heights, not viewport arithmetic), so this
+  is its own self-contained convention, not a port of an existing one.
+  **A past time slot can't be clicked to create an appointment**: clicking
+  one calls `onPastSlotClick` instead of opening the create modal, which
+  flashes a notice ("Za preteklost ni možno ustvariti termina.") inline in
+  the toolbar row itself (between the date heading and the search box, not
+  a row of its own) so it never pushes the calendar frame down, auto-
+  dismissing after 4s. Past time is also visually shaded (a faint tint) —
+  the whole column for an earlier day, just the portion above the red "now"
+  line for today.
+- **`AppointmentChip.tsx`**: solid therapist-color background (not a light
+  tint), patient name (bold) then time range then service, truncated;
+  falls back to a neutral grey (`NEUTRAL_COLOR`) when unassigned. Color
+  resolution differs by view since a Day column already *is* one
+  therapist (`column.accentColor`) but a Week/Month column is a day, not a
+  resource — those pass `resolveEventColor` instead, resolving each
+  appointment's own `therapistId` against a `therapistColorById` map built
+  in `Calendar.tsx`. **Month view's small chips get the same per-therapist
+  color too** (a small dot before the patient name) — this was a real gap
+  fixed after Day/Week already had it, since `MonthOverview.tsx`'s chips
+  originally rendered as a flat, uncolored grey pill.
+- **`TherapistPanel.tsx`** ("Terapevti:") — solid-color name chips in a
+  wrapping grid, not a checkbox+dot row; clicking a chip toggles that
+  therapist hidden (dimmed to 35% opacity) from the calendar. **Shown on
+  every view now (Day/Week/Month), not just Day** — and the hide-toggle now
+  actually filters Week's/Month's own appointment lists too
+  (`isTherapistVisible()` in `Calendar.tsx`), not just Day's per-therapist
+  columns, once the panel became visible everywhere. A "+" button opens a
+  small modal (name + a fixed 8-color palette, not a raw color picker) to
+  add a new therapist (`createTherapist`, `useTherapists.ts`) — editing or
+  deleting a therapist isn't built. **The "+" button is a small drawn SVG
+  cross, not a text "+" glyph** — a text glyph sits visibly off-center
+  inside a circular button in most fonts (its own glyph box isn't
+  vertically symmetric the way a drawn cross is); this was a real bug
+  Gregor caught and asked to be fixed. **The chip list is its own
+  `overflow-y-auto` region** (`min-h-0 flex-1`) inside the panel's fixed-
+  height frame, so a 13"-screen practice with many therapists scrolls
+  internally instead of spilling the whole panel (and the fixed-height
+  calendar frame beside it) past the screen. **The panel's own frame
+  stretches (`h-full`/`flex-1`) to reach exactly 12px above `MiniCalendar`**
+  sitting below it in the same sidebar column, per Gregor's explicit
+  request, rather than sizing to its own content and leaving a gap.
+- **`MiniCalendar.tsx`** — a small month-picker widget in the sidebar
+  (month navigation, Monday-first day grid, today/selected-day
+  highlighting), clicking a date jumps the main calendar there. Its own
+  frame sits at the bottom of the sidebar column (`mt-3` under
+  TherapistPanel's now-stretched frame), landing level with the main
+  calendar frame's own bottom edge — both exactly 12px off the viewport
+  bottom, via `items-stretch` on the shared row plus the `pb-3` on the page
+  container.
+- **`CalendarSearch.tsx`** — a persistent, always-visible search box
+  (not a click-to-expand icon) that searches patient names across **every**
+  date, not just the visible range (`useAppointmentSearch.ts` — client-side
+  filter over the already-loaded patient list, then an `.in(patientIds)`
+  appointments query with no date-range filter). Clicking a result jumps
+  the calendar to that date in Day view and opens the appointment for
+  editing.
+- **Create/edit modal (`AppointmentModal` in `Calendar.tsx`)** — one modal
+  for both: a patient search-and-pick control (plus an inline "+ Dodaj
+  novega pacienta" mini-form) on create, a fixed link to the patient's own
+  chart on edit (an appointment's patient isn't meant to change after the
+  fact). Date/time/duration, a free-text "Predvidena storitev", a therapist
+  `<select>` ("Neuvrščeno" as the null option), status, and notes.
+  - **The inline new-patient mini-form now also collects Telefon and
+    E-pošta** (both optional, same as Storitve's own form) alongside the
+    always-required Ime/Priimek/Datum rojstva — added per Gregor's explicit
+    request ("so staff can get in contact with the patient"), using the
+    exact same `react-phone-number-input`/`defaultCountry="SI"` component
+    and plain `.PhoneInput` CSS (`index.css`) as Storitve's own "+ Nov
+    pacient" form (see "Patient list" above), not a separate styling of its
+    own.
+  - **A new appointment can't be created in the past** — `handleSubmit`
+    compares the full `date`+`time` timestamp against `Date.now()` (not
+    just the date, so a past *time* on today's date is caught too) and
+    blocks with an inline form error if it's already passed; the date
+    `<input>` also gets `min={todayDateValue}` in create mode as a UX
+    nicety so the browser's own picker won't offer a past day outright.
+    **This guard is create-only, deliberately** — editing an existing
+    appointment must still allow a past date/time, since that's exactly how
+    a past visit gets marked "Opravljen"/"Ni se zglasil/-a" afterward;
+    blocking edits would break that.
+- **`calendarLayout.ts`**'s `layoutOverlappingEvents()` — a pure,
+  React-free column-packing function (sort by start time, cluster-sweep,
+  greedy lowest-free-column assignment) shared by Day/Week to lay
+  overlapping appointments side-by-side within whichever column
+  (therapist, or day) they belong to.
+- **View/weekend-visibility persistence** — Day/Week/Month and the "Prikaži
+  konce tedna" checkbox are written to `localStorage`
+  (`dentalChart.calendarView`/`dentalChart.calendarShowWeekends`) on every
+  change and read back on mount, per Gregor's explicit request that
+  reopening the calendar later start where the user left off rather than
+  always defaulting to Day. Per-browser, not a Supabase column — a UI
+  display preference, not practice data; wrapped in try/catch since
+  `localStorage` can throw (private browsing), silently falling back to
+  the plain defaults (`day`/`true`) either way.
+- **A real timezone bug, found and fixed**: `Calendar.tsx`'s own
+  `startOfWeekIso()`/`addDays()`/`addMonths()`/`todayIso()` used to build a
+  local-midnight `Date` and convert it back to a `"YYYY-MM-DD"` string via
+  `` d.toISOString().slice(0, 10) `` — but `toISOString()` converts to UTC
+  first, and Slovenia is UTC+1/+2, so local midnight always rolls back to
+  the *previous* calendar day in UTC. That single-day shift then compounded
+  every time `addDays()` re-parsed an already-shifted string as a fresh
+  local midnight and shifted it again — the practical symptom Gregor caught
+  live: Week view's whole 7-day range (and the appointment-range query
+  built from it) landed 1–2 days early, opening on a Saturday instead of
+  the intended Monday. **Fixed by switching to local-getter formatting**
+  (`` `${d.getFullYear()}-${...getMonth()+1...}-${...getDate()}` ``, a
+  `toDateIso()` helper) instead of the UTC round-trip — the same safe
+  pattern `MiniCalendar.tsx`/`MonthOverview.tsx` already used correctly, so
+  this was a case of one file not yet matching a convention already
+  established elsewhere. **`` .toISOString().slice(0, 10) `` on a
+  reconstructed local-midnight `Date` is the specific bug shape to never
+  reintroduce anywhere in this codebase** — `TimeGrid.tsx`'s own `todayIso()`
+  had a milder form of the same pattern (using `new Date()`, the current
+  moment, rather than a reconstructed midnight — only wrong in the local
+  00:00–02:00 window) and was fixed the same way while this was being
+  chased down; `useOpenVisit.ts` still has that same milder, narrow-window
+  form and hasn't been touched, since it's a much smaller blast radius and
+  wasn't the bug actually reported.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` was extended
+  (per its own comments) with `appointments`/`therapists` cross-account
+  checks symmetric to the existing `patients`/`visits`/`tooth_records`
+  ones — a second account can't spoof its `practice_id` onto either table
+  and can't see the first account's rows. Not re-run and reconfirmed as
+  part of this specific pass (this file only documents what's been
+  directly verified — don't assume a fresh pass count without actually
+  running it).
 
 ---
 
@@ -2638,8 +3268,8 @@ instead of going straight to `PatientChart`.
       restricted to M/F only, telefon/e-pošta/naslov+poštna
       št.+kraj/ZZZS health-card number all optional) — see "Patient list"
       above for the full feature, including why phone/address were built
-      the way they were. No patient-detail/edit view yet — these fields are
-      only ever entered once, at creation.
+      the way they were. Patient-detail/edit view now exists too (Frame 2
+      of the Patient Record page — see "Patient Record page" above).
 - [x] Patient chart page with full FDI dental chart — `PatientChart.tsx`
       renders the real `DentalChart` against a real chosen patient now,
       resolving/creating that patient's own visit via `useOpenVisit` (see
@@ -2668,26 +3298,35 @@ instead of going straight to `PatientChart`.
       multi-select toolbar layered on top); now saved to Supabase, same as
       every other status-setting path on this page
 - [x] Save tooth status to Supabase — built and confirmed working
-      (`useVisit.ts`, autosave on a 30s inactivity timer or immediately on
-      sign-out/back-to-list), including bridges and real dirty-tracking
-      (only actually-changed teeth get written, not every tooth with any
-      data) against a real, per-patient, resolved-or-created visit — see
-      "Visit lifecycle" above for exactly what's real vs. still not built
-      (closing a visit)
-- [ ] Visit history toggle (initial vs visit records) — not started; the
-      underlying data shape already supports a per-tooth chronological
-      history view for free (see "Visit lifecycle" above), but no UI reads
-      it yet
+      (`useVisit.ts`, autosave on a 30s inactivity timer, immediately on
+      sign-out/back-to-list, or a 30-minute inactivity safety net), including
+      bridges and real dirty-tracking (only actually-changed teeth get
+      written, not every tooth with any data) against a real, per-patient,
+      resolved-or-created visit that now actually closes too — see "Visit
+      lifecycle" above
+- [x] Visit history toggle (initial vs visit records) — built: a per-tooth
+      "Zgodovina" tab and a per-patient cross-tooth rollup (Frame 8), both
+      reading real Supabase data through one shared formatter — see "Visit
+      lifecycle" above
 - [ ] Basic print view (chart only, A4) — not started
 
 ## Out of Scope for Phase 1
 - eZdravje / ZZZS integration
 - Billing / invoicing
-- Appointment booking
+- ~~Appointment booking~~ — **built**, see "Native scheduling calendar
+  (Koledar)" above. A separate, unrelated Google-Calendar-*backed* public
+  booking widget also exists at
+  `C:\Users\Uporabnik\Documents\Claude code dental calendar` (embeddable on
+  the practice's own website) — the two remain independent projects, not
+  integrated or synced with each other in any way.
 - Mlečni zobje (primary teeth — 5x/6x/7x/8x series)
 - Periodontogram as separate full-screen view
 - SMS/email reminders
-- Multi-user / multi-dentist
+- Multiple staff logins *within* one practice — `practice_members`' schema
+  already supports it (a `role` column, a composite key allowing >1 member
+  per practice — see "Multi-tenancy" above), but no invite-flow UI exists.
+  **Multiple separate practices** (multi-tenancy) is a different concern
+  and IS built — see "Multi-tenancy" above; don't confuse the two.
 
 ---
 
@@ -2927,25 +3566,86 @@ next:
   list" above for the full feature, including the phone input (matched to
   the sibling "dental calendar" app's own `react-phone-number-input`
   usage) and the health-card number's 9-digit input constraint.
+- **Native scheduling calendar (Koledar) built** — a real Google-Calendar-
+  style Day/Week/Month calendar (`Calendar.tsx`), therapist resource
+  columns, a fixed-height 24-hour scrollable time grid, solid-color
+  status-badged appointment chips, cross-date patient search, inline
+  new-patient creation (now with phone/email), and past-appointment
+  prevention — migrations `013_add_appointments.sql`/
+  `014_add_therapists.sql` confirmed run. See "Native scheduling calendar
+  (Koledar)" above for the full feature, including a real timezone bug
+  (Week view opening on the wrong day) that was found and fixed along the
+  way.
 
-**Not started, roughly in the order they'll matter:**
-1. Closing a visit — nothing anywhere ever sets `visits.closed_at` yet;
-   the full lifecycle design in "Visit lifecycle" above (an
-   inactivity-timeout close, an explicit "leaving this workspace" close)
-   remains just a design
-2. "Zgodovina zdravljenja" (treatment history) tab — the data shape already
-   supports it for free (every `tooth_records` row for one tooth, across
-   visits, is that tooth's history — see "Visit lifecycle" above), but no
-   UI reads a tooth's older visits yet, only its latest one
-3. A patient-detail/edit view — phone/email/address/postal code/city/
-   health-card number are currently only ever entered once, at patient
-   creation; nothing lets you view or change them again afterward except
-   the list row's own phone number
-4. Print view
+**Not started:**
+1. Print view (chart only, A4)
+2. Everything past Phase 1: CRM features, invoicing, appointment
+   integration with the separate calendar app, staff-invite UI for
+   `practice_members`, self-serve practice signup — see "Multi-tenancy" and
+   "Out of Scope for Phase 1" above
 
 ---
 
-*Last updated: 2026-09-08 (patient list built — PatientList.tsx/
+*Last updated: 2026-09-17 (native scheduling calendar built and live — see
+"Native scheduling calendar (Koledar)" above for the full feature: a real
+Google-Calendar-style Day/Week/Month calendar on `appointments`/
+`therapists` tables (migrations 013/014, same multi-tenancy pattern as
+every other table), therapist resource columns in Day view, a fixed-height
+00:00-24:00 scrollable time grid whose own outer dimensions stay constant
+across all three views, solid-color status-badged appointment chips
+(tick/cross badges, dashed for "sent", cancelled no longer blurred per
+Gregor's explicit request), a persistent cross-date patient search, a
+sidebar Terapevti panel now shown on every view with its own scrollable
+overflow and its frame stretched to sit 12px above MiniCalendar, and
+inline new-patient creation (now collecting phone/email too, matching
+Storitve's own form). Past appointments can no longer be created — blocked
+both at slot-click (no modal opens, a toolbar-inline notice flashes
+instead) and at submit time (full timestamp compared against now, not just
+the date) — editing an already-past appointment is untouched, since that's
+how a past visit gets marked "Opravljen"/"Ni se zglasil/-a" afterward. A
+real timezone bug was found and fixed along the way:
+`` d.toISOString().slice(0, 10) `` on a reconstructed local-midnight `Date`
+rolls back a day for any UTC+ timezone (Slovenia always is), which
+compounded across every `addDays()` call built on it and landed Week
+view's whole range 1-2 days early — fixed by switching to local-getter
+date-string formatting, the same safe pattern `MiniCalendar.tsx`/
+`MonthOverview.tsx` already used. `AppNavShell.tsx` also gained a
+`onNavigateStoritve` prop so "Storitve" is clickable from `Calendar.tsx`
+too, symmetric to "Koledar" already being clickable everywhere else. This
+native calendar is a completely separate, unrelated thing from the
+external Google-Calendar-*backed* public booking widget documented at
+`C:\Users\Uporabnik\Documents\Claude code dental calendar` — don't conflate
+the two.)*
+
+*Previous entry: 2026-09-15 (multi-tenancy foundation built and confirmed
+live — see "Multi-tenancy" above for the full design: `practices`/
+`practice_members` tables, a `current_practice_id()` RLS helper, flat
+`practice_id` on every table with auto-stamp triggers on the three child
+tables, a signup-provisioning trigger on `auth.users`, and real
+per-practice RLS replacing the old "any authenticated user sees
+everything" policy. Verified against the live project with a throwaway
+second account: 7/7 isolation assertions passed
+(`scripts/verify-tenant-isolation.mjs`), plus a manual UI pass confirming
+each account only ever sees its own patients. Same day, earlier: the
+Patient Record page port confirmed live — `PatientChart.tsx`'s plain
+chart+toolbar layout replaced with the full 8-frame design (patient info,
+visit history, chart+toolbar+Storitve po zobeh, placeholder
+appointment/imaging/messaging frames), Frame 2 patient info and Frame 8
+visit history both wired to real data, `AppNavShell.tsx` extracted as a
+shared component; a layout regression (an extra title row silently adding
+~50px of height, invisible on a wide monitor but enough to cause vertical
+scroll on a 17"-class screen) was caught by comparing against the mockup
+and fixed. Also same day: visit closing fully implemented
+(`useOpenVisit`/`useVisit.ts`'s `closeVisit()`), closing the last gap in
+"Visit lifecycle" above; a critical load-query bug this depended on was
+caught and fixed before shipping (loading only the current visit's own
+rows would have made the chart appear to reset to blank on a patient's
+second visit); per-tooth and per-patient treatment history both built,
+sharing one formatter (`describeToothRecord.ts`) so they can't disagree.
+See "Visit lifecycle" and "Patient Record page" above for the full
+picture.)
+
+*Previous entry: 2026-09-08 (patient list built — PatientList.tsx/
 usePatients.ts, replacing the single hardcoded TEST_VISIT_ID; a new
 useOpenVisit(patientId) hook resolves/creates a real per-patient visit for
 PatientChart.tsx to load/save against, confirmed working. Patient record

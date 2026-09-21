@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
+import PhoneInput from 'react-phone-number-input';
+import 'react-phone-number-input/style.css';
 import { DentalChart } from '../components/chart/DentalChart';
 import { hidesSurfaceDetail } from '../components/chart/ToothTopView';
 import { samePerioPoint, type PerioPoint } from '../components/chart/perioStyle';
 import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../data/toothMeta';
 import { ToothDetailPanel } from '../components/ui/ToothDetailPanel';
 import { StatusToolbar } from '../components/ui/StatusToolbar';
+import { AppNavShell } from '../components/ui/AppNavShell';
+import { usePracticeContext } from '../contexts/PracticeContext';
 import { useOpenVisit } from '../hooks/useOpenVisit';
 import { useVisit } from '../hooks/useVisit';
+import { useToothHistory } from '../hooks/useToothHistory';
+import { usePatientHistory } from '../hooks/usePatientHistory';
+import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
+import { usePatients, type PatientListItem } from '../hooks/usePatients';
+import { describeToothRecord } from '../lib/describeToothRecord';
+import { APPOINTMENT_STATUS_META } from '../lib/appointmentStatus';
 import type { Surface, ToothStatus, EndoStage, PocketDepths, GumMargin, BleedingPoints } from '../types/dental';
 
 // Every quadrant's own FDI order, left-to-right as displayed — the same
@@ -38,27 +48,85 @@ const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
   'overlay_planned', 'overlay', 'overlay_existing',
 ];
 
+// ---------------------------------------------------------------------
+// Frame 3 (Rentgeni/Fotografije/SMS/E-pošta) placeholder data — per
+// Gregor's explicit choice, this stays exactly as fabricated as it was in
+// PatientPageMockup.tsx (no imaging/messaging backend exists — CLAUDE.md's
+// "Out of Scope for Phase 1"). Copied verbatim from that file rather than
+// referencing it, since the mockup stays a separate, independent dev-only
+// sandbox (same role StatusShowcase.tsx already plays) — not imported from
+// here. Frame 5's own appointment status/date/time is real now (see
+// useNextAppointment below) — only its unpaid-invoice panel
+// (MOCK_INVOICES) is still fabricated, since invoicing is separate,
+// out-of-scope work.
+// ---------------------------------------------------------------------
+// "Ni termina" has no equivalent in the real AppointmentStatus enum (see
+// useAppointments.ts) — it means "no appointment row exists at all," not a
+// status any row can hold. Kept as a small local addition to
+// APPOINTMENT_STATUS_META's shape rather than widening that shared type
+// with a value the database itself never stores.
+const NI_TERMINA_META = { label: 'Ni termina', pillClass: 'border-2 border-[#9CA3AF] bg-white text-[var(--ink,#1c2624)]' };
+
+const MOCK_INVOICES = [
+  { id: 'R-2026-014', date: '14. 3. 2026', storitev: 'Pregled + čiščenje', amount: 45, paid: false },
+  { id: 'R-2025-098', date: '2. 11. 2025', storitev: 'Zalitje fisur', amount: 30, paid: false },
+  { id: 'R-2025-072', date: '5. 8. 2025', storitev: 'Plomba', amount: 60, paid: true },
+];
+
+const MOCK_RTG_GALLERY = [
+  { date: '11. 10. 2026', opis: 'Panoramski posnetek (OPG)' },
+  { date: '3. 1. 2023', opis: 'Lokalni posnetek — zgornji desni kvadrant' },
+  { date: '22. 9. 2022', opis: 'Lokalni posnetek — implantat 21' },
+];
+
+const MOCK_PHOTOS = [
+  { date: '11. 10. 2026', opis: 'Pred posegom — zgornji lok' },
+  { date: '3. 1. 2023', opis: 'Most 13–15, po namestitvi' },
+];
+
+const MOCK_SMS = { date: '12. 10. 2026', text: 'Pozdravljeni, vaš termin je potrjen za 14. 3. 2026 ob 10:30. Lep pozdrav, Ordinacija Monika Goslar.' };
+
+const MOCK_EMAILS = [
+  { date: '12. 10. 2026', subject: 'Potrditev termina 14. 3. 2026', snippet: 'Pozdravljeni, obveščamo vas, da je vaš termin potrjen…' },
+  { date: '2. 1. 2023', subject: 'Napotnica za rentgensko slikanje', snippet: 'V prilogi vam pošiljamo napotnico za OPG posnetek…' },
+];
+
+// "1982-03-12" -> "12.3.1982" — day.month.year, no leading zeros.
+function formatSlovenianDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return iso;
+  return `${Number(d)}.${Number(m)}.${y}`;
+}
+
+const GENDER_LABELS: Record<string, string> = { M: 'Moški', F: 'Ženski', '': 'Neznano' };
+
+// Frame 2 field styling — deliberately NOT boxed (a bordered/padded input
+// is taller than a bare line of text), matching PatientPageMockup.tsx's
+// own approach exactly: edit-mode fields get only an underline (a
+// box-shadow, not a border, since a border adds to the element's own box
+// height) at the same font-size/line-height as the view-mode text.
+const FIELD_INPUT_CLASSES =
+  'w-full appearance-none border-0 bg-transparent px-0 py-0 text-base leading-6 text-[var(--ink,#1c2624)] shadow-[0_1px_0_0_var(--line,#ccd6d4)] focus:shadow-[0_1px_0_0_var(--accent,#2e6e62)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted,#6f7c79)]';
+const VIEW_LABEL_CLASSES = 'text-sm text-[var(--muted,#7e7e7d)]';
+const VIEW_VALUE_CLASSES = 'text-base text-[var(--ink,#1c2624)]';
+const PHONE_COMPACT_CSS = `
+  .ppm-phone-compact .PhoneInputInput { border: none; padding: 0; background: transparent; font-size: 1rem; line-height: 1.5rem; }
+  .ppm-phone-compact .PhoneInputCountryIcon { height: 1.1rem; }
+`;
+
 interface PatientChartProps {
   /** Which patient this chart belongs to — from PatientList.tsx's own selection. */
   patientId: string;
   /** Display label for the header ("Priimek Ime") — computed once in PatientList.tsx, not re-fetched here. */
   patientLabel: string;
+  /** The whole selected patient record — PatientList.tsx already has this in memory (usePatients()), so Frame 2 below can render real fields immediately with no extra fetch. */
+  patient: PatientListItem;
   /** Back to the patient list — flushes any pending edits first, same as onSignOut below. */
   onBack: () => void;
   onSignOut: () => void;
+  /** Wired to AppNavShell's "Koledar" button below. */
+  onNavigateCalendar: () => void;
 }
-
-// Real data now, loaded from Supabase — the hand-written SEED_SURFACES/
-// SEED_ENDO/SEED_POCKETS_*/SEED_GUM_MARGIN/SEED_BLEEDING_BUCCAL mock
-// constants that used to seed this page's local state are gone, and so is
-// the single hardcoded TEST_VISIT_ID this page used to load unconditionally
-// regardless of which patient was "selected" (there was no selection UI at
-// all). `useOpenVisit(patientId)` below resolves which real `visits.id` to
-// use (today's still-open visit for this patient, or a freshly created
-// one) before `useVisit` loads/saves against it. If that visit has no rows
-// yet, the chart simply opens blank, same as any other real (empty) visit
-// would — StatusShowcase.tsx keeps its own separate MOCK_* data for
-// read-only visual QA, untouched by any of this.
 
 // One chart target — a specific surface, or the whole tooth ('all').
 interface Target {
@@ -70,71 +138,43 @@ function sameTarget(a: Target, b: Target): boolean {
   return a.fdi === b.fdi && a.surface === b.surface;
 }
 
-// Page for entering findings on a real chart. Two ways to set a status,
-// both wired to the same underlying data so they can never disagree:
+// The real Patient Record page — ports PatientPageMockup.tsx's full
+// 8-frame layout onto this page's own real, Supabase-backed chart/
+// toolbar/detail-panel logic (unchanged from before this port). Sections
+// with no real backend yet (Frame 1's health banner, Frame 3's Rentgeni/
+// Fotografije/SMS/E-pošta, Frame 5's Podrobnosti termina) stay exactly as
+// fabricated placeholder content as they were in the mockup — building
+// real appointments/imaging/messaging is out of scope (CLAUDE.md's own
+// "Out of Scope for Phase 1"). Frame 2 (patient info) and Frame 8
+// (Pretekli termini) are real now — see their own sections below.
+//
+// Two ways to set a status, both wired to the same underlying data so
+// they can never disagree:
 //  1. Click a tooth → detail panel opens below → click a surface chip or
 //     "Cel zob" → inline picker → pick a status (ToothDetailPanel.tsx,
 //     unchanged from before — kept for notes editing and as a guided
-//     fallback).
+//     fallback, rendered separately below the frame grid, same as always).
 //  2. Click surfaces/whole teeth directly on the chart (Ctrl/Cmd+click to
 //     select several at once, Escape to clear), then pick a status in the
-//     always-visible StatusToolbar to apply it to the whole selection at
-//     once. (An earlier version also had a "pick a status first, lock it,
-//     then paint" mode — reverted per explicit feedback that it wasn't good
-//     UX: the "armed but not yet applied" state was too easy to miss, so a
-//     click on the chart appeared to silently do nothing. Select-then-apply
-//     only, going forward.) Applying a status/post/endo-stage/bridge no
-//     longer clears the selection afterward, per Monika's explicit
-//     request — crown, then post, then endo, all on the same selected
-//     tooth(teeth) without reselecting between each one. The selection
-//     only ever changes from an actual chart click (replace, or Ctrl/Cmd
-//     to extend) or explicitly clearing it (the toolbar's own button, or
-//     Escape) — see handleStatusClick's own comment for the fuller history.
-// Dental post (zobni zatiček) and endodontic treatment (kanal) are both set
-// from the same toolbar, presented as ordinary grid entries exactly like a
-// real status — see handleTogglePost/handleSetEndoStage below — even though
-// neither is one internally (ToothTopView.tsx's hasPost/endoStage are a
-// separate boolean/EndoStage, not part of SurfaceMap, since both need to
-// coexist with whatever status a tooth already has: a post commonly
-// supports an existing crown, and endo needs to coexist with e.g. a filling
-// — the exact gap that motivated pulling endo out of ToothStatus).
+//     always-visible StatusToolbar (now embedded in Frame 7's "Legenda"
+//     tab) to apply it to the whole selection at once.
 // Loads and saves against ONE real Supabase visit, resolved fresh for
 // `patientId` on every mount — see useOpenVisit.ts and useVisit.ts's own
 // comments for exactly what each does.
-export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: PatientChartProps) {
+export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
+  const { updatePatient } = usePatients();
+  const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   const {
     surfacesByFdi,
     setSurfacesByFdi,
     notesByFdi,
     setNotesByFdi,
-    // Dental post (zatiček) — a plain per-tooth boolean (ToothData.post),
-    // not a status: it can coexist with whatever else is going on for a
-    // tooth (commonly a crown or a completed root canal), so it's its own
-    // map rather than competing for the surfaces.all slot, same reasoning
-    // as sealant used to have before it turned out sealant/implant
-    // genuinely can't coexist — post has no such conflict (a post commonly
-    // SUPPORTS a crown, it doesn't compete with being one).
     postByFdi,
     setPostByFdi,
-    // Endodontic treatment (kanal) — also independent of SurfaceMap, same
-    // reasoning as post above: it needs to coexist with whatever status a
-    // tooth already has (a filling AND a completed root canal at once),
-    // which the old endo/endo_planned/endo_existing statuses couldn't do
-    // since they competed with every other status for the single
-    // surfaces.all slot. See EndoStage in types/dental.ts.
     endoByFdi,
     setEndoByFdi,
-    // Pocket depth (PD) and gum margin/recession (REC), plus bleeding on
-    // probing (BOP) — each point (mesial/mid/distal) is entered
-    // individually via click-to-focus + type-a-number
-    // (see handlePerioPointClick/applyPerioDigit below), not through
-    // StatusToolbar; this is a fundamentally different, much higher-volume
-    // entry flow (a full exam is ~200 individual numbers) that needed its
-    // own interaction design rather than reusing the status-picker
-    // pattern. Gum margin is buccal-only, per the app's existing "one
-    // gumline" simplification (see PerioGraphRow).
     pocketsBuccalByFdi,
     setPocketsBuccalByFdi,
     pocketsLingualByFdi,
@@ -145,20 +185,14 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     setBleedingBuccalByFdi,
     bleedingLingualByFdi,
     setBleedingLingualByFdi,
-    // Explicit fdi → bridge-group-id map, set only by handleCreateBridge
-    // below — see its own comment, and BridgeRow.tsx's findBridgeGroups,
-    // for why a bridge is no longer inferred from adjacent crown/implant/
-    // bridge_pontic statuses on its own (that used to silently weld a
-    // newly-pontic'd tooth to an unrelated neighboring implant/crown). Now
-    // persisted the same way as every other field here — see useVisit.ts's
-    // own comment.
     bridgeGroupByFdi,
     setBridgeGroupByFdi,
     loading,
     loadError,
     saveStatus,
     flush,
-  } = useVisit(visitId);
+    closeVisit,
+  } = useVisit(patientId, visitId);
 
   // Which single probing point is currently focused for keyboard entry, if
   // any — see PerioPoint (perioStyle.ts). Mutually exclusive with `selection`
@@ -167,64 +201,146 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
   const [focusedPerioPoint, setFocusedPerioPoint] = useState<PerioPoint | null>(null);
 
   const [selection, setSelection] = useState<Target[]>([]);
-  // Why the last "Člen mostu" click didn't create a bridge, if it didn't —
-  // handleCreateBridge below used to fail these checks completely
-  // silently (matching handleTogglePost/handleSetEndoStage's own
-  // harmless-no-op-on-empty-selection convention), but a bridge attempt
-  // failing for a REASON — no anchor in the selection, or only one tooth
-  // actually got selected because the second click wasn't a Ctrl/Cmd+click
-  // and silently replaced the first — needs to say so, or it just reads as
-  // "nothing happened, is this broken?" per Monika's own report. Cleared on
-  // the next chart click/selection change (handleTargetClick) and on a
-  // successful bridge creation, so a stale message never lingers. Rendered
-  // by `StatusToolbar` itself (right above the status grid, next to the
-  // "Člen mostu" button that triggered it) rather than up in the page
-  // header — a first version put it there, which Monika still read as
-  // "nothing happens," since it sits far from where you're actually
-  // looking right after clicking the toolbar.
   const [bridgeMessage, setBridgeMessage] = useState<string | null>(null);
 
+  // Frame 7: "Legenda" (holding the clickable status toolbar) is the
+  // first/default tab.
+  const [activeTab, setActiveTab] = useState<'legenda' | 'storitve'>('legenda');
+
+  // ---- Frame 2: patient info — REAL, per Gregor's explicit request
+  // (including two fields with no prior column, added via migration
+  // 010_add_patient_care_fields.sql: assignedDentist/internalRecordNumber
+  // — neither hardcoded). Local editable copy seeded from the `patient`
+  // prop, same edit/view toggle shape PatientPageMockup.tsx already
+  // established; "Shrani" calls updatePatient() for real instead of just
+  // flipping editMode off.
+  const [editMode, setEditMode] = useState(false);
+  const [patientDraft, setPatientDraft] = useState(patient);
+  const [savingPatient, setSavingPatient] = useState(false);
+  const [patientSaveError, setPatientSaveError] = useState<string | null>(null);
+  function updatePatientDraft<K extends keyof PatientListItem>(key: K, value: PatientListItem[K]) {
+    setPatientDraft((prev) => ({ ...prev, [key]: value }));
+  }
+  async function handleSavePatientInfo() {
+    setSavingPatient(true);
+    setPatientSaveError(null);
+    const result = await updatePatient(patientId, {
+      firstName: patientDraft.firstName,
+      lastName: patientDraft.lastName,
+      dob: patientDraft.dob,
+      sex: patientDraft.sex,
+      phone: patientDraft.phone ?? null,
+      email: patientDraft.email ?? null,
+      address: patientDraft.address ?? null,
+      postalCode: patientDraft.postalCode ?? null,
+      city: patientDraft.city ?? null,
+      healthCardNumber: patientDraft.healthCardNumber ?? null,
+      assignedDentist: patientDraft.assignedDentist ?? null,
+      internalRecordNumber: patientDraft.internalRecordNumber ?? null,
+    });
+    setSavingPatient(false);
+    if ('error' in result) {
+      setPatientSaveError(result.error);
+      return;
+    }
+    setPatientDraft(result.patient);
+    setEditMode(false);
+  }
+  // Notes: its own submit flow, independent of the Edit toggle above —
+  // still local-only (no patient-level notes-log table exists yet, same
+  // gap the mockup's own version had — see the plan history for this
+  // port). Starts empty every session; nothing here persists across a
+  // reload, unlike every other field on this card.
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteLog, setNoteLog] = useState<{ date: string; text: string }[]>([]);
+  function handleSubmitNote() {
+    const text = noteDraft.trim();
+    if (!text) return;
+    setNoteLog((prev) => [{ date: new Date().toLocaleDateString('sl-SI'), text }, ...prev]);
+    setNoteDraft('');
+  }
+
+  // ---- Frame 3 placeholder local state — copied verbatim from
+  // PatientPageMockup.tsx, per Gregor's explicit choice to keep this
+  // section fabricated (no real imaging/messaging backend). The
+  // invoice panel below it is likewise still fabricated (invoicing is
+  // separate, out-of-scope work) even though the rest of Frame 5 is real.
+  const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
+  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sms' | 'eposta'>('rentgeni');
+  const [rtgGalleryOpen, setRtgGalleryOpen] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<(typeof MOCK_INVOICES)[number] | null>(null);
+  const unpaidInvoices = MOCK_INVOICES.filter((inv) => !inv.paid);
+  const totalUnpaid = unpaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+
+  // ---- Frame 5: real appointment data (supabase/migrations/
+  // 013_add_appointments.sql) — one modal handles both "Naroči naslednji
+  // termin" (no appointment.appointment yet) and "Prestavi termin"
+  // (rescheduling the existing one), since scheduleAppointment() already
+  // does the right thing for either case.
+  const { appointment: nextAppointment, scheduleAppointment } = useNextAppointment(patientId);
+  const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
+  const [appointmentModalError, setAppointmentModalError] = useState<string | null>(null);
+  const [appointmentModalSaving, setAppointmentModalSaving] = useState(false);
+  const [appointmentDate, setAppointmentDate] = useState('');
+  const [appointmentTime, setAppointmentTime] = useState('09:00');
+  const [appointmentDuration, setAppointmentDuration] = useState(30);
+  const [appointmentService, setAppointmentService] = useState('');
+  const [appointmentStatus, setAppointmentStatus] = useState<AppointmentStatus>('scheduled');
+
+  function openAppointmentModal() {
+    if (nextAppointment) {
+      const starts = new Date(nextAppointment.startsAt);
+      setAppointmentDate(
+        `${starts.getFullYear()}-${String(starts.getMonth() + 1).padStart(2, '0')}-${String(starts.getDate()).padStart(2, '0')}`
+      );
+      setAppointmentTime(`${String(starts.getHours()).padStart(2, '0')}:${String(starts.getMinutes()).padStart(2, '0')}`);
+      setAppointmentDuration(Math.round((new Date(nextAppointment.endsAt).getTime() - starts.getTime()) / 60000));
+      setAppointmentService(nextAppointment.service ?? '');
+      setAppointmentStatus(nextAppointment.status);
+    } else {
+      const today = new Date();
+      setAppointmentDate(
+        `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+      );
+      setAppointmentTime('09:00');
+      setAppointmentDuration(30);
+      setAppointmentService('');
+      setAppointmentStatus('scheduled');
+    }
+    setAppointmentModalError(null);
+    setAppointmentModalOpen(true);
+  }
+
+  async function handleSaveAppointment() {
+    setAppointmentModalSaving(true);
+    setAppointmentModalError(null);
+    const startsAt = new Date(`${appointmentDate}T${appointmentTime}`).toISOString();
+    const endsAt = new Date(new Date(`${appointmentDate}T${appointmentTime}`).getTime() + appointmentDuration * 60000).toISOString();
+    const result = await scheduleAppointment({
+      startsAt,
+      endsAt,
+      service: appointmentService.trim() || undefined,
+      status: appointmentStatus,
+    });
+    setAppointmentModalSaving(false);
+    if ('error' in result) {
+      setAppointmentModalError(result.error);
+      return;
+    }
+    setAppointmentModalOpen(false);
+  }
+
+  // ---- Frame 8: real cross-tooth visit rollup (usePatientHistory.ts) —
+  // replaces PatientPageMockup.tsx's fabricated MOCK_VISIT_HISTORY.
+  const { entries: patientHistoryEntries } = usePatientHistory(patientId);
+
   // Statuses that need to land on the whole tooth (`surfaces.all`) no
-  // matter which individual surface was actually clicked to apply them.
-  // Two different reasons put a status here:
-  //  - hidesSurfaceDetail()'s own set (crown, implant, missing, extracted,
-  //    prosthesis_crown, bridge_pontic, prosthesis, impacted) — these skip
-  //    per-surface rendering ENTIRELY (ToothTopView.tsx's skipSubdivision),
-  //    so a per-surface apply either paints nothing visible or — worse —
-  //    just that one triangle in the status's flat color, "half a crown."
-  //  - WHOLE_TOOTH_MARKER_STATUSES below — `abrasion`, and (per Monika's
-  //    explicit follow-up, same report extended to these two once she saw
-  //    the parallel) the sealant and overlay triples. All seven share the
-  //    same underlying bug: their own mark is drawn from `surfaces.all`
-  //    directly — abrasion via `wholeToothStatus` (anterior) or the
-  //    resolved OCCLUSAL surface specifically (posterior) in
-  //    ToothTopView.tsx/ToothSideView.tsx; sealant's tilde and overlay's
-  //    "[" cap via `statuses[fdi]` in BridgeRow.tsx, which ArchRow.tsx
-  //    only ever populates from `surfaces.all` (never a per-surface
-  //    override) — never any OTHER individual surface, so clicking e.g. a
-  //    mesial/distal/buccal/lingual zone and picking one of these had no
-  //    visible effect at all. Unlike hidesSurfaceDetail()'s own group,
-  //    none of these seven hide the tooth's other per-surface detail — the
-  //    triangles/occlusal rectangle still render (abrasion just leaves
-  //    them unfilled; sealant/overlay don't touch them at all, per their
-  //    own `fill: 'none'`/no-symbol STATUS_STYLES entries), and a
-  //    DIFFERENT surface set independently afterward — caries on one
-  //    specific zone, say — still shows normally. That's why they're
-  //    handled here rather than folded into hidesSurfaceDetail() itself,
-  //    which ToothDetailPanel.tsx also reads for a "per-surface changes
-  //    won't be visible" warning that would be wrong for all seven —
-  //    other surfaces' own changes DO stay visible.
+  // matter which individual surface was actually clicked to apply them —
+  // see hidesSurfaceDetail()/WHOLE_TOOTH_MARKER_STATUSES.
   function redirectsSurfaceEditToWholeTooth(status: ToothStatus): boolean {
     return WHOLE_TOOTH_MARKER_STATUSES.includes(status) || hidesSurfaceDetail(status);
   }
 
-  // Merges — touches only the one surface, leaving `all` and every other
-  // surface untouched, UNLESS redirectsSurfaceEditToWholeTooth() says this
-  // particular status needs the whole tooth instead (see its own comment
-  // above) — regardless of which specific surface was clicked/selected.
-  // Single choke point: both the direct-click-selection flow
-  // (applyStatusToTarget, below) and ToothDetailPanel.tsx's own per-surface
-  // chip flow call this same function, so both are fixed by the one check.
   function handleSurfaceStatusChange(fdi: string, surface: Surface, status: ToothStatus) {
     if (redirectsSurfaceEditToWholeTooth(status)) {
       handleWholeToothStatusChange(fdi, status);
@@ -233,9 +349,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     setSurfacesByFdi((prev) => ({ ...prev, [fdi]: { ...prev[fdi], [surface]: status } }));
   }
 
-  // Replaces — clears any per-surface overrides so the chart can't show a
-  // stale surface finding contradicting the status just picked for the
-  // whole tooth.
   function handleWholeToothStatusChange(fdi: string, status: ToothStatus) {
     setSurfacesByFdi((prev) => ({ ...prev, [fdi]: { all: status } }));
   }
@@ -249,26 +362,10 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     return selection.some((t) => sameTarget(t, { fdi, surface }));
   }
 
-  // Coarser than isTargetSelected above: true if ANY target belonging to
-  // this tooth is selected, regardless of which specific surface — drives
-  // the tloris square's own outline (TlorisRow.tsx) and the FDI number's
-  // highlight (NumberRow.tsx) so both always agree on "which tooth are we
-  // currently working on," not just the fine-grained per-zone overlay.
-  // Previously the tloris square's outline was driven by a separate,
-  // older `selectedFdi` (only ever updated by clicking inside the square
-  // itself, not the number below it), so clicking the number could select
-  // a new tooth for the toolbar while the *previous* tooth's square stayed
-  // outlined — exactly this desync, fixed by having both read the same
-  // `selection` state instead of two independent ones.
   function isFdiSelected(fdi: string): boolean {
     return selection.some((t) => t.fdi === fdi);
   }
 
-  // Fired by every surface zone, occlusal rectangle, whole-tooth
-  // square/circle, and FDI-number click across the whole chart (threaded
-  // through DentalChart → ArchRow → TlorisRow/NumberRow → ToothTopView).
-  // Plain click replaces the selection with just this target; Ctrl/Cmd (or
-  // Shift) + click toggles it in/out of the existing selection.
   function handleTargetClick(fdi: string, surface: Surface | 'all', e: MouseEvent) {
     const target: Target = { fdi, surface };
     const extend = e.ctrlKey || e.metaKey || e.shiftKey;
@@ -279,38 +376,10 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
       }
       return [target];
     });
-    // Applying a status and entering a perio number are two separate
-    // interaction modes — starting one exits the other cleanly, same
-    // reasoning as handlePerioPointClick clearing `selection` below.
     setFocusedPerioPoint(null);
-    // A fresh chart click starts a new attempt — any leftover explanation
-    // from a previous failed "Člen mostu" click no longer applies to it.
     setBridgeMessage(null);
   }
 
-  // Fired by clicking a status in StatusToolbar — only meaningful with an
-  // active selection (the toolbar disables the grid otherwise). `bridge_pontic`
-  // is special-cased to handleCreateBridge below rather than falling through
-  // to the generic apply-to-every-selected-target path every other status
-  // uses: that generic path would silently overwrite an anchor tooth's own
-  // crown/implant status to bridge_pontic if it happened to be part of the
-  // selection, and leave BridgeRow to guess bracket placement from whatever
-  // statuses ended up adjacent afterward — see BridgeRow.tsx's own history
-  // comment for the bugs that produced.
-  //
-  // Deliberately does NOT clear `selection` afterward — per Monika's
-  // explicit request: apply crown to tooth 21, then (still selected, no
-  // reselecting) toggle the dental post on it too, all without re-clicking
-  // the tooth in between. The selection now only ever changes from an
-  // actual chart click (handleTargetClick, which replaces or Ctrl/Cmd-
-  // extends it) or the explicit "Prekliči izbiro" button/Escape
-  // (handleClearSelection) — never as a side effect of applying a service.
-  // This used to clear the selection on every apply, matching
-  // handleTogglePost/handleSetEndoStage's own (also since-removed)
-  // clearing below, on the reasoning that "uniform treatment end to end"
-  // meant clearing everywhere — reversed once it turned out that uniformity
-  // was exactly what made applying several services to the same tooth
-  // tedious (reselect after every single one).
   function handleStatusClick(status: ToothStatus) {
     if (selection.length === 0) return;
     if (status === 'bridge_pontic') {
@@ -320,45 +389,14 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     selection.forEach((target) => applyStatusToTarget(target, status));
   }
 
-  // Forming a bridge is a deliberate act, not something inferred after the
-  // fact: select an existing anchor tooth (already `crown` or `implant`)
-  // together with the teeth it should support, then click "Člen mostu" —
-  // per Monika's explicit request, replacing the earlier purely
-  // status-driven bracket detection in BridgeRow.tsx (see its own history
-  // comment). "The implant/crown needs to exist first" — clicking "Člen
-  // mostu" on a selection that doesn't satisfy that (or any of the other
-  // checks below) creates no bridge, but unlike every other toolbar action's
-  // own silent no-op on an empty selection (handleTogglePost/
-  // handleSetEndoStage), each failure here sets a specific `bridgeMessage`
-  // explaining why — Monika hit exactly this with no feedback at all
-  // ("nothing happens") when a plain second click had silently replaced
-  // the first tooth's selection instead of adding to it, the single most
-  // likely way to land here with fewer teeth selected than intended.
   function handleCreateBridge() {
     const fdis = [...new Set(selection.map((t) => t.fdi))];
-    // Same as handleStatusClick above: the selection stays untouched, on
-    // success or failure alike, so the just-anchored teeth are still
-    // selected afterward for whatever service comes next (a post on the
-    // anchor, say) — see handleStatusClick's own comment for the fuller
-    // reasoning.
     if (fdis.length < 2) {
-      // The single most common way to land here: clicking a second tooth
-      // without holding Ctrl/Cmd (or Shift) doesn't ADD it to the
-      // selection, it REPLACES the first tooth's selection with just the
-      // second one — so "I selected 21 and 22 together" can easily mean
-      // the selection actually only ever held one of them by the time
-      // this fired. Spelled out explicitly rather than left as a silent
-      // no-op, since this exact confusion is what prompted this message
-      // to exist at all.
       setBridgeMessage(
         'Za most izberite vsaj dva zoba skupaj — pridržite Ctrl (ali Cmd na Macu) med klikom na drugi zob, da ostane izbran tudi prvi.'
       );
       return;
     }
-    // A bridge CAN cross the midline into the arch's other quadrant (e.g.
-    // 44 all the way to 31 — per Monika's explicit correction; see
-    // ARCHES above and BridgeRow.tsx's own crossesToPrev/crossesToNext),
-    // but never between the upper and lower arch — that isn't a bridge.
     const arch = ARCHES.find((a) => fdis.every((fdi) => a.includes(fdi)));
     if (!arch) {
       setBridgeMessage('Izbrani zobje morajo biti v isti čeljusti (zgornji ali spodnji).');
@@ -369,17 +407,9 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
       return status === 'crown' || status === 'implant';
     });
     if (anchors.length === 0) {
-      // "The implant/crown needs to exist first" — nothing to attach a
-      // bridge to without one already in the selection.
       setBridgeMessage('Izbira mora vsebovati zob, ki že ima prevleko ali implantat — most se pripne nanj.');
       return;
     }
-    // A bridge with two anchors must be anchored on the SAME type at both
-    // ends — both crown, or both implant, never one of each — per Monika's
-    // explicit clinical correction ("fixing bridge on crown on one side and
-    // implant on the other is a professional mistake"). Only meaningful
-    // once there are 2+ anchors in the selection; a single-anchor
-    // (cantilever) bridge has nothing to mismatch against.
     const anchorTypes = new Set(anchors.map((fdi) => surfacesByFdi[fdi]?.all));
     if (anchorTypes.size > 1) {
       setBridgeMessage('Oba sidra mostu morata biti istega tipa — obe prevleki ali oba implantata, ne kombinacija.');
@@ -390,9 +420,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
       setBridgeMessage('Poleg prevleke/implantata izberite še vsaj en zob, ki naj postane člen mostu.');
       return;
     }
-    // Anchor teeth keep whatever status they already have (crown/implant,
-    // untouched) — only the other, newly-selected teeth become the
-    // bridge's pontics.
     setBridgeMessage(null);
     setSurfacesByFdi((prev) => {
       const next = { ...prev };
@@ -412,16 +439,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     setBridgeMessage(null);
   }
 
-  // Dental post (zobni zatiček) is presented as one entry in StatusToolbar,
-  // same as a real status — per Monika's explicit request, not a separate
-  // add/remove pair. One click toggles it for every distinct TOOTH
-  // represented in the current selection (regardless of which specific
-  // surface(s) were clicked to select it — post is a whole-tooth
-  // attribute): on if any of them currently lack it, off only once all of
-  // them already have it. Leaves the selection untouched afterward, same as
-  // handleStatusClick above — per Monika's explicit request, so e.g.
-  // applying crown to tooth 21 and then toggling its post doesn't require
-  // reselecting 21 in between.
   function handleTogglePost() {
     const fdis = [...new Set(selection.map((t) => t.fdi))];
     if (fdis.length === 0) return;
@@ -433,16 +450,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     });
   }
 
-  // Endodontic treatment (kanal) — same uniform-grid-entry, whole-tooth
-  // treatment as handleTogglePost above, generalized from a boolean to a
-  // tri-state EndoStage: sets `stage` for every distinct tooth in the
-  // current selection if any of them don't already have exactly that
-  // stage, clears it for all of them if they already do (so clicking the
-  // same stage again on an already-matching selection toggles it off,
-  // mirroring post's own on/off behavior). Independent of surfacesByFdi —
-  // this is exactly what lets endo coexist with a filling/crown/caries/etc.
-  // on the same tooth, the whole point of pulling it out of ToothStatus.
-  // Leaves the selection untouched afterward, same as handleTogglePost.
   function handleSetEndoStage(stage: EndoStage) {
     const fdis = [...new Set(selection.map((t) => t.fdi))];
     if (fdis.length === 0) return;
@@ -457,18 +464,10 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     });
   }
 
-  // Finds the quadrant array a given fdi belongs to — used only to walk
-  // "the next point" during perio entry.
   function quadrantOf(fdi: string): readonly string[] | undefined {
     return QUADRANTS.find((q) => q.includes(fdi));
   }
 
-  // Where focus goes after typing a digit — mesial → mid → distal, then the
-  // next tooth's mesial point, walking the SAME quadrant + surface/kind the
-  // current point belongs to. Deliberately stops at the end of a quadrant's
-  // row (returns null) rather than crossing into a sibling row (PD buccal →
-  // PD lingual, or across arches) — keeps this logic in one place without
-  // new cross-component wiring; a fresh click starts the next row.
   function advancePerioPoint(point: PerioPoint): PerioPoint | null {
     if (point.index < 2) return { ...point, index: (point.index + 1) as 0 | 1 | 2 };
     const quadrant = quadrantOf(point.fdi);
@@ -477,15 +476,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     return point.kind === 'pocket' ? { kind: 'pocket', fdi: nextFdi, surface: point.surface, index: 0 } : { kind: 'gum', fdi: nextFdi, index: 0 };
   }
 
-  // Bleeding on probing (BOP) — flips the flag at one specific pocket-depth
-  // point in place, independent of its depth value. Fired both by clicking
-  // an already-focused point again (see handlePerioPointClick) and by
-  // Shift+digit while typing (see applyPerioDigit) — both call this exact
-  // same function, so the two mechanisms can never disagree. Wrapped in
-  // useCallback (as are toggleGumSign/applyPerioDigit below) purely so the
-  // keydown effect further down can list applyPerioDigit in its own
-  // dependency array without that effect re-subscribing on every render —
-  // the underlying logic is unchanged.
   const toggleBleeding = useCallback(
     (point: Extract<PerioPoint, { kind: 'pocket' }>) => {
       const setter = point.surface === 'buccal' ? setBleedingBuccalByFdi : setBleedingLingualByFdi;
@@ -499,10 +489,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     [setBleedingBuccalByFdi, setBleedingLingualByFdi]
   );
 
-  // Recession-vs-overgrowth sign — the gum-margin equivalent of
-  // toggleBleeding above, flipping the sign of whatever value is already at
-  // that point in place. A no-op on a point with no value yet (nothing to
-  // flip the sign of before a digit's been typed there at all).
   const toggleGumSign = useCallback(
     (point: Extract<PerioPoint, { kind: 'gum' }>) => {
       setGumMarginByFdi((prev) => {
@@ -516,16 +502,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     [setGumMarginByFdi]
   );
 
-  // Click on a chart probing point — same target clicked twice in a row
-  // (still focused from the first click) toggles its secondary flag (BOP
-  // for a pocket-depth point, sign for a gum-margin point) in place, since
-  // there's no room at this scale for a separate always-visible toggle
-  // control next to every point (see CLAUDE.md's own BOP-as-ring-color
-  // reasoning). A different (or not-yet-focused) point just focuses it,
-  // ready for a digit to be typed. Also clears any active status
-  // `selection` — entering numbers and painting statuses are two separate
-  // modes, so starting one exits the other (mirrored by handleTargetClick
-  // clearing `focusedPerioPoint` on its own side).
   function handlePerioPointClick(point: PerioPoint) {
     setSelection([]);
     if (samePerioPoint(focusedPerioPoint, point)) {
@@ -536,15 +512,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     setFocusedPerioPoint(point);
   }
 
-  // Sets one digit at the focused point, then advances focus — the actual
-  // keystroke handler (below) calls this. Single digit only for now: real
-  // probing depths are almost always single-digit, and the visible circle
-  // only has room for one character anyway; a two-digit UI is future work,
-  // not a data-model change (PocketDepths/GumMargin already hold plain
-  // numbers). Holding Shift toggles the same secondary flag
-  // toggleBleeding/toggleGumSign do, as a one-keystroke shortcut — a plain
-  // digit never touches that flag, so correcting a depth later never
-  // silently un-marks a point that was already flagged.
   const applyPerioDigit = useCallback(
     (point: PerioPoint, digit: number, shiftHeld: boolean) => {
       if (point.kind === 'pocket') {
@@ -560,10 +527,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
         setGumMarginByFdi((prev) => {
           const cur = prev[point.fdi] ?? [null, null, null];
           const priorValue = cur[point.index];
-          // Preserve whatever sign this point already had; a brand-new point
-          // defaults to negative (recession — the common clinical case, and
-          // what the REC label already assumes when it shows a plain
-          // magnitude with no sign).
           const priorSign = priorValue != null && priorValue > 0 ? 1 : -1;
           const next = [...cur] as GumMargin;
           next[point.index] = priorSign * digit;
@@ -575,12 +538,6 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     [setPocketsBuccalByFdi, setPocketsLingualByFdi, toggleBleeding, setGumMarginByFdi, toggleGumSign]
   );
 
-  // Escape clears the selection (and any focused perio point) — guarded so
-  // pressing it inside the notes textarea (or any other input) doesn't also
-  // clear a chart selection the user isn't even looking at. A focused perio
-  // point additionally intercepts plain digit keys (0–9) to fill that point
-  // and auto-advance — same text-input guard applies, so typing a patient's
-  // notes never gets mistaken for perio entry.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const tag = (document.activeElement as HTMLElement | null)?.tagName;
@@ -599,25 +556,8 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-    // applyPerioDigit is a plain function redefined every render, but it
-    // only ever closes over React's own setState setters (stable across
-    // renders) plus its own arguments — nothing it reads can go stale — so
-    // listing it here just re-attaches this listener on every render
-    // rather than fixing a real bug; still the correct, lint-satisfying
-    // fix (its own suggested one) over leaving it out.
   }, [focusedPerioPoint, applyPerioDigit]);
 
-  // Autosave: flush to Supabase ~30s after the LAST change, not 30s after
-  // the first — per Monika's explicit request that saving happen once
-  // things settle down, not fragment one sitting into many saves, and that
-  // clicking the wrong service leaves a window to fix it before anything
-  // commits. Every relevant state map in the dependency array resets this
-  // effect's own timer on any change, restarting the wait — the effect's
-  // cleanup (returned below) is what cancels the PREVIOUS timer each time,
-  // the standard React debounce-via-effect pattern. See useVisit.ts's own
-  // flush() for exactly what gets written — real dirty-tracking now, only
-  // the teeth that actually changed since the last save, not every tooth
-  // with any data at all.
   useEffect(() => {
     const timer = setTimeout(() => {
       flush();
@@ -637,17 +577,38 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     flush,
   ]);
 
-  // The other save triggers, alongside the 30s timer above: leaving the
-  // workspace entirely, either back to the patient list or all the way out
-  // via sign-out. Both flush immediately — don't wait for the timer — so
-  // switching patients (or signing out) never leaves the last few seconds
-  // of work stranded only in memory.
+  useEffect(() => {
+    const timer = setTimeout(
+      async () => {
+        await flush();
+        await closeVisit();
+      },
+      30 * 60 * 1000
+    );
+    return () => clearTimeout(timer);
+  }, [
+    surfacesByFdi,
+    postByFdi,
+    endoByFdi,
+    pocketsBuccalByFdi,
+    pocketsLingualByFdi,
+    gumMarginByFdi,
+    bleedingBuccalByFdi,
+    bleedingLingualByFdi,
+    notesByFdi,
+    bridgeGroupByFdi,
+    flush,
+    closeVisit,
+  ]);
+
   async function handleBackClick() {
     await flush();
+    await closeVisit();
     onBack();
   }
   async function handleSignOutClick() {
     await flush();
+    await closeVisit();
     onSignOut();
   }
 
@@ -661,86 +622,741 @@ export function PatientChart({ patientId, patientLabel, onBack, onSignOut }: Pat
     return <p className="p-6 text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {loadError}</p>;
   }
 
+  // ---- Shared frame content, rendered at two different responsive
+  // positions below 1400px vs. >=1400px — same sharing pattern
+  // PatientPageMockup.tsx established (appointmentCardContent/
+  // visitHistoryContent/rentgeniCardContent), so each frame's actual
+  // markup exists once, not as two independently-maintained copies.
+  const appointmentCardContent = (
+    <>
+      <h2 className="mb-3 text-lg font-bold text-[var(--ink,#1c2624)]">Podrobnosti termina</h2>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-1 flex-col items-start gap-2">
+          <span
+            className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${
+              nextAppointment ? APPOINTMENT_STATUS_META[nextAppointment.status].pillClass : NI_TERMINA_META.pillClass
+            }`}
+          >
+            {nextAppointment ? APPOINTMENT_STATUS_META[nextAppointment.status].label : NI_TERMINA_META.label}
+          </span>
+          <button
+            type="button"
+            onClick={openAppointmentModal}
+            className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          >
+            {nextAppointment ? 'Prestavi termin' : 'Naroči naslednji termin'}
+          </button>
+          {nextAppointment && (
+            <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
+              <span>Datum: {formatSlovenianDate(nextAppointment.startsAt.slice(0, 10))}</span>
+              <span>Ura: {new Date(nextAppointment.startsAt).toLocaleTimeString('sl-SI', { hour: '2-digit', minute: '2-digit' })}</span>
+              {nextAppointment.service && <span>Predvidena storitev: {nextAppointment.service}</span>}
+            </div>
+          )}
+        </div>
+        <div className="flex w-[150px] flex-none flex-col gap-1.5">
+          {unpaidInvoices.length > 0 ? (
+            <>
+              <span className="w-fit rounded-full bg-[#e0231c] px-3 py-1 text-xs font-semibold text-white">
+                Neplačani račun
+              </span>
+              <ul className="flex flex-col gap-1">
+                {unpaidInvoices.map((inv) => (
+                  <li key={inv.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvoice(inv)}
+                      className="w-full rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+                    >
+                      <div className="font-medium">{inv.date}</div>
+                      <div className="text-[var(--muted,#6f7c79)]">{inv.amount.toFixed(2)} €</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <span className="mt-1 text-xs font-semibold text-[var(--ink,#1c2624)]">
+                Skupaj: {totalUnpaid.toFixed(2)} €
+              </span>
+            </>
+          ) : (
+            <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
+              Računi plačani
+            </span>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  // Frame 8 — real cross-tooth rollup (usePatientHistory above).
+  const visitHistoryContent = (
+    <>
+      <h2 className="mb-3 flex-none text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
+      <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+        {patientHistoryEntries.length === 0 && (
+          <li className="text-sm italic text-[var(--muted,#6f7c79)]">Za tega pacienta še ni zabeležene zgodovine.</li>
+        )}
+        {patientHistoryEntries.map((visit) => (
+          <li key={visit.visitId} className="flex-none rounded-md bg-[#e7e7e7] p-3">
+            <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{formatSlovenianDate(visit.date)}</span>
+            <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
+              {visit.items.map((item, j) => (
+                <li key={j}>• {item}</li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+
+  const rentgeniCardContent = (
+    <>
+      <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
+        <div className="flex gap-1">
+          {(
+            [
+              ['rentgeni', 'Rentgeni'],
+              ['fotografije', 'Fotografije'],
+              ['sms', 'SMS'],
+              ['eposta', 'E-pošta'],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setInfoTab(key)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                infoTab === key
+                  ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
+                  : 'border-transparent text-[var(--ink-soft,#45524f)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {infoTab === 'rentgeni' && (
+          <button
+            type="button"
+            onClick={() => setRtgGalleryOpen(true)}
+            className="mb-2 flex-none rounded-full border border-[var(--ink,#1c2624)] px-3 py-1 text-xs font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]"
+          >
+            RTG galerija
+          </button>
+        )}
+      </div>
+
+      {infoTab === 'rentgeni' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+            Mockup — slike bi se sem prenesle samodejno iz RTG aparata/studia. Prikazan je najnovejši posnetek.
+          </p>
+          <div className="flex w-full flex-1 items-center justify-center rounded-md bg-[#e7e7e7] text-sm text-[var(--muted,#6f7c79)]">
+            {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
+          </div>
+        </div>
+      )}
+      {infoTab === 'fotografije' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+            Mockup — klinične fotografije, ki jih zdravnik naloži med zdravljenjem.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {MOCK_PHOTOS.map((photo, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                <div className="flex aspect-square w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">
+                  {photo.opis}
+                </div>
+                <span className="text-xs text-[var(--muted,#6f7c79)]">{photo.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {infoTab === 'sms' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — zadnje SMS sporočilo s pacientom.</p>
+          <div className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+            <p>{MOCK_SMS.text}</p>
+            <p className="mt-2 text-xs text-[var(--muted,#6f7c79)]">{MOCK_SMS.date}</p>
+          </div>
+        </div>
+      )}
+      {infoTab === 'eposta' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — kronološka zgodovina e-pošte s pacientom.</p>
+          <ul className="flex flex-col gap-2">
+            {MOCK_EMAILS.map((email, i) => (
+              <li key={i} className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold">{email.subject}</span>
+                  <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{email.date}</span>
+                </div>
+                <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">{email.snippet}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <div className="mx-auto flex max-w-[1800px] flex-col gap-5 p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <>
+      <AppNavShell
+        userLabel={practiceName ?? undefined}
+        onSignOut={handleSignOutClick}
+        onNavigateCalendar={onNavigateCalendar}
+        onNavigateHome={handleBackClick}
+        activeSubmenu="storitve"
+      />
+      <style>{PHONE_COMPACT_CSS}</style>
+      <div className="flex w-full flex-col gap-1.5 pb-4 pt-1.5">
+        {/* ---- Frame 1: health banner + Vprašalnik — placeholder, per
+            Gregor's explicit choice (no real questionnaire/allergies data
+            model exists). Back-link and autosave status are real
+            (handleBackClick/saveStatus) — folded into this same row rather
+            than a title strip of their own, so this page's total height
+            matches the mockup's exactly (an earlier version added a
+            separate title/autosave row above this one, which pushed every
+            frame below it down ~50px versus the mockup at the same
+            viewport — enough to tip a 17" screen into vertical scroll that
+            the mockup never had; Gregor caught this by comparing the two
+            side by side). */}
+        <div className="flex items-center gap-4 px-4">
           <button
             type="button"
             onClick={handleBackClick}
-            className="mb-1.5 text-sm text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
+            className="flex-none text-sm text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
           >
             ← Nazaj na seznam pacientov
           </button>
-          <h1 className="text-2xl font-semibold text-[var(--ink,#1c2624)]">Zobna karta — {patientLabel}</h1>
-          <p className="mt-1.5 text-sm text-[var(--ink-soft,#45524f)]">
-            Kliknite na zob za izbiro. {selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Noben zob ni izbran.'}
-          </p>
-          <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">
-            {focusedPerioPoint
-              ? 'Vnos globine žepka / umika dlesni — vtipkajte številko (0–9). Shift+številka = krvavitev / obrat predznaka. Kliknite točko znova za preklop brez tipkanja.'
-              : 'Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.'}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Autosave status — see the 30s-flush effect above for when
-              this actually fires. No manual "Save" button anywhere on this
-              page by design (CLAUDE.md's "Visit lifecycle"). */}
-          <span className="text-xs text-[var(--muted,#6f7c79)]">
+          <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">
             {saveStatus === 'saving' && 'Shranjujem …'}
             {saveStatus === 'saved' && 'Shranjeno'}
             {saveStatus === 'error' && <span className="text-[var(--danger,#b3261e)]">Napaka pri shranjevanju</span>}
           </span>
-          <button
-            type="button"
-            onClick={handleSignOutClick}
-            className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm text-[var(--ink-soft,#45524f)]"
-          >
-            Odjava
-          </button>
+          <div className="flex flex-1 items-center gap-4 rounded-md bg-[#e0231c] px-4 py-2 text-sm font-bold text-white">
+            <div className="grid flex-1 grid-cols-3 items-center gap-4 text-left">
+              <span>Alergije: penicilin</span>
+              <span>Akutna stanja: povišan krvni tlak</span>
+              <span>Zdravila: Lisinopril 10mg</span>
+            </div>
+            <span className="flex-none text-xs font-normal italic text-white/80">(mockup — iz vprašalnika o zdravju)</span>
+            <button
+              type="button"
+              onClick={() => setQuestionnaireOpen(true)}
+              className="flex-none rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#e0231c] hover:bg-white/90"
+            >
+              Vprašalnik
+            </button>
+          </div>
         </div>
+
+        {questionnaireOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setQuestionnaireOpen(false)}>
+            <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Vprašalnik o zdravju</h2>
+                <button type="button" onClick={() => setQuestionnaireOpen(false)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
+                  ✕
+                </button>
+              </div>
+              <p className="mb-4 text-sm italic text-[var(--muted,#6f7c79)]">
+                Mockup — tu bo prikazan celoten izpolnjen vprašalnik pacienta (odgovori o alergijah, kroničnih boleznih, zdravilih, preteklih operacijah ipd.).
+              </p>
+              <div className="flex flex-col gap-3 text-sm text-[var(--ink,#1c2624)]">
+                <div><span className="font-semibold">Alergije: </span>penicilin</div>
+                <div><span className="font-semibold">Kronične bolezni / akutna stanja: </span>povišan krvni tlak</div>
+                <div><span className="font-semibold">Zdravila: </span>Lisinopril 10mg</div>
+                <div><span className="font-semibold">Datum izpolnitve: </span>4. 1. 2023</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 items-start gap-3 px-3 sm:grid-cols-2 min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
+          {/* ---- Left column: Frame 2 (patient info, REAL) + Frame 8
+              (Pretekli termini, REAL) ---- */}
+          <div className="contents min-[1400px]:order-1 min-[1400px]:flex min-[1400px]:flex-col min-[1400px]:gap-3">
+            <div className="order-0 flex flex-col gap-2 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:col-span-2 min-[1400px]:col-span-1 min-[1400px]:gap-4">
+              <div className="flex items-start justify-between gap-3">
+                <h1 className="text-3xl font-bold text-[var(--ink,#1c2624)]">{patientLabel}</h1>
+                <button
+                  type="button"
+                  onClick={() => (editMode ? handleSavePatientInfo() : setEditMode(true))}
+                  disabled={savingPatient}
+                  className={
+                    editMode
+                      ? 'flex-none rounded-full bg-[var(--accent,#2e6e62)] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60'
+                      : 'flex-none rounded-full border border-[var(--ink,#1c2624)] px-5 py-1.5 text-sm font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]'
+                  }
+                >
+                  {savingPatient ? 'Shranjujem …' : editMode ? 'Shrani' : 'Uredi'}
+                </button>
+              </div>
+              {patientSaveError && <p className="text-xs text-[var(--danger,#b3261e)]">Napaka pri shranjevanju: {patientSaveError}</p>}
+
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4 min-[1400px]:grid-cols-2 min-[1400px]:gap-y-3">
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Spol</span>
+                  {editMode ? (
+                    <select
+                      value={patientDraft.sex ?? ''}
+                      onChange={(e) => updatePatientDraft('sex', (e.target.value || null) as PatientListItem['sex'])}
+                      className={FIELD_INPUT_CLASSES}
+                    >
+                      <option value="">Neznano</option>
+                      <option value="F">Ženski</option>
+                      <option value="M">Moški</option>
+                    </select>
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{GENDER_LABELS[patientDraft.sex ?? '']}</span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Izbran terapevt</span>
+                  {editMode ? (
+                    <input
+                      value={patientDraft.assignedDentist ?? ''}
+                      onChange={(e) => updatePatientDraft('assignedDentist', e.target.value)}
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.assignedDentist || '—'}</span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Datum rojstva</span>
+                  {editMode ? (
+                    <input
+                      value={patientDraft.dob}
+                      onChange={(e) => updatePatientDraft('dob', e.target.value)}
+                      placeholder="LLLL-MM-DD"
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{formatSlovenianDate(patientDraft.dob)}</span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>E-pošta</span>
+                  {editMode ? (
+                    <input
+                      type="email"
+                      value={patientDraft.email ?? ''}
+                      onChange={(e) => updatePatientDraft('email', e.target.value)}
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.email || '—'}</span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Naslov</span>
+                  {editMode ? (
+                    <div className="flex flex-col">
+                      <input
+                        value={patientDraft.address ?? ''}
+                        onChange={(e) => updatePatientDraft('address', e.target.value)}
+                        className={FIELD_INPUT_CLASSES}
+                      />
+                      <div className="flex gap-1.5">
+                        <input
+                          value={patientDraft.postalCode ?? ''}
+                          onChange={(e) => updatePatientDraft('postalCode', e.target.value)}
+                          inputMode="numeric"
+                          placeholder="Poštna št."
+                          className={FIELD_INPUT_CLASSES + ' w-20'}
+                        />
+                        <input
+                          value={patientDraft.city ?? ''}
+                          onChange={(e) => updatePatientDraft('city', e.target.value)}
+                          placeholder="Kraj"
+                          className={FIELD_INPUT_CLASSES + ' flex-1'}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>
+                      {patientDraft.address || '—'}
+                      <br />
+                      {patientDraft.postalCode} {patientDraft.city}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Telefonska številka</span>
+                  {editMode ? (
+                    <div className="ppm-phone-compact w-full shadow-[0_1px_0_0_var(--line,#ccd6d4)]">
+                      <PhoneInput defaultCountry="SI" value={patientDraft.phone ?? ''} onChange={(v) => updatePatientDraft('phone', v ?? '')} />
+                    </div>
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.phone || '—'}</span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Št. ZZZS</span>
+                  {editMode ? (
+                    <input
+                      value={patientDraft.healthCardNumber ?? ''}
+                      onChange={(e) => updatePatientDraft('healthCardNumber', e.target.value)}
+                      inputMode="numeric"
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.healthCardNumber || '—'}</span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Št. interne evidence</span>
+                  {editMode ? (
+                    <input
+                      value={patientDraft.internalRecordNumber ?? ''}
+                      onChange={(e) => updatePatientDraft('internalRecordNumber', e.target.value)}
+                      className={FIELD_INPUT_CLASSES}
+                    />
+                  ) : (
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.internalRecordNumber || '—'}</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className={VIEW_LABEL_CLASSES}>Opombe</span>
+                <div className="flex items-stretch gap-2 min-[1400px]:relative min-[1400px]:block">
+                  <textarea
+                    value={noteDraft}
+                    onChange={(e) => setNoteDraft(e.target.value)}
+                    placeholder="Dodaj opombo o pacientu…"
+                    rows={4}
+                    className="h-10 w-full resize-none rounded-xl border-none bg-[#d2d0ca] px-3 py-2 text-[var(--ink,#1c2624)] placeholder:text-[var(--ink,#1c2624)]/50 min-[1400px]:h-auto min-[1400px]:pb-12"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSubmitNote}
+                    disabled={!noteDraft.trim()}
+                    className="flex-none self-center rounded-full bg-[#1800ad] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 min-[1400px]:absolute min-[1400px]:bottom-3 min-[1400px]:right-3 min-[1400px]:self-auto"
+                  >
+                    Shrani
+                  </button>
+                </div>
+                {noteLog.length > 0 && (
+                  <ul className="mt-2 flex flex-col gap-1.5 border-t border-[var(--line,#ccd6d4)] pt-2">
+                    {noteLog.map((entry, i) => (
+                      <li key={i} className="flex gap-3 text-sm text-[var(--ink,#1c2624)]">
+                        <span className="w-20 flex-none font-mono text-xs text-[var(--muted,#6f7c79)]">{entry.date}</span>
+                        <span>{entry.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div className="hidden h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 min-[1400px]:flex">
+              {visitHistoryContent}
+            </div>
+          </div>
+
+          {/* ---- Middle column: chart + StatusToolbar + Legenda/Storitve po zobeh — REAL ---- */}
+          <div className="order-1 flex flex-col gap-1.5 sm:col-span-2 sm:flex-row sm:items-start sm:gap-3 min-[1400px]:order-2 min-[1400px]:col-span-1 min-[1400px]:flex-col min-[1400px]:gap-1.5">
+            <div className="flex flex-col gap-3 sm:flex-none min-[1400px]:contents">
+              <div className="mx-auto w-full max-[1399px]:max-w-[990px] sm:mx-0 sm:flex-none">
+                <DentalChart
+                  instructionText={
+                    <div className="flex items-center justify-between gap-3">
+                      <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
+                      <span>Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.</span>
+                    </div>
+                  }
+                  surfacesByFdi={surfacesByFdi}
+                  pocketsBuccal={pocketsBuccalByFdi}
+                  pocketsLingual={pocketsLingualByFdi}
+                  gumMargin={gumMarginByFdi}
+                  bleedingBuccal={bleedingBuccalByFdi}
+                  bleedingLingual={bleedingLingualByFdi}
+                  postByFdi={postByFdi}
+                  endoByFdi={endoByFdi}
+                  bridgeGroupByFdi={bridgeGroupByFdi}
+                  onSelect={setSelectedFdi}
+                  onTargetClick={handleTargetClick}
+                  isTargetSelected={isTargetSelected}
+                  isFdiSelected={isFdiSelected}
+                  onPerioPointClick={handlePerioPointClick}
+                  focusedPerioPoint={focusedPerioPoint}
+                  hideArchLabels
+                  compact
+                  fitWidth
+                />
+              </div>
+
+              <div className="hidden flex-col gap-3 sm:flex sm:flex-row sm:items-start sm:gap-3 min-[1400px]:hidden">
+                <div className="flex flex-col gap-3 sm:min-w-0 sm:flex-1">
+                  <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
+                  <div className="flex h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{visitHistoryContent}</div>
+                </div>
+                <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:min-w-0 sm:flex-1">
+                  {rentgeniCardContent}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:min-w-0 sm:flex-1 min-[1400px]:flex-none min-[1400px]:w-full">
+              <div className="mb-3 flex flex-none flex-col items-stretch gap-2 border-b border-[var(--line,#ccd6d4)] min-[1400px]:flex-row min-[1400px]:items-center min-[1400px]:justify-between min-[1400px]:gap-3">
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('legenda')}
+                    className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                      activeTab === 'legenda' ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]' : 'border-transparent text-[var(--ink-soft,#45524f)]'
+                    }`}
+                  >
+                    Legenda
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('storitve')}
+                    className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                      activeTab === 'storitve' ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]' : 'border-transparent text-[var(--ink-soft,#45524f)]'
+                    }`}
+                  >
+                    Storitve po zobeh
+                  </button>
+                </div>
+                {activeTab === 'legenda' && (
+                  <div className="mb-2 flex flex-wrap items-center gap-2 min-[1400px]:flex-none min-[1400px]:flex-nowrap">
+                    {selection.length > 0 ? (
+                      <>
+                        <span className="text-xs text-[var(--ink,#1c2624)]">
+                          <strong>{selection.length}</strong> {selection.length === 1 ? 'izbrana ploskev/zob' : 'izbranih'} — kliknite status za uporabo.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleClearSelection}
+                          className="flex-none rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-xs text-[var(--ink-soft,#45524f)]"
+                        >
+                          Prekliči izbiro (Esc)
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-right text-xs text-[var(--ink-soft,#45524f)]">
+                        Kliknite ploskev ali cel zob na karti (Ctrl/Cmd za več), nato status spodaj za uporabo.
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {activeTab === 'legenda' && (
+                <StatusToolbar
+                  bare
+                  hideHeader
+                  className="w-full"
+                  selectionCount={selection.length}
+                  onStatusClick={handleStatusClick}
+                  onClearSelection={handleClearSelection}
+                  onTogglePost={handleTogglePost}
+                  onSetEndoStage={handleSetEndoStage}
+                  bridgeMessage={bridgeMessage}
+                />
+              )}
+
+              {activeTab === 'storitve' && (
+                <div className="max-h-[220px] overflow-y-auto">
+                  {!selectedFdi ? (
+                    <p className="text-sm italic text-[var(--muted,#6f7c79)]">Kliknite zob na karti zgoraj, da vidite kronološko zgodovino storitev.</p>
+                  ) : (
+                    <StoritvePoZobehTab patientId={patientId} fdi={selectedFdi} />
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ---- Right column: Frame 5 (appointment, placeholder) + Frame 3 (Rentgeni tabs, placeholder) ---- */}
+          <div className="order-3 hidden flex-col gap-3 min-[1400px]:flex">
+            <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
+            <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{rentgeniCardContent}</div>
+          </div>
+        </div>
+
+        {selectedFdi && (
+          <div className="px-3">
+            <ToothDetailPanel
+              key={selectedFdi}
+              patientId={patientId}
+              fdi={selectedFdi}
+              surfaces={surfacesByFdi[selectedFdi]}
+              notes={notesByFdi[selectedFdi]}
+              onSurfaceStatusChange={(surface, status) => handleSurfaceStatusChange(selectedFdi, surface, status)}
+              onWholeToothStatusChange={(status) => handleWholeToothStatusChange(selectedFdi, status)}
+              onNotesChange={(text) => setNotesByFdi((prev) => ({ ...prev, [selectedFdi]: text }))}
+            />
+          </div>
+        )}
+
+        {rtgGalleryOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setRtgGalleryOpen(false)}>
+            <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">RTG galerija</h2>
+                <button type="button" onClick={() => setRtgGalleryOpen(false)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
+                  ✕
+                </button>
+              </div>
+              <p className="mb-4 text-sm italic text-[var(--muted,#6f7c79)]">Mockup — tu bo prikazana celotna RTG galerija pacienta.</p>
+              <div className="grid grid-cols-2 gap-3">
+                {MOCK_RTG_GALLERY.map((img, i) => (
+                  <div key={i} className="flex flex-col gap-1">
+                    <div className="flex aspect-[4/3] w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">{img.opis}</div>
+                    <span className="text-xs text-[var(--muted,#6f7c79)]">{img.date}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {appointmentModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setAppointmentModalOpen(false)}>
+            <div className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">{nextAppointment ? 'Prestavi termin' : 'Naroči naslednji termin'}</h2>
+                <button type="button" onClick={() => setAppointmentModalOpen(false)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
+                  ✕
+                </button>
+              </div>
+              <div className="flex flex-col gap-3">
+                <div className="flex gap-3">
+                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                    Datum
+                    <input
+                      type="date"
+                      value={appointmentDate}
+                      onChange={(e) => setAppointmentDate(e.target.value)}
+                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                    />
+                  </label>
+                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                    Ura
+                    <input
+                      type="time"
+                      value={appointmentTime}
+                      onChange={(e) => setAppointmentTime(e.target.value)}
+                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                    />
+                  </label>
+                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                    Trajanje
+                    <select
+                      value={appointmentDuration}
+                      onChange={(e) => setAppointmentDuration(Number(e.target.value))}
+                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                    >
+                      {[15, 30, 45, 60, 90].map((m) => (
+                        <option key={m} value={m}>
+                          {m} min
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                  Predvidena storitev
+                  <input
+                    value={appointmentService}
+                    onChange={(e) => setAppointmentService(e.target.value)}
+                    placeholder="npr. Pregled + čiščenje"
+                    className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                  />
+                </label>
+                {nextAppointment && (
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                    Status
+                    <select
+                      value={appointmentStatus}
+                      onChange={(e) => setAppointmentStatus(e.target.value as AppointmentStatus)}
+                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                    >
+                      {(Object.keys(APPOINTMENT_STATUS_META) as AppointmentStatus[]).map((s) => (
+                        <option key={s} value={s}>
+                          {APPOINTMENT_STATUS_META[s].label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {appointmentModalError && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka: {appointmentModalError}</p>}
+                <button
+                  type="button"
+                  onClick={handleSaveAppointment}
+                  disabled={appointmentModalSaving}
+                  className="self-start rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  {appointmentModalSaving ? 'Shranjujem …' : nextAppointment ? 'Shrani spremembe' : 'Ustvari termin'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedInvoice && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setSelectedInvoice(null)}>
+            <div className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Račun {selectedInvoice.id}</h2>
+                <button type="button" onClick={() => setSelectedInvoice(null)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
+                  ✕
+                </button>
+              </div>
+              <div className="flex flex-col gap-2 text-sm text-[var(--ink,#1c2624)]">
+                <div><span className="font-semibold">Datum: </span>{selectedInvoice.date}</div>
+                <div><span className="font-semibold">Storitev: </span>{selectedInvoice.storitev}</div>
+                <div><span className="font-semibold">Znesek: </span>{selectedInvoice.amount.toFixed(2)} €</div>
+                <div><span className="font-semibold">Status: </span>{selectedInvoice.paid ? 'Plačano' : 'Neplačano'}</div>
+              </div>
+              <p className="mt-4 text-xs italic text-[var(--muted,#6f7c79)]">Mockup — tu bo celoten podroben pregled računa.</p>
+            </div>
+          </div>
+        )}
       </div>
-      <div className="flex items-start gap-4">
-        <DentalChart
-          surfacesByFdi={surfacesByFdi}
-          postByFdi={postByFdi}
-          endoByFdi={endoByFdi}
-          bridgeGroupByFdi={bridgeGroupByFdi}
-          pocketsBuccal={pocketsBuccalByFdi}
-          pocketsLingual={pocketsLingualByFdi}
-          gumMargin={gumMarginByFdi}
-          bleedingBuccal={bleedingBuccalByFdi}
-          bleedingLingual={bleedingLingualByFdi}
-          onSelect={setSelectedFdi}
-          onTargetClick={handleTargetClick}
-          isTargetSelected={isTargetSelected}
-          isFdiSelected={isFdiSelected}
-          onPerioPointClick={handlePerioPointClick}
-          focusedPerioPoint={focusedPerioPoint}
-        />
-        <StatusToolbar
-          selectionCount={selection.length}
-          onStatusClick={handleStatusClick}
-          onClearSelection={handleClearSelection}
-          onTogglePost={handleTogglePost}
-          onSetEndoStage={handleSetEndoStage}
-          bridgeMessage={bridgeMessage}
-        />
-      </div>
-      {selectedFdi && (
-        // key={selectedFdi}: remounts the panel fresh on every tooth switch
-        // so its internal open-picker state never bleeds from one tooth to
-        // the next.
-        <ToothDetailPanel
-          key={selectedFdi}
-          fdi={selectedFdi}
-          surfaces={surfacesByFdi[selectedFdi]}
-          notes={notesByFdi[selectedFdi]}
-          onSurfaceStatusChange={(surface, status) => handleSurfaceStatusChange(selectedFdi, surface, status)}
-          onWholeToothStatusChange={(status) => handleWholeToothStatusChange(selectedFdi, status)}
-          onNotesChange={(text) => setNotesByFdi((prev) => ({ ...prev, [selectedFdi]: text }))}
-        />
-      )}
+    </>
+  );
+}
+
+// "Storitve po zobeh" tab (Frame 7) — a quick, read-only glance at one
+// tooth's real chronological history, using the same useToothHistory.ts
+// hook and describeToothRecord() formatting ToothDetailPanel.tsx's own
+// "Zgodovina" tab uses, so the two can never disagree. Deliberately a
+// separate component (not inlined in the parent's JSX) so the hook only
+// ever runs while this tab is actually the one being looked at.
+function StoritvePoZobehTab({ patientId, fdi }: { patientId: string; fdi: string }) {
+  const { entries, loading, error } = useToothHistory(patientId, fdi);
+  if (loading) return <p className="text-sm text-[var(--ink-soft,#45524f)]">Nalaganje …</p>;
+  if (error) return <p className="text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {error}</p>;
+
+  const rows = entries.flatMap((entry) =>
+    describeToothRecord(entry, fdi).map((line) => ({ date: entry.date, line }))
+  );
+  if (rows.length === 0) {
+    return <p className="text-sm italic text-[var(--muted,#6f7c79)]">Ni zabeleženih storitev za ta zob.</p>;
+  }
+  return (
+    <div>
+      <h3 className="mb-2 font-semibold text-[var(--ink,#1c2624)]">Zob {fdi}</h3>
+      <ul className="flex flex-col gap-1.5">
+        {rows.map((row, i) => (
+          <li key={i} className="flex gap-3 text-sm text-[var(--ink,#1c2624)]">
+            <span className="w-24 flex-none font-mono text-xs text-[var(--muted,#6f7c79)]">{formatSlovenianDate(row.date)}</span>
+            <span>{row.line}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

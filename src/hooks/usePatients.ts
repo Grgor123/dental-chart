@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { usePracticeContext } from '../contexts/PracticeContext';
 import type { Patient } from '../types/dental';
 
 // Row shape this hook works with — a thin slice of the full `Patient` type
@@ -14,6 +15,13 @@ import type { Patient } from '../types/dental';
 // gender value. `phone`/`email`/`address`/`postalCode`/`city`/
 // `healthCardNumber` are already optional on `Patient` itself, so `Pick`
 // carries that through unchanged.
+// `assignedDentist`/`internalRecordNumber` (migration
+// 010_add_patient_care_fields.sql) aren't on `Patient` at all yet — added
+// directly here rather than widening that type, since they're specific to
+// the Patient Record page's own Frame 2, not part of the chart/treatment
+// data model `Patient` otherwise describes. Neither is hardcoded (e.g.
+// always "Monika Novak") per Gregor's explicit request — both are plain,
+// editable text, same as every other patient field.
 export type PatientListItem = Pick<
   Patient,
   | 'patientId'
@@ -28,19 +36,44 @@ export type PatientListItem = Pick<
   | 'healthCardNumber'
 > & {
   sex: Patient['sex'] | null;
+  assignedDentist?: string;
+  internalRecordNumber?: string;
 };
 
-// Loads every patient (there's no per-practice multi-tenancy here — RLS
-// already restricts this to the one authenticated dentist/account, see
-// schema.sql's "auth_only" policies) and offers a way to add a new one.
-// Search/filter is left to the caller (PatientList.tsx) to do client-side
-// against this same in-memory list — a single-dentist practice's patient
+const PATIENT_COLUMNS =
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number';
+
+function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
+  return {
+    patientId: row.id as string,
+    firstName: row.first_name as string,
+    lastName: row.last_name as string,
+    dob: row.dob as string,
+    sex: (row.sex as Patient['sex'] | null) ?? null,
+    phone: (row.phone as string | null) ?? undefined,
+    email: (row.email as string | null) ?? undefined,
+    address: (row.address as string | null) ?? undefined,
+    postalCode: (row.postal_code as string | null) ?? undefined,
+    city: (row.city as string | null) ?? undefined,
+    healthCardNumber: (row.health_card_number as string | null) ?? undefined,
+    assignedDentist: (row.assigned_dentist as string | null) ?? undefined,
+    internalRecordNumber: (row.internal_record_number as string | null) ?? undefined,
+  };
+}
+
+// Loads every patient belonging to the signed-in user's own practice — RLS
+// (supabase/migrations/011_add_multi_tenancy.sql/012_replace_rls_policies.sql)
+// already restricts reads/writes to rows whose practice_id matches
+// current_practice_id(), so this hook's own select needs no explicit
+// practice filter. Search/filter is left to the caller (PatientList.tsx) to
+// do client-side against this same in-memory list — one practice's patient
 // list is small enough that a server-side search round trip would be
 // solving a problem this app doesn't have yet.
 //
-// Every Supabase call lives here, not in PatientList.tsx directly, per
-// CLAUDE.md's own "Coding Conventions" rule.
+// Every Supabase call lives here, not in PatientList.tsx/PatientChart.tsx
+// directly, per CLAUDE.md's own "Coding Conventions" rule.
 export function usePatients() {
+  const { practiceId } = usePracticeContext();
   const [patients, setPatients] = useState<PatientListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +82,7 @@ export function usePatients() {
     setLoading(true);
     const { data, error } = await supabase
       .from('patients')
-      .select('id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number')
+      .select(PATIENT_COLUMNS)
       .order('last_name', { ascending: true })
       .order('first_name', { ascending: true });
     if (error) {
@@ -57,21 +90,7 @@ export function usePatients() {
       setLoading(false);
       return;
     }
-    setPatients(
-      (data ?? []).map((row) => ({
-        patientId: row.id as string,
-        firstName: row.first_name as string,
-        lastName: row.last_name as string,
-        dob: row.dob as string,
-        sex: (row.sex as Patient['sex'] | null) ?? null,
-        phone: (row.phone as string | null) ?? undefined,
-        email: (row.email as string | null) ?? undefined,
-        address: (row.address as string | null) ?? undefined,
-        postalCode: (row.postal_code as string | null) ?? undefined,
-        city: (row.city as string | null) ?? undefined,
-        healthCardNumber: (row.health_card_number as string | null) ?? undefined,
-      }))
-    );
+    setPatients((data ?? []).map(rowToPatientListItem));
     setError(null);
     setLoading(false);
   }, []);
@@ -96,10 +115,17 @@ export function usePatients() {
       postalCode?: string;
       city?: string;
       healthCardNumber?: string;
+      assignedDentist?: string;
+      internalRecordNumber?: string;
     }): Promise<{ patientId: string } | { error: string }> => {
+      // Shouldn't happen — PracticeProvider (App.tsx) already blocks
+      // rendering this far until a practice resolves — but fail with a
+      // clear message rather than a raw NOT NULL violation from Postgres.
+      if (!practiceId) return { error: 'Ordinacija ni bila najdena — poskusite znova po ponovni prijavi.' };
       const { data, error } = await supabase
         .from('patients')
         .insert({
+          practice_id: practiceId,
           first_name: input.firstName,
           last_name: input.lastName,
           dob: input.dob,
@@ -110,6 +136,8 @@ export function usePatients() {
           postal_code: input.postalCode || null,
           city: input.city || null,
           health_card_number: input.healthCardNumber || null,
+          assigned_dentist: input.assignedDentist || null,
+          internal_record_number: input.internalRecordNumber || null,
         })
         .select('id')
         .single();
@@ -117,8 +145,61 @@ export function usePatients() {
       await reload();
       return { patientId: data.id as string };
     },
-    [reload]
+    [reload, practiceId]
   );
 
-  return { patients, loading, error, createPatient };
+  // Frame 2 (Patient Record page, PatientChart.tsx) — "Uredi"/"Shrani" on
+  // the patient info card. Same partial-update shape for every field:
+  // caller passes only what changed. Returns the updated row (mapped back
+  // through rowToPatientListItem) on success so the caller can refresh its
+  // own local copy without a full reload() round trip, or an error message
+  // on failure.
+  const updatePatient = useCallback(
+    async (
+      patientId: string,
+      fields: Partial<{
+        firstName: string;
+        lastName: string;
+        dob: string;
+        sex: Patient['sex'] | null;
+        phone: string | null;
+        email: string | null;
+        address: string | null;
+        postalCode: string | null;
+        city: string | null;
+        healthCardNumber: string | null;
+        assignedDentist: string | null;
+        internalRecordNumber: string | null;
+      }>
+    ): Promise<{ patient: PatientListItem } | { error: string }> => {
+      const columnUpdates: Record<string, unknown> = {};
+      if (fields.firstName !== undefined) columnUpdates.first_name = fields.firstName;
+      if (fields.lastName !== undefined) columnUpdates.last_name = fields.lastName;
+      if (fields.dob !== undefined) columnUpdates.dob = fields.dob;
+      if (fields.sex !== undefined) columnUpdates.sex = fields.sex;
+      if (fields.phone !== undefined) columnUpdates.phone = fields.phone || null;
+      if (fields.email !== undefined) columnUpdates.email = fields.email || null;
+      if (fields.address !== undefined) columnUpdates.address = fields.address || null;
+      if (fields.postalCode !== undefined) columnUpdates.postal_code = fields.postalCode || null;
+      if (fields.city !== undefined) columnUpdates.city = fields.city || null;
+      if (fields.healthCardNumber !== undefined) columnUpdates.health_card_number = fields.healthCardNumber || null;
+      if (fields.assignedDentist !== undefined) columnUpdates.assigned_dentist = fields.assignedDentist || null;
+      if (fields.internalRecordNumber !== undefined)
+        columnUpdates.internal_record_number = fields.internalRecordNumber || null;
+
+      const { data, error } = await supabase
+        .from('patients')
+        .update(columnUpdates)
+        .eq('id', patientId)
+        .select(PATIENT_COLUMNS)
+        .single();
+      if (error) return { error: error.message };
+      const patient = rowToPatientListItem(data);
+      setPatients((prev) => prev.map((p) => (p.patientId === patientId ? patient : p)));
+      return { patient };
+    },
+    []
+  );
+
+  return { patients, loading, error, createPatient, updatePatient };
 }

@@ -4,6 +4,7 @@ import 'react-phone-number-input/style.css';
 import { DentalChart } from '../components/chart/DentalChart';
 import { hidesSurfaceDetail } from '../components/chart/ToothTopView';
 import { StatusToolbar } from '../components/ui/StatusToolbar';
+import { AppNavShell } from '../components/ui/AppNavShell';
 import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../data/toothMeta';
 import type {
   Surface,
@@ -218,65 +219,12 @@ const MOCK_INVOICES = [
   { id: 'R-2025-072', date: '5. 8. 2025', storitev: 'Plomba', amount: 60, paid: true },
 ];
 
-// Frame 6 (nav shell): visual only, no real routing — colors/positions
-// pixel-matched off design/PatientRecordMockup.svg's own header bars
-// (#5CE1E6 turquoise, #C8D1D9 grey "active" pill, both sampled directly
-// off the rendered mockup). "CRM" and "Storitve" are hardcoded active
-// since this page IS the CRM → Storitve → patient record path; there's
-// nowhere else in the app to navigate to yet, so every item is inert.
-const SUBMENU_ITEMS = [
-  { key: 'koledar', label: 'Koledar' },
-  { key: 'storitve', label: 'Storitve' },
-  { key: 'sporocila', label: 'Sporočila' },
-  { key: 'eposta', label: 'El. pošta' },
-  { key: 'nastavitve', label: 'Nastavitve' },
-] as const;
-
-function AppNavShell() {
-  return (
-    <div className="flex w-full flex-col">
-      <div className="flex items-center justify-between bg-[#5CE1E6] px-4 py-2">
-        <div className="flex items-center gap-2">
-          <button type="button" className="rounded-full px-3 py-1 text-sm font-medium text-white hover:bg-white/10">
-            Domov
-          </button>
-          <button type="button" className="rounded-full bg-[#C8D1D9] px-3 py-1 text-sm font-semibold text-[var(--ink,#1c2624)]">
-            CRM
-          </button>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-white">Uporabnik: Monika Goslar</span>
-          <button
-            type="button"
-            aria-label="Odjava"
-            className="flex h-7 w-7 flex-none items-center justify-center rounded bg-white text-[var(--ink,#1c2624)] hover:opacity-80"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div className="flex items-center gap-1 border-b border-[var(--line,#ccd6d4)] bg-white px-4 py-2">
-        {SUBMENU_ITEMS.map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            className={`rounded-full px-3 py-1.5 text-sm font-medium ${
-              key === 'storitve'
-                ? 'bg-[#C8D1D9] text-[var(--ink,#1c2624)]'
-                : 'text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+// Frame 6 (nav shell): extracted to src/components/ui/AppNavShell.tsx so
+// the real PatientChart.tsx (which ports this whole layout — see
+// CLAUDE.md's "Patient list"/plan history) can share the exact same
+// component instead of a second, divergence-prone copy. This mockup keeps
+// using it with no props, which stays fully inert/cosmetic exactly as
+// before.
 
 const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
   'abrasion',
@@ -568,6 +516,211 @@ export function PatientPageMockup() {
 
   const selectedHistory = selectedFdi ? MOCK_TOOTH_HISTORY[selectedFdi] : undefined;
 
+  // Extracted so the exact same content can be rendered at two different
+  // responsive positions — per Gregor's explicit request to regroup
+  // "Podrobnosti termina" with "Pretekli termini" (instead of Rentgeni)
+  // specifically below 1400px, while the original grouping (Podrobnosti+
+  // Rentgeni on the right, Pretekli+patient info on the left) stays
+  // untouched at >=1400px. Each renders twice below — once inside its
+  // original wide-mode wrapper (hidden below 1400px), once inside a new
+  // narrow-only pairing wrapper (hidden at >=1400px) — rather than two
+  // independently-maintained copies of the same markup.
+  const appointmentCardContent = (
+    <>
+      <h2 className="mb-3 text-lg font-bold text-[var(--ink,#1c2624)]">Podrobnosti termina</h2>
+      <div className="flex items-start justify-between gap-3">
+        {/* Left: status pill (not clickable — see
+            MOCK_APPOINTMENT_STATUS's own comment above), the
+            schedule/reschedule button in that same slot either way,
+            and — for every status except "Ni termina" — the booked
+            appointment's own details below that. */}
+        <div className="flex flex-1 flex-col items-start gap-2">
+          <span
+            className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].pillClass}`}
+          >
+            {APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].label}
+          </span>
+
+          {MOCK_APPOINTMENT_STATUS === 'ni_termina' ? (
+            <button
+              type="button"
+              onClick={() => setScheduleModalOpen(true)}
+              className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Naroči naslednji termin
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRescheduleModalOpen(true)}
+              className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Prestavi termin
+            </button>
+          )}
+
+          {MOCK_APPOINTMENT_STATUS !== 'ni_termina' && (
+            <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
+              <span>Datum: 14. 3. 2026</span>
+              <span>Ura: 10:30</span>
+              <span>Predvidena storitev: Pregled + čiščenje</span>
+            </div>
+          )}
+        </div>
+
+        {/* Right: unpaid-invoices indicator — "same frame, to the
+            right" per the spec. */}
+        <div className="flex w-[150px] flex-none flex-col gap-1.5">
+          {unpaidInvoices.length > 0 ? (
+            <>
+              <span className="w-fit rounded-full bg-[#e0231c] px-3 py-1 text-xs font-semibold text-white">
+                Neplačani račun
+              </span>
+              <ul className="flex flex-col gap-1">
+                {unpaidInvoices.map((inv) => (
+                  <li key={inv.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvoice(inv)}
+                      className="w-full rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+                    >
+                      <div className="font-medium">{inv.date}</div>
+                      <div className="text-[var(--muted,#6f7c79)]">{inv.amount.toFixed(2)} €</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <span className="mt-1 text-xs font-semibold text-[var(--ink,#1c2624)]">
+                Skupaj: {totalUnpaid.toFixed(2)} €
+              </span>
+            </>
+          ) : (
+            <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
+              Računi plačani
+            </span>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  const visitHistoryContent = (
+    <>
+      <h2 className="mb-3 flex-none text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
+      <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+        {MOCK_VISIT_HISTORY.map((visit, i) => (
+          <li key={i} className="flex-none rounded-md bg-[#e7e7e7] p-3">
+            <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{visit.date}</span>
+            <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
+              {visit.storitve.map((s, j) => (
+                <li key={j}>• {s}</li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+
+  // Same sharing pattern as appointmentCardContent/visitHistoryContent
+  // above — this card's content also needs to render at two different
+  // positions below 1400px (nested under the chart, beside Legenda) vs.
+  // >=1400px (its original spot in the right column, unchanged).
+  const rentgeniCardContent = (
+    <>
+      <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
+        <div className="flex gap-1">
+          {(
+            [
+              ['rentgeni', 'Rentgeni'],
+              ['fotografije', 'Fotografije'],
+              ['sms', 'SMS'],
+              ['eposta', 'E-pošta'],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setInfoTab(key)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+                infoTab === key
+                  ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
+                  : 'border-transparent text-[var(--ink-soft,#45524f)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {infoTab === 'rentgeni' && (
+          <button
+            type="button"
+            onClick={() => setRtgGalleryOpen(true)}
+            className="mb-2 flex-none rounded-full border border-[var(--ink,#1c2624)] px-3 py-1 text-xs font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]"
+          >
+            RTG galerija
+          </button>
+        )}
+      </div>
+
+      {infoTab === 'rentgeni' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+            Mockup — slike bi se sem prenesle samodejno iz RTG aparata/studia. Prikazan je najnovejši posnetek.
+          </p>
+          <div className="flex w-full flex-1 items-center justify-center rounded-md bg-[#e7e7e7] text-sm text-[var(--muted,#6f7c79)]">
+            {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
+          </div>
+        </div>
+      )}
+
+      {infoTab === 'fotografije' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
+            Mockup — klinične fotografije, ki jih zdravnik naloži med zdravljenjem.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {MOCK_PHOTOS.map((photo, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                <div className="flex aspect-square w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">
+                  {photo.opis}
+                </div>
+                <span className="text-xs text-[var(--muted,#6f7c79)]">{photo.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {infoTab === 'sms' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — zadnje SMS sporočilo s pacientom.</p>
+          <div className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+            <p>{MOCK_SMS.text}</p>
+            <p className="mt-2 text-xs text-[var(--muted,#6f7c79)]">{MOCK_SMS.date}</p>
+          </div>
+        </div>
+      )}
+
+      {infoTab === 'eposta' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — kronološka zgodovina e-pošte s pacientom.</p>
+          <ul className="flex flex-col gap-2">
+            {MOCK_EMAILS.map((email, i) => (
+              <li key={i} className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold">{email.subject}</span>
+                  <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{email.date}</span>
+                </div>
+                <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">{email.snippet}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <>
       <AppNavShell />
@@ -673,10 +826,36 @@ export function PatientPageMockup() {
           exactly the runaway feedback loop Gregor caught live once
           fitWidth was added. minmax(0, …fr) pins each track to its
           fr-proportional share regardless of content size. */}
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-start gap-3 px-3">
-        {/* ---- Left column: identity/contact fields + past appointments ---- */}
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-4 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+      {/* PROTOTYPE — responsive reflow, not yet confirmed as final (see
+          Gregor's "make this page dynamic" request). Below 1400px:
+           - Patient info becomes its own full-width bar above the chart
+             (its field grid widens from 2 to 4 columns to actually use
+             that width, rather than staying a tall narrow sidebar block)
+           - The dental chart is capped at CHART_MAX_WIDTH (matching its
+             own natural size in the 17"+ 2fr column) instead of stretching
+             to fill the full row — Gregor's explicit "don't make it
+             bigger than the 17\" version" correction after the first
+             full-width-chart prototype rendered it oversized.
+           - Pretekli termini + the appointment/Rentgeni column drop into a
+             2-column row below that.
+          At >=1400px this collapses back to the exact original 1:2:1
+          side-by-side grid (left column = patient info stacked above
+          Pretekli termini, exactly as before) — via `order`/`col-span` on
+          the existing columns plus `contents` on the left-column wrapper
+          (to let patient info and Pretekli termini become independent grid
+          items only below 1400px), no DOM restructuring, so nothing
+          changes for 15"+ screens. */}
+      <div className="grid grid-cols-1 items-start gap-3 px-3 sm:grid-cols-2 min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
+        {/* ---- Left column: identity/contact fields + past appointments ----
+            `contents` below 1400px dissolves this wrapper so its two
+            children (patient info, Pretekli termini) become independent
+            grid items — patient info moves above the chart (order-0,
+            full width), Pretekli termini pairs with the right column
+            below (order-2). At >=1400px this becomes a real flex column
+            again (order-1), reconstructing the original stacked-sidebar
+            layout exactly. */}
+        <div className="contents min-[1400px]:order-1 min-[1400px]:flex min-[1400px]:flex-col min-[1400px]:gap-3">
+          <div className="order-0 flex flex-col gap-2 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:col-span-2 min-[1400px]:col-span-1 min-[1400px]:gap-4">
             <div className="flex items-start justify-between gap-3">
               <h1 className="text-3xl font-bold text-[var(--ink,#1c2624)]">Goslar Gregor</h1>
               <button
@@ -694,8 +873,18 @@ export function PatientPageMockup() {
 
             {/* Two-column field grid — view mode renders plain label/value
                 text (no boxes), matching the mockup's read view exactly;
-                edit mode swaps the value line for a real input. */}
-            <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+                edit mode swaps the value line for a real input.
+                sm:grid-cols-4 (below 1400px only, where this card is a
+                full-width bar via col-span-2 above) spreads the same 8
+                fields across 2 rows of 4 instead of 4 rows of 2 — using
+                the width Gregor asked for instead of staying a tall
+                narrow block once there's room to spread out. Reverts to
+                the original 2-column layout at >=1400px, where this card
+                is back to being a narrow sidebar. gap-y-1 (below 1400px
+                only) tightens the vertical space between field rows per
+                Gregor's explicit request — restored to the original
+                gap-y-3 at >=1400px. */}
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4 min-[1400px]:grid-cols-2 min-[1400px]:gap-y-3">
               <div className="flex flex-col gap-1">
                 <span className={VIEW_LABEL_CLASSES}>Spol</span>
                 {editMode ? (
@@ -840,22 +1029,31 @@ export function PatientPageMockup() {
                 own bullet, distinct from the Edit-toggled identity fields.
                 Single grey box (#D2D0CA, sampled off the mockup) with
                 "Shrani" floating inside its bottom-right corner, same as
-                the mockup — not a bordered textarea + separate button row. */}
+                the mockup — not a bordered textarea + separate button row.
+                Below 1400px only (per Gregor's explicit request): the
+                textarea shrinks to one line and "Shrani" moves beside it
+                instead of floating inside it — a 1-line box is too short
+                for an absolute-positioned button to sit inside without
+                colliding with typed text. h-10/pb-2 (narrow) vs. the
+                original rows=4-driven height/pb-12 (>=1400px, via
+                min-[1400px]:h-auto letting the rows attribute govern
+                height again) restore the exact original look at desktop
+                size. */}
             <div className="flex flex-col gap-1">
               <span className={VIEW_LABEL_CLASSES}>Opombe</span>
-              <div className="relative">
+              <div className="flex items-stretch gap-2 min-[1400px]:relative min-[1400px]:block">
                 <textarea
                   value={noteDraft}
                   onChange={(e) => setNoteDraft(e.target.value)}
                   placeholder="Dodaj opombo o pacientu…"
                   rows={4}
-                  className="w-full resize-none rounded-xl border-none bg-[#d2d0ca] px-3 py-2 pb-12 text-[var(--ink,#1c2624)] placeholder:text-[var(--ink,#1c2624)]/50"
+                  className="h-10 w-full resize-none rounded-xl border-none bg-[#d2d0ca] px-3 py-2 text-[var(--ink,#1c2624)] placeholder:text-[var(--ink,#1c2624)]/50 min-[1400px]:h-auto min-[1400px]:pb-12"
                 />
                 <button
                   type="button"
                   onClick={handleSubmitNote}
                   disabled={!noteDraft.trim()}
-                  className="absolute bottom-3 right-3 rounded-full bg-[#1800ad] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex-none self-center rounded-full bg-[#1800ad] px-5 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 min-[1400px]:absolute min-[1400px]:bottom-3 min-[1400px]:right-3 min-[1400px]:self-auto"
                 >
                   Shrani
                 </button>
@@ -880,57 +1078,143 @@ export function PatientPageMockup() {
               real content height, rather than growing the shorter ones
               up to a taller one. This also lowers the page's own total
               height (unlike the earlier "grow to match Frame 3" version),
-              which is the whole point — fewer px to scroll through. */}
-          <div className="flex h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <h2 className="mb-3 flex-none text-xl font-bold text-[var(--ink,#1c2624)]">Pretekli termini in storitve</h2>
-            <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-              {MOCK_VISIT_HISTORY.map((visit, i) => (
-                <li key={i} className="flex-none rounded-md bg-[#e7e7e7] p-3">
-                  <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{visit.date}</span>
-                  <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
-                    {visit.storitve.map((s, j) => (
-                      <li key={j}>• {s}</li>
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
+              which is the whole point — fewer px to scroll through.
+              hidden below 1400px (min-[1400px]:flex restores it) — per
+              Gregor's later request to pair this with "Podrobnosti
+              termina" instead of patient info below 1400px, it now
+              renders in a NEW wrapper further down instead (see
+              "Narrow-only pairing" below); this, its original position,
+              stays for >=1400px only, unchanged. */}
+          <div className="hidden h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 min-[1400px]:flex">
+            {visitHistoryContent}
           </div>
         </div>
 
         {/* ---- Middle column: the real, clickable chart + status toolbar + tabs ----
-            gap-1.5 (was gap-3) between the chart and Frame 7 below it —
-            tightened per Gregor's explicit request, freeing a few more px
-            toward the same bottom-alignment goal. */}
-        <div className="flex flex-col gap-1.5">
-          <DentalChart
-            instructionText={
-              <div className="flex items-center justify-between gap-3">
-                {/* Left side switches from the idle prompt to "Izbran zob: …"
-                    once a tooth is selected — per Gregor's explicit request.
-                    Right side is a static hint, matching the mockup's own
-                    header row exactly ("Za vnos globine žepka..."). */}
-                <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
-                <span>Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.</span>
+            gap-1.5 (was gap-3) between the chart and Frame 7 below it at
+            >=1400px — tightened per Gregor's explicit request, freeing a
+            few more px toward the bottom-alignment goal. Below 1400px
+            (sm: up to 1399px — kept off below the sm breakpoint too, so a
+            genuinely tiny window still stacks safely instead of forcing
+            a fixed-990px chart into a row it can't fit): flex-row instead
+            of flex-col, per Gregor's explicit request to stop wasting the
+            blank margin beside the width-capped chart — Frame 7
+            (Legenda/Storitve, below) becomes its right-hand neighbor
+            instead of sitting stacked underneath it. order-1/col-span-2
+            below 1400px is the reflow prototype above — full-width top
+            row instead of the narrow middle third; unaffected by this
+            row/column change, which only governs this div's OWN two
+            children. */}
+        <div className="order-1 flex flex-col gap-1.5 sm:col-span-2 sm:flex-row sm:items-start sm:gap-3 min-[1400px]:order-2 min-[1400px]:col-span-1 min-[1400px]:flex-col min-[1400px]:gap-1.5">
+          {/* Groups the chart with the three bottom cards (below 1400px
+              only) so they sit directly beneath the CHART's own shorter
+              height, not the whole chart+Legenda row's height — per
+              Gregor's explicit follow-up request. Without this wrapper,
+              Podrobnosti termina/Pretekli termini/Rentgeni sat in a
+              separate grid row whose start position was pushed down by
+              Legenda's own height (964px, taller than the chart's 614px),
+              since both the chart AND Legenda lived in that first row
+              together — a big, unwanted gap below the visibly-shorter
+              chart. Nesting the bottom cards here instead, as a sibling
+              of the chart within the SAME flex-column (not a new grid
+              row), means they start right after the chart's own actual
+              bottom edge, independent of however tall Legenda happens to
+              be alongside them. sm:flex-none (not flex-1): this stack's
+              own width must come from its content (990px, via the
+              chart's own cap below), not from splitting space evenly with
+              Legenda — Legenda alone takes sm:flex-1 to fill whatever's
+              left, exactly as it already did before this wrapper existed.
+              min-[1400px]:contents dissolves this wrapper at >=1400px, so
+              only the chart itself sits here then, unchanged from before
+              any of today's narrow-mode work. */}
+          <div className="flex flex-col gap-3 sm:flex-none min-[1400px]:contents">
+          {/* Capped at 990px ONLY below 1400px (max-[1399px]:, not a plain
+              max-w-*) — per Gregor's explicit correction after the first
+              full-width-chart prototype: below 1400px this column spans
+              the full page width, but the chart itself should stay the
+              same size it renders at on his real desktop screen, not grow
+              to fill the extra space. 990px is his actual measured card
+              width there (ruler screenshot: ~2046px real browser width ->
+              natural fitWidth column ~990px) — NOT a generic "17-inch"
+              guess; an earlier version used 769px, derived from an assumed
+              1600px-wide reference screen that didn't match his real
+              window, which is why the two didn't visually match. Scoping
+              the cap to max-[1399px]: is what matters structurally — an
+              earlier version applied it unconditionally, which then ALSO
+              clamped the chart at >=1400px on any screen wider than the
+              assumed reference, silently undoing fitWidth's actual job
+              there (breaking the exact "fill this column" behavior
+              fitWidth has always had on normal/desktop screens). At
+              >=1400px this div is just a plain full-width wrapper — no
+              cap, chart fills the real column exactly as before today's
+              changes (so it'll still exceed 990px on a real screen wider
+              than ~2046px logical px — this pins the 13" case to Gregor's
+              own current desktop size specifically, not a hard app-wide
+              ceiling). fitWidth still does its normal job of scaling the
+              chart to exactly fill whatever container it's given.
+              sm:flex-none + sm:mx-0: from the sm breakpoint up to 1399px
+              this div is a row-sibling of Frame 7 (see the parent's own
+              comment above) rather than centered above it, so it needs to
+              stay pinned at its capped width instead of flex-shrinking or
+              auto-centering; harmless at >=1400px, where the parent is
+              flex-col again and this was already effectively a no-op
+              (mx-auto on a w-full block has no visible effect). */}
+          <div className="mx-auto w-full max-[1399px]:max-w-[990px] sm:mx-0 sm:flex-none">
+            <DentalChart
+              instructionText={
+                <div className="flex items-center justify-between gap-3">
+                  {/* Left side switches from the idle prompt to "Izbran zob: …"
+                      once a tooth is selected — per Gregor's explicit request.
+                      Right side is a static hint, matching the mockup's own
+                      header row exactly ("Za vnos globine žepka..."). */}
+                  <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
+                  <span>Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.</span>
+                </div>
+              }
+              surfacesByFdi={surfacesByFdi}
+              pocketsBuccal={MOCK_POCKETS_BUCCAL}
+              pocketsLingual={MOCK_POCKETS_LINGUAL}
+              gumMargin={MOCK_GUM_MARGIN}
+              bleedingBuccal={MOCK_BLEEDING_BUCCAL}
+              bleedingLingual={MOCK_BLEEDING_LINGUAL}
+              postByFdi={postByFdi}
+              endoByFdi={endoByFdi}
+              bridgeGroupByFdi={bridgeGroupByFdi}
+              onSelect={setSelectedFdi}
+              onTargetClick={handleTargetClick}
+              isTargetSelected={isTargetSelected}
+              isFdiSelected={isFdiSelected}
+              hideArchLabels
+              compact
+              fitWidth
+            />
+          </div>
+
+          {/* Podrobnosti termina + Pretekli termini (left) and Rentgeni/
+              Fotografije/SMS/E-pošta (right) — below 1400px only (hidden,
+              sm:flex restores it, min-[1400px]:hidden takes it away again
+              once each card's ORIGINAL >=1400px position — inside the
+              patient-info column and the appointment column respectively
+              — takes over instead). Content is shared with those original
+              positions via appointmentCardContent/visitHistoryContent/
+              rentgeniCardContent (declared above, near selectedHistory) —
+              this is a second rendering at a different position, not a
+              second copy to maintain. Both sides sm:flex-1/sm:min-w-0 to
+              split the chart's own 990px width evenly, per Gregor's
+              explicit request that these three frames shrink to fit
+              "the gap between the left edge of the screen and Legenda." */}
+          <div className="hidden flex-col gap-3 sm:flex sm:flex-row sm:items-start sm:gap-3 min-[1400px]:hidden">
+            <div className="flex flex-col gap-3 sm:min-w-0 sm:flex-1">
+              <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
+              <div className="flex h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+                {visitHistoryContent}
               </div>
-            }
-            surfacesByFdi={surfacesByFdi}
-            pocketsBuccal={MOCK_POCKETS_BUCCAL}
-            pocketsLingual={MOCK_POCKETS_LINGUAL}
-            gumMargin={MOCK_GUM_MARGIN}
-            bleedingBuccal={MOCK_BLEEDING_BUCCAL}
-            bleedingLingual={MOCK_BLEEDING_LINGUAL}
-            postByFdi={postByFdi}
-            endoByFdi={endoByFdi}
-            bridgeGroupByFdi={bridgeGroupByFdi}
-            onSelect={setSelectedFdi}
-            onTargetClick={handleTargetClick}
-            isTargetSelected={isTargetSelected}
-            isFdiSelected={isFdiSelected}
-            hideArchLabels
-            compact
-            fitWidth
-          />
+            </div>
+            <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:min-w-0 sm:flex-1">
+              {rentgeniCardContent}
+            </div>
+          </div>
+          </div>
 
           {/* ---- Frame 7: Legenda/Storitve po zobeh, merged with the
               status toolbar ----
@@ -938,8 +1222,16 @@ export function PatientPageMockup() {
               the "shrink the taller frames down to this one's natural
               height" side of the trade-off instead of growing this one to
               match Frame 3, per his follow-up. Frame 8 and Frame 3 are
-              now the ones sized to match THIS card's own bottom edge. */}
-          <div className="flex flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
+              now the ones sized to match THIS card's own bottom edge.
+              sm:flex-1/sm:min-w-0 (below 1400px only): fills the width
+              freed up beside the now-left-aligned, width-capped chart
+              (see the parent's own comment) instead of sitting stacked
+              full-width below it — min-w-0 lets it actually shrink to
+              that narrower space rather than overflowing based on its
+              own content's natural width (StatusToolbar's button grid).
+              Reset at >=1400px, where this is back to a normal full-width
+              block stacked below the chart, unchanged. */}
+          <div className="flex flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:min-w-0 sm:flex-1 min-[1400px]:flex-none min-[1400px]:w-full">
             {/* "Legenda" (holding the clickable status toolbar, moved out
                 of its own standalone row above this card, instead of the
                 old read-only StatusLegend swatch grid — that grid and the
@@ -956,7 +1248,19 @@ export function PatientPageMockup() {
                 panel below is what keeps this whole card short enough
                 that the page doesn't need a scroll to see the rest of
                 it. */}
-            <div className="mb-3 flex flex-none items-center justify-between gap-3 border-b border-[var(--line,#ccd6d4)]">
+            {/* Row below 1400px only became a genuine bug, not just an
+                aesthetic choice: with justify-between + a flex-none hint
+                span (see below), the header tried to lay the tabs AND the
+                full one-line "Kliknite ploskev..." sentence out
+                side-by-side even in this card's new ~237px-wide row-mode
+                slot, forcing real horizontal overflow (page scrollWidth
+                blew out to 1642px on a 1280px viewport before this fix).
+                flex-col + items-stretch below 1400px stacks the tabs above
+                the hint/selection line and gives it the card's full width
+                to actually wrap into, instead of demanding one line
+                beside the tabs. Reverts to the original single-row layout
+                at >=1400px, where this card is wide enough for it. */}
+            <div className="mb-3 flex flex-none flex-col items-stretch gap-2 border-b border-[var(--line,#ccd6d4)] min-[1400px]:flex-row min-[1400px]:items-center min-[1400px]:justify-between min-[1400px]:gap-3">
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -982,7 +1286,16 @@ export function PatientPageMockup() {
                 </button>
               </div>
               {activeTab === 'legenda' && (
-                <div className="mb-2 flex flex-none items-center gap-2">
+                // flex-none was the actual root cause of the overflow this
+                // whole block's own comment above describes — it forced
+                // this row to render at its full unshrunk content width
+                // (the entire "Kliknite ploskev..." sentence on one line)
+                // regardless of how little space the now-narrow card
+                // actually had. flex-wrap (below 1400px) lets it wrap
+                // instead; min-[1400px]:flex-none/flex-nowrap restores the
+                // original fixed one-line-beside-the-tabs behavior once
+                // there's actually room for it.
+                <div className="mb-2 flex flex-wrap items-center gap-2 min-[1400px]:flex-none min-[1400px]:flex-nowrap">
                   {selection.length > 0 ? (
                     <>
                       <span className="text-xs text-[var(--ink,#1c2624)]">
@@ -1051,93 +1364,23 @@ export function PatientPageMockup() {
           </div>
         </div>
 
-        {/* ---- Right column: appointment details + resource links ---- */}
-        <div className="flex flex-col gap-3">
-          <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <h2 className="mb-3 text-lg font-bold text-[var(--ink,#1c2624)]">Podrobnosti termina</h2>
-
-            <div className="flex items-start justify-between gap-3">
-              {/* Left: status pill (not clickable — see
-                  MOCK_APPOINTMENT_STATUS's own comment above), the
-                  schedule/reschedule button in that same slot either way,
-                  and — for every status except "Ni termina" — the booked
-                  appointment's own details below that. */}
-              <div className="flex flex-1 flex-col items-start gap-2">
-                <span
-                  className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].pillClass}`}
-                >
-                  {APPOINTMENT_STATUS_META[MOCK_APPOINTMENT_STATUS].label}
-                </span>
-
-                {MOCK_APPOINTMENT_STATUS === 'ni_termina' ? (
-                  <button
-                    type="button"
-                    onClick={() => setScheduleModalOpen(true)}
-                    className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
-                  >
-                    Naroči naslednji termin
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setRescheduleModalOpen(true)}
-                    className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
-                  >
-                    Prestavi termin
-                  </button>
-                )}
-
-                {MOCK_APPOINTMENT_STATUS !== 'ni_termina' && (
-                  <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
-                    <span>Datum: 14. 3. 2026</span>
-                    <span>Ura: 10:30</span>
-                    <span>Predvidena storitev: Pregled + čiščenje</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Right: unpaid-invoices indicator — "same frame, to the
-                  right" per the spec. */}
-              <div className="flex w-[150px] flex-none flex-col gap-1.5">
-                {unpaidInvoices.length > 0 ? (
-                  <>
-                    <span className="w-fit rounded-full bg-[#e0231c] px-3 py-1 text-xs font-semibold text-white">
-                      Neplačani račun
-                    </span>
-                    <ul className="flex flex-col gap-1">
-                      {unpaidInvoices.map((inv) => (
-                        <li key={inv.id}>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedInvoice(inv)}
-                            className="w-full rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
-                          >
-                            <div className="font-medium">{inv.date}</div>
-                            <div className="text-[var(--muted,#6f7c79)]">{inv.amount.toFixed(2)} €</div>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    <span className="mt-1 text-xs font-semibold text-[var(--ink,#1c2624)]">
-                      Skupaj: {totalUnpaid.toFixed(2)} €
-                    </span>
-                  </>
-                ) : (
-                  <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
-                    Računi plačani
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
+        {/* ---- Right column: appointment details + resource links ----
+            Hidden entirely below 1400px (min-[1400px]:flex restores it) —
+            per Gregor's explicit request, both cards now render nested
+            under the chart instead (see the new block right after the
+            chart above) at that size. Content is shared via
+            appointmentCardContent/rentgeniCardContent (declared above,
+            near selectedHistory) — this is those same cards' ORIGINAL
+            position, unchanged from before any of today's narrow-mode
+            work, not a second copy to maintain. */}
+        <div className="order-3 hidden flex-col gap-3 min-[1400px]:flex">
+          <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
 
           {/* Rentgeni/Fotografije/SMS/E-pošta — modeled on
               design/PatientRecordMockup.svg, which places this frame here
               in the right column below "Podrobnosti termina" (the written
               spec put it in the left column instead; the mockup wins per
               Gregor's "model it the same way" instruction for this page).
-              Same active-tab underline pattern as the Legenda/Storitve po
-              zobeh tabs in the middle column.
               Fixed height, originally 492px (pixel-matched to the
               Rentgeni tab's own natural height, the tallest of the four),
               then grown to 618px to match an earlier, taller version of
@@ -1145,100 +1388,9 @@ export function PatientPageMockup() {
               match Frame 7's own natural (shortest) bottom edge per
               Gregor's explicit follow-up request (shrink the taller
               frames to the shortest one's real content height, instead
-              of growing the shorter ones up). The Rentgeni image
-              placeholder below is flex-1, so it simply fills whatever
-              room is left after the tab bar. */}
+              of growing the shorter ones up). */}
           <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">
-            <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
-              <div className="flex gap-1">
-                {(
-                  [
-                    ['rentgeni', 'Rentgeni'],
-                    ['fotografije', 'Fotografije'],
-                    ['sms', 'SMS'],
-                    ['eposta', 'E-pošta'],
-                  ] as const
-                ).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setInfoTab(key)}
-                    className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
-                      infoTab === key
-                        ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
-                        : 'border-transparent text-[var(--ink-soft,#45524f)]'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {infoTab === 'rentgeni' && (
-                <button
-                  type="button"
-                  onClick={() => setRtgGalleryOpen(true)}
-                  className="mb-2 flex-none rounded-full border border-[var(--ink,#1c2624)] px-3 py-1 text-xs font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)]"
-                >
-                  RTG galerija
-                </button>
-              )}
-            </div>
-
-            {infoTab === 'rentgeni' && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2">
-                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
-                  Mockup — slike bi se sem prenesle samodejno iz RTG aparata/studia. Prikazan je najnovejši posnetek.
-                </p>
-                <div className="flex w-full flex-1 items-center justify-center rounded-md bg-[#e7e7e7] text-sm text-[var(--muted,#6f7c79)]">
-                  {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
-                </div>
-              </div>
-            )}
-
-            {infoTab === 'fotografije' && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">
-                  Mockup — klinične fotografije, ki jih zdravnik naloži med zdravljenjem.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {MOCK_PHOTOS.map((photo, i) => (
-                    <div key={i} className="flex flex-col gap-1">
-                      <div className="flex aspect-square w-full items-center justify-center rounded-md bg-[#e7e7e7] text-xs text-[var(--muted,#6f7c79)]">
-                        {photo.opis}
-                      </div>
-                      <span className="text-xs text-[var(--muted,#6f7c79)]">{photo.date}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {infoTab === 'sms' && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — zadnje SMS sporočilo s pacientom.</p>
-                <div className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
-                  <p>{MOCK_SMS.text}</p>
-                  <p className="mt-2 text-xs text-[var(--muted,#6f7c79)]">{MOCK_SMS.date}</p>
-                </div>
-              </div>
-            )}
-
-            {infoTab === 'eposta' && (
-              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — kronološka zgodovina e-pošte s pacientom.</p>
-                <ul className="flex flex-col gap-2">
-                  {MOCK_EMAILS.map((email, i) => (
-                    <li key={i} className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="font-semibold">{email.subject}</span>
-                        <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{email.date}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">{email.snippet}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {rentgeniCardContent}
           </div>
         </div>
       </div>

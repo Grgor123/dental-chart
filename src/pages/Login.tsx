@@ -25,7 +25,7 @@ export function Login({ onSignIn, error }: LoginProps) {
       >
         <div>
           <h1 className="text-xl font-semibold text-[var(--ink,#1c2624)]">Prijava</h1>
-          <p className="mt-1 text-sm text-[var(--ink-soft,#45524f)]">Monikina ordinacija — zobna karta</p>
+          <p className="mt-1 text-sm text-[var(--ink-soft,#45524f)]">Zobna kartoteka za zobozdravstvene ordinacije</p>
         </div>
         <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
           E-pošta
