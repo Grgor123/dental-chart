@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Potrditev termina — Zobozdravstvo Goslar</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 48px auto; padding: 0 16px; text-align: center; color: #222; }
+  h1 { font-size: 1.3rem; }
+  .buttons { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+  button { font-size: 1.1rem; padding: 14px 24px; border-radius: 8px; border: none; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .confirm { background: #2e7d32; color: white; }
+  .decline { background: #c62828; color: white; }
+</style>
+</head>
+<body>
+  <!-- Same reason this is a static page, not served from the Edge Function
+       directly, as docs/sms-consent.html's own comment explains. -->
+  <div id="app"><p>Nalaganje …</p></div>
+  <script>
+    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/appointment-confirm';
+    const token = new URLSearchParams(location.search).get('token');
+    const app = document.getElementById('app');
+    const LABELS = { confirmed: 'potrjen', declined: 'odpovedan' };
+
+    function render(html) { app.innerHTML = html; }
+
+    async function load() {
+      if (!token) return render('<h1>Povezava ni veljavna.</h1>');
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok) return render('<h1>Povezava ni veljavna.</h1>');
+        if (data.status !== 'pending') return render(`<h1>Vaš termin je že ${LABELS[data.status] || data.status}.</h1>`);
+        render(`
+          <h1>Ali boste prišli na termin${data.appointmentTime ? ` ${data.appointmentTime}` : ''}?</h1>
+          <div class="buttons">
+            <button id="confirmBtn" class="confirm">Pridem</button>
+            <button id="declineBtn" class="decline">Ne pridem</button>
+          </div>
+        `);
+        document.getElementById('confirmBtn').addEventListener('click', () => respond('confirm'));
+        document.getElementById('declineBtn').addEventListener('click', () => respond('decline'));
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    async function respond(action) {
+      document.querySelectorAll('button').forEach((b) => (b.disabled = true));
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error('failed');
+        render(`<h1>${data.status === 'confirmed' ? 'Hvala za potrditev!' : 'Zabeleženo, hvala za sporočilo.'}</h1>`);
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

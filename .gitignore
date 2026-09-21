@@ -16,6 +16,11 @@ dist-ssr
 .env
 .env.local
 
+# Supabase CLI local state (project ref, pooler URL, version cache) —
+# created by `supabase link`/`functions deploy`, machine-local, never
+# committed (matches the CLI's own standard convention)
+supabase/.temp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

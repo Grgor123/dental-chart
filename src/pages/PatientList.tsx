@@ -210,13 +210,17 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
     // Constructed from this form's own already-known values, not re-fetched
     // — assignedDentist/internalRecordNumber aren't collected here (Frame 2
     // on the chart page is where those get entered later), so both are
-    // correctly left undefined, matching "not yet entered."
+    // correctly left undefined, matching "not yet entered." smsConsentStatus
+    // mirrors what request_sms_consent_on_phone_change_trigger just did
+    // server-side: 'pending' the moment a phone was entered, 'unknown'
+    // otherwise (see usePatients.ts's PatientListItem comment).
     onCreated({
       patientId: result.patientId,
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       dob,
       sex: sex || null,
+      smsConsentStatus: phone.trim() ? 'pending' : 'unknown',
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       address: address.trim() || undefined,

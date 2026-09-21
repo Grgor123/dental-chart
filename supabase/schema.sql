@@ -1,14 +1,15 @@
 -- Dental Practice Management App — Phase 1 schema
 -- Paste this whole file into the Supabase SQL Editor (Project → SQL Editor →
 -- New query) and click Run. Safe to run once on a fresh project — this
--- already includes everything from migrations 001-014 baked in directly
+-- already includes everything from migrations 001-015 baked in directly
 -- (gum margin, bleeding surfaces, dental post, endo, visit lifecycle,
 -- bridge grouping, restricting sex to M/F, patient contact fields, split
 -- address fields, patient care fields, the multi-tenancy foundation:
 -- practices/practice_members + practice_id on every table + real
--- per-practice RLS, a native appointments table, and practice-scoped
--- therapists), so a brand-new project only needs this ONE file, not this
--- file plus fourteen migrations run afterward in order. The migrations/
+-- per-practice RLS, a native appointments table, practice-scoped
+-- therapists, and SMS reminders/consent via Lertify), so a brand-new
+-- project only needs this ONE file, not this file plus fifteen migrations
+-- run afterward in order. The migrations/
 -- folder stays as-is for a project
 -- that already has an OLDER version of these tables and needs to catch up
 -- incrementally instead.
@@ -97,6 +98,15 @@ create table patients (
   assigned_dentist text,          -- Izbran terapevt — plain editable text, not hardcoded (single-dentist assumption doesn't hold once other practices sign up)
   internal_record_number text,    -- Št. interne evidence — this practice's own internal patient record number
   diagnoses text[] default '{}',
+  -- SMS reminders (see "Native scheduling calendar" / SMS section of
+  -- CLAUDE.md) — a double opt-in: 'pending' the moment a phone number is
+  -- set (request_sms_consent_on_phone_change_trigger below sends the
+  -- one-button opt-in SMS), 'granted' only once that link is actually
+  -- clicked. Appointment reminders never send to anyone but 'granted'.
+  sms_consent_status text not null default 'unknown'
+    check (sms_consent_status in ('unknown','pending','granted','declined')),
+  sms_consent_requested_at timestamptz,
+  sms_consent_responded_at timestamptz,
   created_at timestamptz default now()
 );
 create index patients_practice_id_idx on patients(practice_id);
@@ -200,6 +210,35 @@ create index therapists_practice_id_idx on therapists(practice_id);
 alter table appointments add column therapist_id uuid references therapists(id) on delete set null;
 create index appointments_therapist_id_idx on appointments(therapist_id);
 
+-- SMS consent audit trail (patient_sms_consents) and appointment reminders
+-- (appointment_reminders) — see supabase/migrations/015_add_sms_reminders.sql
+-- and CLAUDE.md's SMS section for the full design (sent via Lertify, same
+-- account as the sibling "dental calendar" booking-widget project).
+create table patient_sms_consents (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from the parent patient row
+  patient_id uuid not null references patients(id) on delete cascade,
+  consent_token text not null unique,
+  consent_text text not null,  -- exact wording shown on the confirmation page
+  requested_at timestamptz not null default now(),
+  granted_at timestamptz
+);
+create index patient_sms_consents_patient_id_idx on patient_sms_consents(patient_id);
+
+create table appointment_reminders (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from the parent appointment row
+  appointment_id uuid not null references appointments(id) on delete cascade,
+  patient_phone text not null,  -- E.164, copied at send time
+  sent_at timestamptz not null default now(),
+  lertify_message_id text,
+  confirm_token text not null unique,
+  status text not null default 'pending' check (status in ('pending','confirmed','declined')),
+  replied_at timestamptz,
+  delivery_status text check (delivery_status in ('SENT','DELIVERED','FAILED','REJECTED','UNKNOWN','CANCELLED'))
+);
+create unique index appointment_reminders_appointment_id_idx on appointment_reminders(appointment_id);
+
 -- Auto-stamp triggers: derive practice_id from the parent row, so
 -- useOpenVisit.ts / useVisit.ts never need to know practice_id exists at
 -- all, and any client-supplied value is always overwritten by the real one
@@ -252,6 +291,103 @@ $$;
 create trigger set_appointment_practice_id_trigger
   before insert or update of patient_id on appointments
   for each row execute function set_appointment_practice_id();
+
+create or replace function set_patient_sms_consent_practice_id()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  select practice_id into new.practice_id from patients where id = new.patient_id;
+  if new.practice_id is null then raise exception 'cannot resolve practice_id for patient %', new.patient_id; end if;
+  return new;
+end;
+$$;
+create trigger set_patient_sms_consent_practice_id_trigger
+  before insert or update of patient_id on patient_sms_consents
+  for each row execute function set_patient_sms_consent_practice_id();
+
+create or replace function set_appointment_reminder_practice_id()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  select practice_id into new.practice_id from appointments where id = new.appointment_id;
+  if new.practice_id is null then raise exception 'cannot resolve practice_id for appointment %', new.appointment_id; end if;
+  return new;
+end;
+$$;
+create trigger set_appointment_reminder_practice_id_trigger
+  before insert or update of appointment_id on appointment_reminders
+  for each row execute function set_appointment_reminder_practice_id();
+
+-- Trigger: request SMS consent whenever a patient's phone is set/changes.
+-- pg_net is Supabase's built-in async HTTP extension — this queues the
+-- call as part of the same transaction (so it never fires if the write
+-- rolls back) and returns immediately, never blocking a patient save. The
+-- caller-auth secret is read from Supabase Vault by name, not embedded
+-- here — see the SETUP NOTES at the bottom of
+-- supabase/migrations/015_add_sms_reminders.sql for the one-time,
+-- not-committed `vault.create_secret(...)` call this depends on.
+create extension if not exists pg_net;
+
+create or replace function request_sms_consent_on_phone_change()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_service_role_key text;
+begin
+  if new.phone is null or trim(new.phone) = '' then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.phone is not distinct from new.phone then
+    return new;
+  end if;
+
+  select decrypted_secret into v_service_role_key
+    from vault.decrypted_secrets where name = 'edge_function_service_role_key';
+
+  new.sms_consent_status := 'pending';
+  new.sms_consent_requested_at := now();
+  new.sms_consent_responded_at := null;
+
+  if v_service_role_key is not null then
+    -- Hardcoded to this project's own URL rather than a Postgres runtime
+    -- setting — Supabase doesn't reliably expose one for this. If this
+    -- schema.sql is ever run fresh against a genuinely different Supabase
+    -- project, update this URL (and the one in the cron job below) to
+    -- match.
+    perform net.http_post(
+      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/request-sms-consent',
+      headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
+      body := jsonb_build_object('patientId', new.id)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+create trigger request_sms_consent_on_phone_change_trigger
+  before insert or update of phone on patients
+  for each row execute function request_sms_consent_on_phone_change();
+
+-- Daily cron: send reminders 2 days ahead. Requires the Supabase Pro plan
+-- or above (pg_cron isn't on the Free tier) — if this fails, trigger
+-- send-appointment-reminders from an external scheduler instead (same
+-- Edge Function URL, same Authorization header). Fires hourly rather than
+-- at one fixed UTC time, since 14:00 Europe/Ljubljana shifts between 12:00
+-- and 13:00 UTC across daylight saving — send-appointment-reminders itself
+-- checks the current Ljubljana wall-clock hour and no-ops unless it's 14.
+create extension if not exists pg_cron;
+
+select cron.schedule(
+  'send-appointment-reminders-hourly',
+  '0 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminders',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
 
 -- Row Level Security — enable on all tables
 alter table patients enable row level security;
@@ -323,4 +459,26 @@ create policy therapists_update on therapists for update
   using (practice_id = current_practice_id())
   with check (practice_id = current_practice_id());
 create policy therapists_delete on therapists for delete
+  using (practice_id = current_practice_id());
+
+alter table patient_sms_consents enable row level security;
+create policy patient_sms_consents_select on patient_sms_consents for select
+  using (practice_id = current_practice_id());
+create policy patient_sms_consents_insert on patient_sms_consents for insert
+  with check (practice_id = current_practice_id());
+create policy patient_sms_consents_update on patient_sms_consents for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy patient_sms_consents_delete on patient_sms_consents for delete
+  using (practice_id = current_practice_id());
+
+alter table appointment_reminders enable row level security;
+create policy appointment_reminders_select on appointment_reminders for select
+  using (practice_id = current_practice_id());
+create policy appointment_reminders_insert on appointment_reminders for insert
+  with check (practice_id = current_practice_id());
+create policy appointment_reminders_update on appointment_reminders for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy appointment_reminders_delete on appointment_reminders for delete
   using (practice_id = current_practice_id());

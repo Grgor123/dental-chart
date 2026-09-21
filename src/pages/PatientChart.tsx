@@ -114,6 +114,22 @@ const PHONE_COMPACT_CSS = `
   .ppm-phone-compact .PhoneInputCountryIcon { height: 1.1rem; }
 `;
 
+// SMS reminder consent (migration 015_add_sms_reminders.sql) — see
+// usePatients.ts's PatientListItem.smsConsentStatus comment for the full
+// state machine.
+const SMS_CONSENT_LABEL: Record<PatientListItem['smsConsentStatus'], string> = {
+  unknown: 'Ni zahtevano',
+  pending: 'Čaka na potrditev',
+  granted: 'Potrjeno',
+  declined: 'Zavrnjeno',
+};
+const SMS_CONSENT_BADGE_CLASSES: Record<PatientListItem['smsConsentStatus'], string> = {
+  unknown: 'bg-[var(--bg,#eef2f1)] text-[var(--muted,#6f7c79)]',
+  pending: 'bg-[#fff4e5] text-[#b26a00]',
+  granted: 'bg-[#e8f5e9] text-[#2e7d32]',
+  declined: 'bg-[#fdecea] text-[var(--danger,#b3261e)]',
+};
+
 interface PatientChartProps {
   /** Which patient this chart belongs to — from PatientList.tsx's own selection. */
   patientId: string;
@@ -163,7 +179,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // comments for exactly what each does.
 export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
-  const { updatePatient } = usePatients();
+  const { updatePatient, setSmsConsentStatus } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   const {
@@ -245,6 +261,20 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     }
     setPatientDraft(result.patient);
     setEditMode(false);
+  }
+  // Manual override for SMS reminder consent — a deliberate compliance
+  // action (patient asked by phone to stop, or staff re-sending an opt-in
+  // request), independent of the Uredi/Shrani edit toggle above; see
+  // usePatients.ts's own setSmsConsentStatus() comment for why this isn't
+  // just another updatePatient() field.
+  const [smsConsentSaving, setSmsConsentSaving] = useState(false);
+  async function handleSetSmsConsent(status: PatientListItem['smsConsentStatus']) {
+    setSmsConsentSaving(true);
+    const result = await setSmsConsentStatus(patientId, status);
+    setSmsConsentSaving(false);
+    if (!('error' in result)) {
+      setPatientDraft(result.patient);
+    }
   }
   // Notes: its own submit flow, independent of the Edit toggle above —
   // still local-only (no patient-level notes-log table exists yet, same
@@ -998,6 +1028,43 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     <span className={VIEW_VALUE_CLASSES}>{patientDraft.phone || '—'}</span>
                   )}
                 </div>
+
+                {/* SMS-consent indicator — only meaningful once a phone
+                    exists, matching the trigger's own condition (no phone,
+                    no consent flow at all). Always actionable regardless of
+                    the Uredi/Shrani toggle above, since it's a status
+                    action, not a draft text edit. */}
+                {patientDraft.phone && (
+                  <div className="flex flex-col gap-1">
+                    <span className={VIEW_LABEL_CLASSES}>SMS opomniki</span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SMS_CONSENT_BADGE_CLASSES[patientDraft.smsConsentStatus]}`}
+                      >
+                        {SMS_CONSENT_LABEL[patientDraft.smsConsentStatus]}
+                      </span>
+                      {patientDraft.smsConsentStatus === 'granted' ? (
+                        <button
+                          type="button"
+                          disabled={smsConsentSaving}
+                          onClick={() => handleSetSmsConsent('declined')}
+                          className="text-xs text-[var(--danger,#b3261e)] hover:underline disabled:opacity-60"
+                        >
+                          Prekliči soglasje
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={smsConsentSaving}
+                          onClick={() => handleSetSmsConsent('granted')}
+                          className="text-xs text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
+                        >
+                          Označi kot potrjeno
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-1">
                   <span className={VIEW_LABEL_CLASSES}>Št. ZZZS</span>

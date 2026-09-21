@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soglasje za SMS opomnike — Zobozdravstvo Goslar</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 48px auto; padding: 0 16px; text-align: center; color: #222; }
+  h1 { font-size: 1.3rem; }
+  p { color: #555; }
+  button { font-size: 1.1rem; padding: 14px 24px; border-radius: 8px; border: none; cursor: pointer; background: #2e6e62; color: white; margin-top: 24px; }
+  button:disabled { opacity: 0.6; cursor: default; }
+</style>
+</head>
+<body>
+  <!-- This static page exists because Supabase Edge Functions deliberately
+       rewrite text/html responses to text/plain on the shared *.supabase.co
+       domain (https://github.com/supabase/supabase/issues/50214) — the
+       function itself (sms-consent-confirm) only ever serves JSON now;
+       this page just calls it via fetch() and renders the result. -->
+  <div id="app"><p>Nalaganje …</p></div>
+  <script>
+    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/sms-consent-confirm';
+    const token = new URLSearchParams(location.search).get('token');
+    const app = document.getElementById('app');
+
+    function render(html) { app.innerHTML = html; }
+
+    async function load() {
+      if (!token) return render('<h1>Povezava ni veljavna.</h1>');
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok) return render('<h1>Povezava ni veljavna.</h1>');
+        if (data.status === 'granted') return render('<h1>Soglasje je že potrjeno.</h1>');
+        render(`
+          <h1>Soglasje za SMS opomnike</h1>
+          <p>${data.consentText}</p>
+          <button id="confirmBtn">Da, želim prejemati SMS opomnike o terminih</button>
+        `);
+        document.getElementById('confirmBtn').addEventListener('click', confirmConsent);
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    async function confirmConsent() {
+      const btn = document.getElementById('confirmBtn');
+      btn.disabled = true;
+      btn.textContent = 'Pošiljanje …';
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`, { method: 'POST' });
+        if (!res.ok) throw new Error('failed');
+        render('<h1>Hvala! SMS opomnike o terminih boste odslej prejemali.</h1>');
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

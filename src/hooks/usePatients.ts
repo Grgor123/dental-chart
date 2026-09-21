@@ -38,10 +38,20 @@ export type PatientListItem = Pick<
   sex: Patient['sex'] | null;
   assignedDentist?: string;
   internalRecordNumber?: string;
+  /** SMS reminder consent (migration 015_add_sms_reminders.sql) — a double
+      opt-in: 'unknown' until a phone is ever set, 'pending' from the
+      moment it is (the request_sms_consent_on_phone_change trigger sends
+      the one-button opt-in SMS right then), 'granted' only once that link
+      is actually clicked, 'declined' if staff manually turn it off (e.g.
+      the patient asked by phone — Lertify's account can't receive inbound
+      replies, so there's no other way for a patient to revoke it
+      themselves besides the unsubscribe link in each reminder). Appointment
+      reminders only ever send to 'granted'. */
+  smsConsentStatus: 'unknown' | 'pending' | 'granted' | 'declined';
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
@@ -58,6 +68,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     healthCardNumber: (row.health_card_number as string | null) ?? undefined,
     assignedDentist: (row.assigned_dentist as string | null) ?? undefined,
     internalRecordNumber: (row.internal_record_number as string | null) ?? undefined,
+    smsConsentStatus: (row.sms_consent_status as PatientListItem['smsConsentStatus']) ?? 'unknown',
   };
 }
 
@@ -201,5 +212,32 @@ export function usePatients() {
     []
   );
 
-  return { patients, loading, error, createPatient, updatePatient };
+  // Manual staff override for SMS consent — kept as its own dedicated
+  // action rather than a field on updatePatient's generic bag, since it's
+  // a deliberate compliance decision (e.g. a patient asked by phone to
+  // stop, or staff re-sending an opt-in request), not a routine text edit.
+  // Setting 'declined' does NOT delete the patient_sms_consents audit
+  // trail — that stays as the durable record of what was originally
+  // requested/granted, this only flips the fast-lookup status that
+  // send-appointment-reminders actually checks before sending.
+  const setSmsConsentStatus = useCallback(
+    async (
+      patientId: string,
+      status: PatientListItem['smsConsentStatus']
+    ): Promise<{ patient: PatientListItem } | { error: string }> => {
+      const { data, error } = await supabase
+        .from('patients')
+        .update({ sms_consent_status: status, sms_consent_responded_at: new Date().toISOString() })
+        .eq('id', patientId)
+        .select(PATIENT_COLUMNS)
+        .single();
+      if (error) return { error: error.message };
+      const patient = rowToPatientListItem(data);
+      setPatients((prev) => prev.map((p) => (p.patientId === patientId ? patient : p)));
+      return { patient };
+    },
+    []
+  );
+
+  return { patients, loading, error, createPatient, updatePatient, setSmsConsentStatus };
 }
