@@ -51,7 +51,7 @@
       try {
         const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`, { method: 'POST' });
         if (!res.ok) throw new Error('failed');
-        render('<h1>Hvala! SMS opomnike o terminih boste odslej prejemali.</h1>');
+        render('<h1>Hvala! Odslej boste prejemali SMS opomnike Zobozdravstva Goslar o vaših terminih.</h1>');
       } catch (e) {
         render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
       }
