@@ -3190,6 +3190,151 @@ fed from one another in any way; don't conflate them.
 
 ---
 
+### SMS appointment reminders and consent (Lertify)
+
+**Status: built and confirmed live (2026-09-22).** A real reminder SMS sent
+2 days ahead of a real appointment, confirmed by tapping "Pridem" on the
+linked page, which flipped that appointment's status to "Potrjen" —
+visible on the Patient Record page's Frame 5 and (via the identical
+`appointments.status` column) the calendar's own tick badge — with clean,
+error-free logs in both `send-appointment-reminders` and
+`appointment-confirm`. Sent via **Lertify — the same account/credential as
+the sibling "dental calendar" booking-widget project's own SMS reminders**
+(`C:\Users\Uporabnik\Documents\Claude code dental calendar`, its own
+"SMS appointment reminders (Lertify)" section — this feature mirrors that
+one's overall shape, adapted to this app's own stack).
+
+**Architecture differs from the sibling project's in one deliberate way**:
+that project has a real Express backend and uses n8n (scheduled workflow +
+webhook) to orchestrate sending; this app has no backend server at all, so
+the equivalent logic lives entirely in **Supabase Edge Functions**
+(`supabase/functions/`) instead — a scheduled one for sending, and public
+ones for the two patient-facing confirm pages. Migration
+`015_add_sms_reminders.sql` (confirmed run) adds:
+
+- **`patients.sms_consent_status`** (`unknown`/`pending`/`granted`/
+  `declined`) + `sms_consent_requested_at`/`sms_consent_responded_at` — the
+  fast-lookup fields `send-appointment-reminders` actually checks before
+  ever sending a reminder.
+- **`patient_sms_consents`** — a durable, append-only audit table (same
+  reasoning as the sibling project's own `booking_consents`): `patient_id`,
+  `consent_token`, the *exact wording* shown on the confirmation page,
+  `requested_at`/`granted_at`. The `patients` columns above are a mutable
+  cache of this table's own facts, not the source of truth.
+- **`appointment_reminders`** — one row per appointment actually reminded:
+  `confirm_token`, `status` (pending/confirmed/declined), `delivery_status`
+  (SENT/DELIVERED/FAILED/REJECTED/UNKNOWN/CANCELLED, updated by Lertify's
+  own delivery-report callback), `lertify_message_id`. Both new tables
+  follow the exact same multi-tenancy pattern as every other table (flat
+  `practice_id`, auto-stamp trigger from the parent row, 4 explicit RLS
+  policies) — see "Multi-tenancy" above.
+
+**Double opt-in consent, not a single checkbox** — per Gregor's explicit
+request, since Koledar-created patients (staff entering someone over the
+phone) never see a web form where a consent checkbox could be shown the
+way the website booking widget's own form does. A Postgres trigger
+(`request_sms_consent_on_phone_change`, `BEFORE INSERT OR UPDATE OF phone
+ON patients`) fires the moment a phone is set or changed, and — via
+`pg_net` (Supabase's built-in async HTTP extension, so this never blocks
+the actual patient save) — calls the `request-sms-consent` Edge Function,
+which sends one minimal SMS asking the patient to tap a link with exactly
+one button ("Da, želim prejemati SMS opomnike o terminih"). Not clicking
+leaves consent at `pending`, never treated as granted. This is the
+standard "double opt-in" pattern (the same mechanic behind every email
+newsletter signup) — sending one *request-to-opt-in* message doesn't
+itself require prior consent, since its only content is the opt-in ask,
+not a reminder or marketing. **Revocation**: since Lertify's account can't
+receive inbound SMS replies (same limitation the sibling project hit — see
+its own CLAUDE.md), there's no way for a patient to text back "STOP." A
+manual staff override lives on the Patient Record page instead (a
+"Prekliči soglasje"/"Označi kot potrjeno" toggle next to the
+phone field's own "SMS opomniki" status badge) —
+`usePatients.ts`'s `setSmsConsentStatus()`, kept as its own dedicated
+action rather than a field on `updatePatient()`'s generic bag, since it's
+a deliberate compliance decision, not a routine text edit. This is a
+solid, defensible default, not a substitute for a real compliance sign-off
+from whoever handles the practice's own ZVOP-3 obligations.
+
+**The reminder send itself** (`send-appointment-reminders`, a scheduled
+Edge Function) targets appointments starting exactly 2 days ahead, at
+**14:00 Europe/Ljubljana**, skipping anyone whose consent isn't `granted`
+or who has no phone on file. It's invoked **hourly** by `pg_cron`, not once
+at a fixed UTC time — 14:00 Ljubljana is 12:00 UTC in summer (CEST) and
+13:00 UTC in winter (CET), and `pg_cron` has no timezone awareness, so the
+function itself checks the current Ljubljana wall-clock hour and no-ops
+23 times a day, only actually running at the 24th. `pg_cron`/`pg_net` both
+needed enabling once (`create extension`) — worked on this project's Free
+plan without needing to upgrade, worth knowing since Supabase's own docs
+suggest `pg_cron` is Pro-plan-only. **Confirm/decline**
+(`appointment-confirm`) updates `appointments.status` to `confirmed`/
+`cancelled` directly — the calendar's `AppointmentChip` already renders a
+tick/cross for those statuses, so no frontend change was needed for
+"appears on the appointment card," per Gregor's original request.
+
+**A real, load-bearing platform gotcha, caught live**: Supabase Edge
+Functions **deliberately rewrite `text/html` responses to `text/plain`**
+on the shared `*.supabase.co` domain — confirmed by directly inspecting
+the response headers (`curl -sD -`) after a real patient's phone showed
+raw HTML source text instead of a rendered page, and independently
+confirmed as a known, intentional platform behavior (not a bug in this
+app's code), documented at
+[github.com/supabase/supabase#50214](https://github.com/supabase/supabase/issues/50214)
+— real HTML from an Edge Function needs the Pro plan plus a custom domain.
+**Remember this for any future public-facing page idea in this app**: an
+Edge Function can serve JSON (or any non-HTML content type) just fine, but
+never a real webpage, unless that's set up. The fix here: `sms-consent-confirm`
+and `appointment-confirm` were rewritten to serve **JSON with CORS**
+(`Access-Control-Allow-Origin: *`, since the endpoint is already
+token-gated — a stricter origin would add no real security) instead of
+HTML, and the two actual patient-facing pages became plain static
+HTML+JS files on **GitHub Pages** (`docs/sms-consent.html`,
+`docs/appointment-confirm.html`, published at
+`https://grgor123.github.io/dental-chart/...` — enabled once via repo
+Settings → Pages → Deploy from branch → `main` / `/docs`), each just
+`fetch()`-ing the corresponding function for data and the confirm action.
+The SMS links point at these GitHub Pages URLs, not the Edge Functions'
+own URLs.
+
+**Lertify's actual request/response shape was reverse-engineered, not
+guessed twice** — an initial attempt based only on the sibling project's
+CLAUDE.md prose (`{sender, to, message}` as a flat body, `Authorization:
+Bearer` header) came back a `400` with a validation error naming an
+`apiKey` field and an `SmsContentDto` conversion failure. Rather than
+guess again, the sibling project's own **already-working n8n workflow**
+("Dental appointment booking workflow") was read directly via its API
+(`N8N_API_KEY` in that project's `credentials.env` — read-only, this
+instance is shared with unrelated workflows, never touch anything else on
+it) to find its real "Send SMS via Lertify" node config. The actual shape:
+auth is a plain **`apiKey` header** (not `Authorization: Bearer`), the
+phone number goes in a **`destinations` array** (not a single `to`
+string), `message` is an **object** (`{content, isUnicode}`, not a plain
+string), and a successful response is `{ messages: [{ messageId }] }` (not
+a flat `messageId`/`id`). Message text avoids Slovene diacritics
+(`š`/`č`/`ž`) with `isUnicode: false`, matching the sibling workflow's own
+convention — keeps a message inside one cheaper GSM-7 SMS segment.
+
+**Delivery status** (`lertify-delivery-webhook`, public, receives
+Lertify's own async `{messageId, status}` callback) updates
+`appointment_reminders.delivery_status` by matching `lertify_message_id` —
+same mechanic as the sibling project's own "Lertify Delivery Report
+Webhook" n8n node, verified against that node's real payload shape the
+same way as the send request above (this one matched what the sibling
+project's CLAUDE.md already documented, no fix needed).
+
+**Setup this depended on, once per project** (not something application
+code or a migration can do): a Supabase Vault secret
+(`edge_function_service_role_key`, read by the consent-trigger and cron
+job to authenticate their own calls to the Edge Functions — never
+committed anywhere), the 5 functions deployed via `supabase functions
+deploy` (`sms-consent-confirm`/`appointment-confirm`/
+`lertify-delivery-webhook` with `--no-verify-jwt`, since those three have
+no signed-in caller at all), and `LERTIFY_API_KEY`/`LERTIFY_SENDER` set via
+`supabase secrets set` (reusing the sibling project's own credential,
+found in its `backend/.env` — not committed there either, and not copied
+into this repo).
+
+---
+
 ## ZVOP-3 / GDPR Compliance Notes
 
 - Supabase project must be on **EU (Frankfurt)** region
@@ -3576,6 +3721,15 @@ next:
   (Koledar)" above for the full feature, including a real timezone bug
   (Week view opening on the wrong day) that was found and fixed along the
   way.
+- **SMS appointment reminders + consent built, via Lertify** — a real
+  reminder sent 2 days ahead of a real appointment and confirmed live
+  (2026-09-22): double opt-in consent (a Postgres trigger + Supabase Edge
+  Function sends a one-button SMS the moment a phone is set), a daily
+  reminder send (Edge Function + `pg_cron`, migration
+  `015_add_sms_reminders.sql`), and confirm/decline pages hosted on GitHub
+  Pages talking to the functions as JSON (Supabase Edge Functions can't
+  serve real HTML on the shared domain — see "SMS appointment reminders
+  and consent (Lertify)" above for that gotcha and the full feature).
 
 **Not started:**
 1. Print view (chart only, A4)
@@ -3586,7 +3740,27 @@ next:
 
 ---
 
-*Last updated: 2026-09-17 (native scheduling calendar built and live — see
+*Last updated: 2026-09-22 (SMS appointment reminders + consent built and
+confirmed live via a real send/confirm round trip — see "SMS appointment
+reminders and consent (Lertify)" above for the full feature: double
+opt-in consent (a phone-change trigger + Edge Function sends a one-button
+SMS before any reminder ever goes out), a daily 14:00-Ljubljana reminder
+send 2 days ahead of each appointment (Supabase Edge Functions + pg_cron,
+DST-safe via an hourly self-gating check rather than a fixed UTC cron
+time), and confirm/decline updating `appointments.status` directly so the
+calendar's own tick/cross badges pick it up with no frontend change.
+Same Lertify account/credential as the sibling "dental calendar" project;
+its exact request shape (an `apiKey` header, a `destinations` array, a
+`message` object, not the flat shape the docs alone suggested) was
+reverse-engineered from that project's own live n8n workflow after an
+initial guess came back a 400. Also caught live: Supabase Edge Functions
+deliberately rewrite `text/html` to `text/plain` on the shared
+*.supabase.co domain (a real, documented platform restriction, not a bug)
+— worth remembering for any future public-facing page in this app — so
+the two patient-facing confirm pages ended up as static files on GitHub
+Pages instead, talking to the functions as JSON with CORS.)*
+
+*Previous entry: 2026-09-17 (native scheduling calendar built and live — see
 "Native scheduling calendar (Koledar)" above for the full feature: a real
 Google-Calendar-style Day/Week/Month calendar on `appointments`/
 `therapists` tables (migrations 013/014, same multi-tenancy pattern as
