@@ -389,12 +389,15 @@ Everything added *after* that initial run (restricting `sex` to M/F,
 `phone`/`email`/`address`/`postal_code`/`city`/`health_card_number` on
 `patients`, then `assigned_dentist`/`internal_record_number`, then the full
 multi-tenancy foundation below, then the native scheduling calendar's
-`appointments`/`therapists` tables — see "Native scheduling calendar"
-below) landed on the live project as its own migrations —
-`007_restrict_sex_to_mf.sql` through `014_add_therapists.sql` — all
-confirmed run. `supabase/schema.sql` itself is kept in sync to bake in
-everything through the latest migration, so a brand-new project only ever
-needs that one file.
+`appointments`/`therapists` tables, then SMS reminders/consent — see
+"Native scheduling calendar" below) landed on the live project as its own
+migrations — `007_restrict_sex_to_mf.sql` through
+`015_add_sms_reminders.sql` — all confirmed run. A further migration,
+`016_add_email_notifications.sql` (email notifications/opt-out via Amazon
+SES — see "Email notifications" below), exists in the repo but **has not
+yet been run** against the live project. `supabase/schema.sql` itself is
+kept in sync to bake in everything through the latest migration (016
+included), so a brand-new project only ever needs that one file.
 
 **Multi-tenancy (011/012) is the big structural change here — see its own
 section below** for the full reasoning; the short version: every table now
@@ -3333,6 +3336,173 @@ no signed-in caller at all), and `LERTIFY_API_KEY`/`LERTIFY_SENDER` set via
 found in its `backend/.env` — not committed there either, and not copied
 into this repo).
 
+### Email notifications (Amazon SES)
+
+**Status: code complete, not yet run/deployed against the live project.**
+Appointment confirmation (with an `.ics` calendar attachment) sent on
+booking, and a reminder email 2 days ahead, mirroring the SMS system above
+closely — Supabase Edge Functions + pg_cron + pg_net, same multi-tenancy
+pattern (flat `practice_id`, `current_practice_id()` RLS) — but built on
+Amazon SES instead of Lertify, and a **lighter-touch consent model**: an
+email address on file is treated as implied consent for transactional
+appointment email (no double opt-in round trip), backed by a real
+unsubscribe link plus an automatic opt-out on a hard bounce/spam complaint.
+
+**Why not the sibling "dental calendar" project's own Gmail-OAuth
+approach**: that project sends via a Gmail OAuth2 node inside an external
+n8n workflow — fine for one practice's occasional booking, but this app is
+a genuine multi-practice SaaS product (see "Multi-tenancy" above), and a
+personal/Workspace Gmail account has no real deliverability
+infrastructure (rate limits, bounce/complaint handling) or DPA coverage at
+that scale.
+
+**How "plug in your domain and verify" is achieved without per-client AWS
+setup** — the key realization from designing this: AWS SES sandbox removal
+and production-access approval are one-time, **account-wide** (not
+per-domain, not per-practice); and SES natively supports verifying **many
+domains under one account** (`CreateEmailIdentity` per domain, each domain
+owner just adds 3 DKIM CNAME records to their own DNS). So the two-tier
+design below needs zero new AWS account/IAM/sandbox work per practice —
+only the domain owner's own DNS records, which is unavoidable for any
+ESP's domain authentication (SES, Postmark, SendGrid, Mailgun all work the
+same way).
+
+**Two sending tiers, both built:**
+- **Shared platform domain** (`platform_default`, every practice's
+  starting state) — zero setup, sends from one verified domain
+  (`SES_SENDER_ADDRESS`) for the whole product, with the practice's own
+  name in the "From" display name and its `contact_email` as Reply-To.
+- **Per-practice custom domain** (`custom_domain`, opt-in) — a practice
+  sends as its own domain instead. Provisioned via
+  `scripts/provision-practice-domain.mjs` (a local, throwaway admin script,
+  same convention as `scripts/verify-tenant-isolation.mjs` — not shipped as
+  part of the app), which calls SES `CreateEmailIdentity` under the same
+  AWS account the Edge Functions already send through, prints the 3 DKIM
+  records to hand to the practice, and (once verified) flips
+  `practices.custom_domain_verified`. **Deliberately admin-run, not
+  self-service** — per Gregor's explicit instruction: no practice-facing
+  settings page exists anywhere in the app yet (Nastavitve is still a
+  permanently inert placeholder in `AppNavShell`), so a real self-service
+  page where a practice picks its own sending method and watches its own
+  verification status is **noted here as a deferred future task**, to be
+  built later alongside other app settings, not scoped into this feature.
+  The send helper (`_shared/email/send.ts`'s `resolveSenderIdentity()`)
+  always checks `custom_domain_verified`, not just the mode column, so a
+  practice mid-verification silently falls back to the platform domain
+  rather than sending from an unverified identity.
+
+**A third tier, Gmail OAuth "send via your own mailbox"** (zero DNS work,
+200-2,000 emails/day) was considered and explicitly deferred: it requires
+Google's own OAuth app-verification review (a CASA security assessment)
+before the `gmail.send` scope can be used by real users beyond ~100 test
+accounts — a real external timeline dependency, not a code-complexity one.
+Left as a documented option to revisit, not built.
+
+**Schema** (`supabase/migrations/016_add_email_notifications.sql`, baked
+into `supabase/schema.sql`): `patients` gains `email_opt_out`/
+`email_opt_out_at`/`email_unsubscribe_token` (one persistent token per
+patient, unlike SMS's per-message tokens — an unsubscribe link only ever
+needs to prove "this is really that patient," not "this is really this
+specific message"). `practices` gains `contact_email` plus the
+`email_sending_mode`/`custom_domain`/`custom_domain_sender_local_part`/
+`custom_domain_verified`/`custom_domain_dkim_tokens`/
+`custom_domain_requested_at`/`custom_domain_verified_at` columns described
+above. `email_log` is a generic audit table (not a dedicated table per
+email type — deliberately reusable plumbing) with a unique index on
+`(appointment_id, email_type)` so a confirmation and a reminder for the
+same appointment coexist but a reminder can't double-send. An
+`AFTER INSERT ON appointments` trigger (`send_appointment_confirmation_email`)
+fires the confirmation send via the same `pg_net` + Vault-secret pattern as
+`request_sms_consent_on_phone_change`, reusing the identical
+`edge_function_service_role_key` secret — no new Vault secret needed. A
+second hourly cron (`send-appointment-reminder-emails-hourly`) fires the
+reminder send at a **different** self-gated hour (09:00 Ljubljana) than
+SMS's own 14:00, purely so the two channels stay decoupled in time.
+
+**Edge Functions** (`supabase/functions/`): `send-appointment-confirmation-email`
+(trigger-invoked) and `send-appointment-reminder-emails` (cron-invoked,
+fully **separate** from `send-appointment-reminders` — independent
+provider/quota/consent-flag, so an SES outage can never affect SMS
+reminders or vice versa; the "find candidate appointments" query is
+duplicated rather than shared, since the two aren't actually identical
+— different WHERE clause, different columns — and it's ~15 lines appearing
+in exactly two places) both use the new `_shared/email/` module:
+`send.ts` (the SES wrapper — builds a raw MIME message so it can always
+carry an optional `.ics` attachment, sent via `SESv2Client`/
+`SendEmailCommand`'s `Content.Raw.Data` from `npm:@aws-sdk/client-sesv2`
+through Deno's native `npm:` specifier support — no hand-rolled SigV4;
+also `resolveSenderIdentity()`, the platform-vs-custom-domain routing
+described above), `ics.ts` (a hand-rolled plain-text VCALENDAR/VEVENT
+builder, no library, matching this project's existing minimal-dependency
+approach elsewhere), `templates.ts` (inline-styled HTML layout + the two
+real templates — inline styles only, since most email clients strip
+external/`<style>` CSS), and `log.ts` (`logEmail()` +
+`resolveUnsubscribeToken()`, shared by both send functions so the opt-out
+check and token handling live in exactly one place). `email-unsubscribe`
+(public, `--no-verify-jwt`) is the JSON API behind
+`docs/email-unsubscribe.html` on GitHub Pages — same reason as the SMS
+pages for why it only serves JSON: Supabase rewrites `text/html` to
+`text/plain` on the shared `*.supabase.co` domain (see the SMS section
+above). `ses-bounce-webhook` (public, `--no-verify-jwt`) is the SNS → HTTPS
+subscriber for SES's Bounce/Complaint event destination — handles the SNS
+subscription-confirmation handshake (fetches `SubscribeURL` on every
+request defensively, since SNS can re-send it), and on a **Permanent**
+bounce or **any** complaint, opts the patient out and updates the matching
+`email_log` row (matched by `provider_message_id`, i.e. SES's own message
+id, not by recipient email — more precise than SMS's own webhook, since a
+patient can receive more than one email). A Transient bounce logs only,
+doesn't opt out (a full mailbox isn't a real signal). This webhook is
+genuinely load-bearing, not optional polish: AWS enforces bounce-rate/
+complaint-rate thresholds and will throttle or suspend a sending account
+that exceeds them. **Not implemented**: SNS message-signature verification
+(`SigningCertURL`/`Signature`) to confirm a POST really came from AWS —
+real hardening worth doing before scaling further, low severity to skip
+for now (a spoofed request could only wrongly opt someone out, not expose
+data) — unlike the `Authorization: Bearer` check every trigger/cron-invoked
+function still has, which stays mandatory.
+
+**Explicitly out of scope this phase**: confirm/decline via email (SMS's
+own `appointment-confirm` token flow already covers that; duplicating it
+for email would mean two channels racing to set `appointments.status` for
+no real benefit — these emails are informational-only: time, service,
+`.ics` attachment, unsubscribe link); resending the confirmation on
+reschedule (the trigger is `AFTER INSERT` only, not
+`AFTER UPDATE OF starts_at` — an easy, contained future addition to the
+same trigger); speculative email types with no real trigger yet (a welcome
+email has no practice-signup code path to hang off, since practices are
+still created manually via the dashboard; a staff-invite email has no
+invite UI, per "Out of Scope for Phase 1" below) — the `_shared/email/`
+module is generic enough that either is mostly "write a template function
++ a trigger" once their own trigger points exist, not new plumbing.
+
+**Frontend**: `usePatients.ts` gained `emailOptOut` on `PatientListItem`
+and `setEmailOptOut()` (a manual staff override, same dedicated-action
+shape as `setSmsConsentStatus` — a compliance decision, not a routine text
+edit). `PatientChart.tsx`'s Frame 2 gained an "E-poštna obvestila" badge
+immediately after the existing "SMS opomniki" one, gated on
+`patientDraft.email` the same way the SMS badge is gated on
+`patientDraft.phone` — but only 2 states/1 toggle (Aktivno/Odjavljen(a)),
+not SMS's 4-state opt-in badge, since the model here is a plain opt-out
+flag.
+
+**Setup this depends on, once per project** (see the SETUP NOTES at the
+bottom of `supabase/migrations/016_add_email_notifications.sql` for the
+full checklist): a verified SES sending domain + SES production access
+(both one-time, account-wide, as established above), an IAM user scoped to
+`ses:SendEmail`/`ses:SendRawEmail` for the Edge Functions'
+`SES_ACCESS_KEY_ID`/`SES_SECRET_ACCESS_KEY`/`SES_REGION`/
+`SES_SENDER_ADDRESS` (`supabase secrets set`), an SES configuration set
+with Bounce/Complaint event publishing → an SNS topic subscribed to the
+deployed `ses-bounce-webhook` URL, the 4 new functions deployed (the two
+trigger/cron-invoked ones keep default JWT verification ON;
+`email-unsubscribe`/`ses-bounce-webhook` need `--no-verify-jwt`), and
+`docs/email-unsubscribe.html` added to the already-enabled GitHub Pages
+publish. **None of this has been run yet** — this section describes what's
+built in the repo, not a confirmed-live feature (contrast with the SMS
+section above, which is confirmed live); update this status once the
+migration is actually run and a real send/confirm/bounce round trip is
+verified, the same way the SMS section was.
+
 ---
 
 ## ZVOP-3 / GDPR Compliance Notes
@@ -3730,17 +3900,67 @@ next:
   Pages talking to the functions as JSON (Supabase Edge Functions can't
   serve real HTML on the shared domain — see "SMS appointment reminders
   and consent (Lertify)" above for that gotcha and the full feature).
+- **Email notifications built, via Amazon SES — code complete, not yet run
+  live.** Appointment confirmation (with an `.ics` attachment) on booking +
+  a reminder 2 days ahead, mirroring the SMS system's shape but with a
+  lighter-touch opt-out consent model instead of double opt-in, and a
+  two-tier sending design (a shared platform domain every practice gets for
+  free, plus an opt-in per-practice custom domain provisioned by hand via
+  `scripts/provision-practice-domain.mjs` — no self-service settings UI
+  yet, deliberately deferred) — migration `016_add_email_notifications.sql`
+  exists in the repo but has not been run against the live project, and no
+  AWS SES setup (domain verification, production access, the SNS
+  bounce/complaint webhook) has been done yet either. See "Email
+  notifications (Amazon SES)" above for the full design and the exact
+  setup checklist this still needs before it can be marked confirmed live,
+  the same way the SMS system above is.
 
 **Not started:**
 1. Print view (chart only, A4)
-2. Everything past Phase 1: CRM features, invoicing, appointment
+2. Running the email-notifications migration + AWS SES setup + a real
+   send/unsubscribe/bounce round trip against the live project (see "Email
+   notifications (Amazon SES)" above — the feature is code-complete but
+   unverified)
+3. A real self-service Nastavitve settings page — where a practice would
+   eventually configure its own email sending domain, among other future
+   settings — deliberately deferred per Gregor's explicit instruction
+   rather than built alongside the email feature above
+4. A Gmail-OAuth "send via your own mailbox" email tier — considered and
+   deferred, since it depends on a Google OAuth app-verification review
+   (CASA assessment) outside this project's control — see "Email
+   notifications (Amazon SES)" above
+5. Everything past Phase 1: CRM features, invoicing, appointment
    integration with the separate calendar app, staff-invite UI for
    `practice_members`, self-serve practice signup — see "Multi-tenancy" and
    "Out of Scope for Phase 1" above
 
 ---
 
-*Last updated: 2026-09-22 (SMS appointment reminders + consent built and
+*Last updated: 2026-09-23 (Email notifications built, via Amazon SES —
+code complete, not yet run/deployed live. Mirrors the SMS system's shape
+(Supabase Edge Functions + pg_cron + pg_net, same multi-tenancy RLS
+pattern) but swaps Lertify for SES and a lighter-touch opt-out consent
+model for SMS's double opt-in. The key design decision, reached after a
+follow-up discussion about scaling email sending across many practices:
+AWS SES sandbox removal and domain verification are both one-time and
+account-wide, and SES natively supports verifying many domains under one
+account — so a two-tier sending design (a shared platform domain every
+practice gets for free, plus an opt-in per-practice custom domain) needed
+no new AWS account/IAM/sandbox work per practice, only each domain owner's
+own DNS records. Per-practice custom domains are provisioned via a new
+local admin script, `scripts/provision-practice-domain.mjs` (not a
+self-service feature — deliberately deferred, per Gregor's explicit
+instruction, until a real Nastavitve settings page exists for the app
+generally). A Gmail-OAuth "send via your own mailbox" tier was also
+considered and explicitly deferred, since it depends on a Google
+app-verification review outside this project's control. See "Email
+notifications (Amazon SES)" for the full design — migration
+`016_add_email_notifications.sql` and every Edge Function it depends on
+are code-complete in the repo, but nothing has actually been run against
+the live project or AWS yet, so this stays a "not started"/code-complete
+item until that verification pass happens.)*
+
+*Previous entry: 2026-09-22 (SMS appointment reminders + consent built and
 confirmed live via a real send/confirm round trip — see "SMS appointment
 reminders and consent (Lertify)" above for the full feature: double
 opt-in consent (a phone-change trigger + Edge Function sends a one-button

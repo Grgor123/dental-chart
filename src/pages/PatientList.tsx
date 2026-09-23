@@ -213,7 +213,9 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
     // correctly left undefined, matching "not yet entered." smsConsentStatus
     // mirrors what request_sms_consent_on_phone_change_trigger just did
     // server-side: 'pending' the moment a phone was entered, 'unknown'
-    // otherwise (see usePatients.ts's PatientListItem comment).
+    // otherwise (see usePatients.ts's PatientListItem comment). emailOptOut
+    // is always false here — a brand new patient's email (if any) starts
+    // subscribed under the implied-consent model, no trigger involved.
     onCreated({
       patientId: result.patientId,
       firstName: firstName.trim(),
@@ -221,6 +223,7 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
       dob,
       sex: sex || null,
       smsConsentStatus: phone.trim() ? 'pending' : 'unknown',
+      emailOptOut: false,
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       address: address.trim() || undefined,

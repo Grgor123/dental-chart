@@ -179,7 +179,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // comments for exactly what each does.
 export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
-  const { updatePatient, setSmsConsentStatus } = usePatients();
+  const { updatePatient, setSmsConsentStatus, setEmailOptOut } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   const {
@@ -272,6 +272,19 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     setSmsConsentSaving(true);
     const result = await setSmsConsentStatus(patientId, status);
     setSmsConsentSaving(false);
+    if (!('error' in result)) {
+      setPatientDraft(result.patient);
+    }
+  }
+  // Manual override for email opt-out — same shape as the SMS override
+  // above, but a plain boolean flip (migration 016_add_email_notifications.sql
+  // uses opt-out, not SMS's 4-state opt-in) — see usePatients.ts's own
+  // setEmailOptOut() comment.
+  const [emailOptOutSaving, setEmailOptOutSaving] = useState(false);
+  async function handleSetEmailOptOut(optOut: boolean) {
+    setEmailOptOutSaving(true);
+    const result = await setEmailOptOut(patientId, optOut);
+    setEmailOptOutSaving(false);
     if (!('error' in result)) {
       setPatientDraft(result.patient);
     }
@@ -1060,6 +1073,47 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                           className="text-xs text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
                         >
                           Označi kot potrjeno
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Email opt-out indicator — only meaningful once an email
+                    is on file, same reasoning as the SMS badge above.
+                    Opt-out model, not SMS's opt-in: an email on file is
+                    treated as implied consent, so this only needs 2 states
+                    and 1 toggle, not SMS's 4. */}
+                {patientDraft.email && (
+                  <div className="flex flex-col gap-1">
+                    <span className={VIEW_LABEL_CLASSES}>E-poštna obvestila</span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          patientDraft.emailOptOut
+                            ? 'bg-[#fdecea] text-[#b3261e]'
+                            : 'bg-[#e8f5e9] text-[#2e7d32]'
+                        }`}
+                      >
+                        {patientDraft.emailOptOut ? 'Odjavljen(a)' : 'Aktivno'}
+                      </span>
+                      {patientDraft.emailOptOut ? (
+                        <button
+                          type="button"
+                          disabled={emailOptOutSaving}
+                          onClick={() => handleSetEmailOptOut(false)}
+                          className="text-xs text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
+                        >
+                          Ponovno omogoči
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={emailOptOutSaving}
+                          onClick={() => handleSetEmailOptOut(true)}
+                          className="text-xs text-[var(--danger,#b3261e)] hover:underline disabled:opacity-60"
+                        >
+                          Odjavi
                         </button>
                       )}
                     </div>

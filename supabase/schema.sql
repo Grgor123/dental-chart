@@ -1,14 +1,15 @@
 -- Dental Practice Management App — Phase 1 schema
 -- Paste this whole file into the Supabase SQL Editor (Project → SQL Editor →
 -- New query) and click Run. Safe to run once on a fresh project — this
--- already includes everything from migrations 001-015 baked in directly
+-- already includes everything from migrations 001-016 baked in directly
 -- (gum margin, bleeding surfaces, dental post, endo, visit lifecycle,
 -- bridge grouping, restricting sex to M/F, patient contact fields, split
 -- address fields, patient care fields, the multi-tenancy foundation:
 -- practices/practice_members + practice_id on every table + real
 -- per-practice RLS, a native appointments table, practice-scoped
--- therapists, and SMS reminders/consent via Lertify), so a brand-new
--- project only needs this ONE file, not this file plus fifteen migrations
+-- therapists, SMS reminders/consent via Lertify, and email
+-- notifications/opt-out via Amazon SES), so a brand-new
+-- project only needs this ONE file, not this file plus sixteen migrations
 -- run afterward in order. The migrations/
 -- folder stays as-is for a project
 -- that already has an OLDER version of these tables and needs to catch up
@@ -26,6 +27,22 @@
 create table practices (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  -- Email notifications (see CLAUDE.md's "Email notifications" section /
+  -- migrations/016_add_email_notifications.sql): contact_email is the
+  -- Reply-To on outgoing email (falls back to the shared platform sending
+  -- address if null). email_sending_mode starts 'platform_default' (zero
+  -- setup, the shared verified domain) for every practice; 'custom_domain'
+  -- is opt-in, provisioned by hand via scripts/provision-practice-domain.mjs
+  -- (no in-app self-service flow yet — see that script's own header).
+  contact_email text,
+  email_sending_mode text not null default 'platform_default'
+    check (email_sending_mode in ('platform_default','custom_domain')),
+  custom_domain text,
+  custom_domain_sender_local_part text not null default 'obvestila',
+  custom_domain_verified boolean not null default false,
+  custom_domain_dkim_tokens jsonb,  -- the 3 DKIM CNAME records SES returned, so DNS instructions can be regenerated from the DB alone
+  custom_domain_requested_at timestamptz,
+  custom_domain_verified_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -107,6 +124,16 @@ create table patients (
     check (sms_consent_status in ('unknown','pending','granted','declined')),
   sms_consent_requested_at timestamptz,
   sms_consent_responded_at timestamptz,
+  -- Email notifications (see CLAUDE.md's "Email notifications" section) —
+  -- a lighter-touch, opt-out model rather than SMS's double opt-in: an
+  -- email on file is treated as implied consent, so this starts false
+  -- (subscribed) with no separate request/grant step.
+  -- email_unsubscribe_token is one persistent token per patient (not
+  -- per-message like SMS's tokens), created lazily the first time an email
+  -- actually goes out to them.
+  email_opt_out boolean not null default false,
+  email_opt_out_at timestamptz,
+  email_unsubscribe_token text unique,
   created_at timestamptz default now()
 );
 create index patients_practice_id_idx on patients(practice_id);
@@ -239,6 +266,32 @@ create table appointment_reminders (
 );
 create unique index appointment_reminders_appointment_id_idx on appointment_reminders(appointment_id);
 
+-- Email audit log — see supabase/migrations/016_add_email_notifications.sql
+-- and CLAUDE.md's "Email notifications" section (sent via Amazon SES).
+-- Generic on purpose (email_type, not a dedicated table per email type) so
+-- a future email type needs only a new email_type value, not a new table.
+create table email_log (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from appointment_id (falling back to patient_id)
+  patient_id uuid references patients(id) on delete cascade,
+  appointment_id uuid references appointments(id) on delete cascade,
+  email_type text not null check (email_type in ('appointment_confirmation','appointment_reminder')),
+  recipient_email text not null,
+  subject text not null,
+  status text not null default 'sent' check (status in ('sent','delivered','bounced','complained','failed')),
+  provider_message_id text,
+  sender_domain text not null,  -- the shared platform domain, or a practice's own verified custom domain
+  error_message text,
+  sent_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- A confirmation and a reminder for the same appointment coexist (different
+-- email_type); a reminder can't be sent twice for the same appointment.
+create unique index email_log_appointment_id_email_type_idx
+  on email_log(appointment_id, email_type) where appointment_id is not null;
+create index email_log_patient_id_idx on email_log(patient_id);
+create index email_log_practice_id_idx on email_log(practice_id);
+
 -- Auto-stamp triggers: derive practice_id from the parent row, so
 -- useOpenVisit.ts / useVisit.ts never need to know practice_id exists at
 -- all, and any client-supplied value is always overwritten by the real one
@@ -316,6 +369,24 @@ create trigger set_appointment_reminder_practice_id_trigger
   before insert or update of appointment_id on appointment_reminders
   for each row execute function set_appointment_reminder_practice_id();
 
+create or replace function set_email_log_practice_id()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if new.appointment_id is not null then
+    select practice_id into new.practice_id from appointments where id = new.appointment_id;
+  elsif new.patient_id is not null then
+    select practice_id into new.practice_id from patients where id = new.patient_id;
+  end if;
+  if new.practice_id is null then
+    raise exception 'cannot resolve practice_id for email_log row (need appointment_id or patient_id)';
+  end if;
+  return new;
+end;
+$$;
+create trigger set_email_log_practice_id_trigger
+  before insert or update of appointment_id, patient_id on email_log
+  for each row execute function set_email_log_practice_id();
+
 -- Trigger: request SMS consent whenever a patient's phone is set/changes.
 -- pg_net is Supabase's built-in async HTTP extension — this queues the
 -- call as part of the same transaction (so it never fires if the write
@@ -365,6 +436,34 @@ create trigger request_sms_consent_on_phone_change_trigger
   before insert or update of phone on patients
   for each row execute function request_sms_consent_on_phone_change();
 
+-- Trigger: send the confirmation email whenever an appointment is created —
+-- see supabase/migrations/016_add_email_notifications.sql and CLAUDE.md's
+-- "Email notifications" section. Same pg_net + Vault-secret pattern as
+-- request_sms_consent_on_phone_change above, reusing the SAME
+-- 'edge_function_service_role_key' Vault secret — no new secret needed.
+create or replace function send_appointment_confirmation_email()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_service_role_key text;
+begin
+  select decrypted_secret into v_service_role_key
+    from vault.decrypted_secrets where name = 'edge_function_service_role_key';
+
+  if v_service_role_key is not null then
+    perform net.http_post(
+      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-confirmation-email',
+      headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
+      body := jsonb_build_object('appointmentId', new.id)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+create trigger send_appointment_confirmation_email_trigger
+  after insert on appointments
+  for each row execute function send_appointment_confirmation_email();
+
 -- Daily cron: send reminders 2 days ahead. Requires the Supabase Pro plan
 -- or above (pg_cron isn't on the Free tier) — if this fails, trigger
 -- send-appointment-reminders from an external scheduler instead (same
@@ -380,6 +479,26 @@ select cron.schedule(
   $$
   select net.http_post(
     url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminders',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+
+-- Hourly cron: send reminder EMAILS 2 days ahead — same self-gating
+-- pattern as the SMS cron above, but at a different hour (09:00 Ljubljana
+-- vs. SMS's 14:00) purely so the two channels aren't coupled in time; see
+-- CLAUDE.md's "Email notifications" section for why they're fully separate
+-- functions.
+select cron.schedule(
+  'send-appointment-reminder-emails-hourly',
+  '0 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminder-emails',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -481,4 +600,15 @@ create policy appointment_reminders_update on appointment_reminders for update
   using (practice_id = current_practice_id())
   with check (practice_id = current_practice_id());
 create policy appointment_reminders_delete on appointment_reminders for delete
+  using (practice_id = current_practice_id());
+
+alter table email_log enable row level security;
+create policy email_log_select on email_log for select
+  using (practice_id = current_practice_id());
+create policy email_log_insert on email_log for insert
+  with check (practice_id = current_practice_id());
+create policy email_log_update on email_log for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy email_log_delete on email_log for delete
   using (practice_id = current_practice_id());

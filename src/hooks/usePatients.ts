@@ -48,10 +48,20 @@ export type PatientListItem = Pick<
       themselves besides the unsubscribe link in each reminder). Appointment
       reminders only ever send to 'granted'. */
   smsConsentStatus: 'unknown' | 'pending' | 'granted' | 'declined';
+  /** Email notification opt-out (migration 016_add_email_notifications.sql)
+      — a lighter-touch model than SMS's double opt-in: an email address on
+      file is treated as implied consent for transactional appointment
+      email, so this starts `false` (subscribed) the moment an email exists,
+      with no separate request/grant step. Flips to `true` via the
+      patient-facing unsubscribe link in any sent email, an automatic
+      opt-out on a hard bounce/spam complaint (see
+      supabase/functions/ses-bounce-webhook), or this hook's own
+      setEmailOptOut manual staff override below. */
+  emailOptOut: boolean;
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
@@ -69,6 +79,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     assignedDentist: (row.assigned_dentist as string | null) ?? undefined,
     internalRecordNumber: (row.internal_record_number as string | null) ?? undefined,
     smsConsentStatus: (row.sms_consent_status as PatientListItem['smsConsentStatus']) ?? 'unknown',
+    emailOptOut: (row.email_opt_out as boolean | null) ?? false,
   };
 }
 
@@ -239,5 +250,26 @@ export function usePatients() {
     []
   );
 
-  return { patients, loading, error, createPatient, updatePatient, setSmsConsentStatus };
+  // Manual staff override for email opt-out — its own dedicated action for
+  // the same reason setSmsConsentStatus above is: a deliberate compliance
+  // decision, not a routine text edit. Unlike SMS's 4-state consent, this
+  // is a plain boolean flip (opted out / not), so there's no equivalent of
+  // 'pending'/'unknown' to preserve.
+  const setEmailOptOut = useCallback(
+    async (patientId: string, optOut: boolean): Promise<{ patient: PatientListItem } | { error: string }> => {
+      const { data, error } = await supabase
+        .from('patients')
+        .update({ email_opt_out: optOut, email_opt_out_at: new Date().toISOString() })
+        .eq('id', patientId)
+        .select(PATIENT_COLUMNS)
+        .single();
+      if (error) return { error: error.message };
+      const patient = rowToPatientListItem(data);
+      setPatients((prev) => prev.map((p) => (p.patientId === patientId ? patient : p)));
+      return { patient };
+    },
+    []
+  );
+
+  return { patients, loading, error, createPatient, updatePatient, setSmsConsentStatus, setEmailOptOut };
 }
