@@ -4,6 +4,7 @@ import { Login } from './pages/Login';
 import { PatientList } from './pages/PatientList';
 import { PatientChart } from './pages/PatientChart';
 import { Calendar } from './pages/Calendar';
+import { EmailTemplates } from './pages/EmailTemplates';
 import { StatusShowcase } from './pages/StatusShowcase';
 import { PatientPageMockup } from './pages/PatientPageMockup';
 import { PracticeProvider, usePracticeContext } from './contexts/PracticeContext';
@@ -37,7 +38,8 @@ const DEV_PAGE = import.meta.env.VITE_DEV_PAGE;
 type Route =
   | { page: 'list' }
   | { page: 'chart'; patientId: string; patientLabel: string; patient: PatientListItem }
-  | { page: 'calendar' };
+  | { page: 'calendar' }
+  | { page: 'email' };
 
 function App() {
   const { session, loading, signIn, signOut, signInError } = useAuth();
@@ -79,15 +81,40 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onBack={() => setRoute({ page: 'list' })}
         onSignOut={onSignOut}
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
+        onNavigateEmail={() => setRoute({ page: 'email' })}
       />
     );
   }
 
   if (route.page === 'calendar') {
-    return <Calendar onBack={() => setRoute({ page: 'list' })} onSelectPatient={selectPatient} onSignOut={onSignOut} />;
+    return (
+      <Calendar
+        onBack={() => setRoute({ page: 'list' })}
+        onSelectPatient={selectPatient}
+        onSignOut={onSignOut}
+        onNavigateEmail={() => setRoute({ page: 'email' })}
+      />
+    );
   }
 
-  return <PatientList onSelectPatient={selectPatient} onSignOut={onSignOut} onNavigateCalendar={() => setRoute({ page: 'calendar' })} />;
+  if (route.page === 'email') {
+    return (
+      <EmailTemplates
+        onBack={() => setRoute({ page: 'list' })}
+        onSignOut={onSignOut}
+        onNavigateCalendar={() => setRoute({ page: 'calendar' })}
+      />
+    );
+  }
+
+  return (
+    <PatientList
+      onSelectPatient={selectPatient}
+      onSignOut={onSignOut}
+      onNavigateCalendar={() => setRoute({ page: 'calendar' })}
+      onNavigateEmail={() => setRoute({ page: 'email' })}
+    />
+  );
 }
 
 export default App;

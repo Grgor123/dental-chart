@@ -142,6 +142,8 @@ interface PatientChartProps {
   onSignOut: () => void;
   /** Wired to AppNavShell's "Koledar" button below. */
   onNavigateCalendar: () => void;
+  /** Wired to AppNavShell's "E-pošta" button below. */
+  onNavigateEmail: () => void;
 }
 
 // One chart target — a specific surface, or the whole tooth ('all').
@@ -177,7 +179,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // Loads and saves against ONE real Supabase visit, resolved fresh for
 // `patientId` on every mount — see useOpenVisit.ts and useVisit.ts's own
 // comments for exactly what each does.
-export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar }: PatientChartProps) {
+export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
   const { updatePatient, setSmsConsentStatus, setEmailOptOut } = usePatients();
   const { practiceName } = usePracticeContext();
@@ -851,6 +853,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         userLabel={practiceName ?? undefined}
         onSignOut={handleSignOutClick}
         onNavigateCalendar={onNavigateCalendar}
+        onNavigateEmail={onNavigateEmail}
         onNavigateHome={handleBackClick}
         activeSubmenu="storitve"
       />

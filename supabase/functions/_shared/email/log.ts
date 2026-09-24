@@ -3,6 +3,7 @@
 // call these, so the email_log write and the token lazy-creation live in
 // exactly one place.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import type { TemplateKey } from './templateDefs.ts';
 
 function randomToken(length = 24): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -24,7 +25,7 @@ export async function resolveUnsubscribeToken(supabase: SupabaseClient, patientI
 }
 
 export type EmailLogStatus = 'sent' | 'failed';
-export type EmailType = 'appointment_confirmation' | 'appointment_reminder';
+export type EmailType = TemplateKey; // one email_log type per template key
 
 export interface LogEmailInput {
   patientId?: string | null;

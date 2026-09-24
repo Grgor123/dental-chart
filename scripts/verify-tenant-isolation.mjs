@@ -165,6 +165,22 @@ async function main() {
     check("account 2 cannot insert a therapist under account 1's practice_id", false, "skipped — couldn't resolve account 1's practice_id");
   }
 
+  // 4d. Same spoof check for email_templates (019_add_email_templates.sql) —
+  // another root table where the client sets practice_id explicitly. Run only
+  // after 019 is live.
+  if (account1PracticeId) {
+    const { error: foreignTemplateError } = await client2
+      .from('email_templates')
+      .insert({ practice_id: account1PracticeId, template_key: 'recall', subject: 'Spoofed' });
+    check(
+      "account 2 cannot insert an email template under account 1's practice_id",
+      !!foreignTemplateError,
+      foreignTemplateError ? foreignTemplateError.message : 'insert unexpectedly succeeded'
+    );
+  } else {
+    check("account 2 cannot insert an email template under account 1's practice_id", false, "skipped — couldn't resolve account 1's practice_id");
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

@@ -276,7 +276,10 @@ create table email_log (
   practice_id uuid not null references practices(id),  -- auto-stamped from appointment_id (falling back to patient_id)
   patient_id uuid references patients(id) on delete cascade,
   appointment_id uuid references appointments(id) on delete cascade,
-  email_type text not null check (email_type in ('appointment_confirmation','appointment_reminder')),
+  email_type text not null check (email_type in (
+    'appointment_confirmation','appointment_reminder','appointment_cancelled',
+    'appointment_rescheduled','post_visit','recall'
+  )),
   recipient_email text not null,
   subject text not null,
   status text not null default 'sent' check (status in ('sent','delivered','bounced','complained','failed')),
@@ -287,11 +290,39 @@ create table email_log (
   updated_at timestamptz not null default now()
 );
 -- A confirmation and a reminder for the same appointment coexist (different
--- email_type); a reminder can't be sent twice for the same appointment.
+-- email_type); each type sends at most once per appointment — except
+-- 'appointment_rescheduled', since an appointment can move more than once
+-- (recall is keyed to the patient's last completed appointment, so it's once
+-- per last visit).
 create unique index email_log_appointment_id_email_type_idx
-  on email_log(appointment_id, email_type) where appointment_id is not null;
+  on email_log(appointment_id, email_type)
+  where appointment_id is not null and email_type <> 'appointment_rescheduled';
 create index email_log_patient_id_idx on email_log(patient_id);
 create index email_log_practice_id_idx on email_log(practice_id);
+
+-- Per-practice email template OVERRIDES — see
+-- supabase/migrations/019_add_email_templates.sql. Platform defaults live in
+-- code (supabase/functions/_shared/email/templateDefs.ts); a null column or
+-- no row at all means "use the default". Like patients/therapists, no parent
+-- row to derive practice_id from, so the client sets it on insert.
+create table email_templates (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),
+  template_key text not null check (template_key in (
+    'appointment_confirmation','appointment_reminder','appointment_cancelled',
+    'appointment_rescheduled','post_visit','recall'
+  )),
+  subject text,
+  heading text,
+  body text,
+  enabled boolean not null default true,
+  -- reminder = days before, post_visit = hours after, recall = months; null = default
+  timing_value integer check (timing_value is null or timing_value between 0 and 60),
+  -- Europe/Ljubljana hour of day (reminder/recall only); null = default
+  send_hour smallint check (send_hour is null or send_hour between 0 and 23),
+  updated_at timestamptz not null default now(),
+  unique (practice_id, template_key)
+);
 
 -- Auto-stamp triggers: derive practice_id from the parent row, so
 -- useOpenVisit.ts / useVisit.ts never need to know practice_id exists at
@@ -485,6 +516,47 @@ create trigger send_appointment_confirmation_email_trigger
   after insert on appointments
   for each row execute function send_appointment_confirmation_email();
 
+-- Trigger: email the patient when an appointment is cancelled or moved to a
+-- new time — see supabase/migrations/019_add_email_templates.sql. Same
+-- pg_net + Vault pattern as above. A 'cancelled' status flip also happens
+-- when a patient taps "Ne pridem" on the SMS confirm page, so they get the
+-- cancellation email too (intended).
+create or replace function send_appointment_change_email()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_service_role_key text;
+  v_kind text;
+begin
+  if new.status = 'cancelled' and old.status is distinct from 'cancelled' then
+    v_kind := 'cancelled';
+  elsif new.starts_at is distinct from old.starts_at
+        and new.status <> 'cancelled'
+        and new.starts_at > now() then
+    v_kind := 'rescheduled';
+  end if;
+
+  if v_kind is null then
+    return new;
+  end if;
+
+  select decrypted_secret into v_service_role_key
+    from vault.decrypted_secrets where name = 'edge_function_service_role_key';
+
+  if v_service_role_key is not null then
+    perform net.http_post(
+      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-change-email',
+      headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
+      body := jsonb_build_object('appointmentId', new.id, 'kind', v_kind)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+create trigger send_appointment_change_email_trigger
+  after update of status, starts_at on appointments
+  for each row execute function send_appointment_change_email();
+
 -- Daily cron: send reminders 2 days ahead. Requires the Supabase Pro plan
 -- or above (pg_cron isn't on the Free tier) — if this fails, trigger
 -- send-appointment-reminders from an external scheduler instead (same
@@ -509,17 +581,52 @@ select cron.schedule(
   $$
 );
 
--- Hourly cron: send reminder EMAILS 2 days ahead — same self-gating
--- pattern as the SMS cron above, but at a different hour (09:00 Ljubljana
--- vs. SMS's 14:00) purely so the two channels aren't coupled in time; see
--- CLAUDE.md's "Email notifications" section for why they're fully separate
--- functions.
+-- Hourly cron: send reminder EMAILS ahead of each appointment. Each practice
+-- picks its own days-before and send hour (email_templates.timing_value/
+-- send_hour, defaults 2 days / 09:00 Ljubljana — deliberately not SMS's
+-- 14:00, so the two channels aren't coupled in time); the function gates
+-- per practice. See CLAUDE.md's "Email notifications" section for why they're
+-- fully separate functions.
 select cron.schedule(
   'send-appointment-reminder-emails-hourly',
   '0 * * * *',
   $$
   select net.http_post(
     url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminder-emails',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+
+-- Hourly crons: post-visit follow-up email (N hours after a completed
+-- appointment ends) and recall email (N months after the last visit, no
+-- upcoming appointment). Both decide per practice inside the function — see
+-- supabase/migrations/019_add_email_templates.sql.
+select cron.schedule(
+  'send-post-visit-emails-hourly',
+  '0 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-post-visit-emails',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+
+select cron.schedule(
+  'send-recall-emails-hourly',
+  '0 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-recall-emails',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -632,4 +739,15 @@ create policy email_log_update on email_log for update
   using (practice_id = current_practice_id())
   with check (practice_id = current_practice_id());
 create policy email_log_delete on email_log for delete
+  using (practice_id = current_practice_id());
+
+alter table email_templates enable row level security;
+create policy email_templates_select on email_templates for select
+  using (practice_id = current_practice_id());
+create policy email_templates_insert on email_templates for insert
+  with check (practice_id = current_practice_id());
+create policy email_templates_update on email_templates for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy email_templates_delete on email_templates for delete
   using (practice_id = current_practice_id());

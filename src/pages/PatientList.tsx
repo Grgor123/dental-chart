@@ -15,6 +15,7 @@ interface PatientListProps {
   onSelectPatient: (patient: PatientListItem, label: string) => void;
   onSignOut: () => void;
   onNavigateCalendar: () => void;
+  onNavigateEmail: () => void;
 }
 
 // Formats a patient's own display label consistently everywhere it's
@@ -54,7 +55,7 @@ const SEX_LABELS: Record<Patient['sex'], string> = { M: 'M', F: 'Ž' };
 // lifecycle" and "Current Status & Next Steps"). Selecting a patient hands
 // their id up to App.tsx, which resolves/creates their open visit
 // (useOpenVisit.ts) before mounting PatientChart.
-export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar }: PatientListProps) {
+export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, onNavigateEmail }: PatientListProps) {
   const { patients, loading, error, createPatient } = usePatients();
   const { practiceName } = usePracticeContext();
   const [query, setQuery] = useState('');
@@ -72,6 +73,7 @@ export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar }: 
         userLabel={practiceName ?? undefined}
         onSignOut={onSignOut}
         onNavigateCalendar={onNavigateCalendar}
+        onNavigateEmail={onNavigateEmail}
         activeSubmenu="storitve"
       />
       <div className="mx-auto flex max-w-[720px] flex-col gap-5 p-6">

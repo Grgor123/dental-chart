@@ -1,12 +1,12 @@
-// Nav shell: visual only, no real routing except the two links that
-// actually go somewhere (Domov, Koledar — see below) — colors/positions
+// Nav shell: visual only, no real routing except the links that actually go
+// somewhere (Domov, Koledar, Storitve, E-pošta — see below) — colors/positions
 // pixel-matched off the original design mockup's own header bars (#5CE1E6
 // turquoise, #C8D1D9 grey "active" pill, both sampled directly off the
 // rendered mockup). Rendered at the very top of every signed-in page
-// (PatientList.tsx, PatientChart.tsx, Calendar.tsx) — see CLAUDE.md's "App
-// Shell — top navigation frame" section for the full rule. Sporočila/
-// El. pošta/Nastavitve stay fully inert everywhere, since none of those
-// features exist yet.
+// (PatientList.tsx, PatientChart.tsx, Calendar.tsx, EmailTemplates.tsx) — see
+// CLAUDE.md's "App Shell — top navigation frame" section for the full rule.
+// Sporočila/Nastavitve stay fully inert everywhere, since neither feature
+// exists yet.
 //
 // Shared between PatientPageMockup.tsx (dev-only, no props passed — stays
 // fully inert/cosmetic, same as before) and the three real pages (each
@@ -24,7 +24,7 @@ const SUBMENU_ITEMS = [
   { key: 'koledar', label: 'Koledar' },
   { key: 'storitve', label: 'Storitve' },
   { key: 'sporocila', label: 'Sporočila' },
-  { key: 'eposta', label: 'El. pošta' },
+  { key: 'eposta', label: 'E-pošta' },
   { key: 'nastavitve', label: 'Nastavitve' },
 ] as const;
 
@@ -55,9 +55,13 @@ interface AppNavShellProps {
       *active* pill already, so clicking it there would just be a no-op
       reload of where the user already is, same reasoning
       onNavigateCalendar is omitted on Calendar.tsx itself. Sporočila/
-      El. pošta/Nastavitve stay inert everywhere regardless, since none of
+      E-pošta/Nastavitve stay inert everywhere regardless, since none of
       those features exist yet. */
   onNavigateStoritve?: () => void;
+  /** "E-pošta" becomes clickable when this is passed — jumps to the email
+      template editor (EmailTemplates.tsx). Omitted on the dev-only mockup,
+      and on EmailTemplates.tsx itself (already there). */
+  onNavigateEmail?: () => void;
 }
 
 export function AppNavShell({
@@ -67,6 +71,7 @@ export function AppNavShell({
   onNavigateHome,
   onNavigateCalendar,
   onNavigateStoritve,
+  onNavigateEmail,
 }: AppNavShellProps) {
   return (
     <div className="flex w-full flex-col">
@@ -109,7 +114,9 @@ export function AppNavShell({
                 ? onNavigateCalendar
                 : key === 'storitve' && activeSubmenu !== 'storitve'
                   ? onNavigateStoritve
-                  : undefined
+                  : key === 'eposta' && activeSubmenu !== 'eposta'
+                    ? onNavigateEmail
+                    : undefined
             }
             className={`rounded-full px-3 py-1.5 text-sm font-medium ${
               key === activeSubmenu

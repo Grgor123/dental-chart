@@ -86,7 +86,7 @@ export interface SendEmailInput {
   replyTo?: string | null;
   subject: string;
   html: string;
-  attachmentIcs?: { filename: string; content: string } | null;
+  attachmentIcs?: { filename: string; content: string; method?: 'REQUEST' | 'CANCEL' } | null;
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<{ messageId: string | null }> {
@@ -113,7 +113,7 @@ export async function sendEmail(input: SendEmailInput): Promise<{ messageId: str
   const icsPart = input.attachmentIcs
     ? [
         `--${boundary}`,
-        `Content-Type: text/calendar; charset=UTF-8; method=REQUEST; name="${input.attachmentIcs.filename}"`,
+        `Content-Type: text/calendar; charset=UTF-8; method=${input.attachmentIcs.method ?? 'REQUEST'}; name="${input.attachmentIcs.filename}"`,
         'Content-Transfer-Encoding: base64',
         `Content-Disposition: attachment; filename="${input.attachmentIcs.filename}"`,
         '',
