@@ -985,7 +985,14 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                   )}
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className={VIEW_LABEL_CLASSES}>E-pošta</span>
+                  <div className="flex items-center gap-2">
+                    <span className={VIEW_LABEL_CLASSES}>E-pošta</span>
+                    {patientDraft.emailBounced && (
+                      <span className="rounded-full bg-[#fdecea] px-2 py-0.5 text-xs font-semibold text-[#b3261e]">
+                        Preveri email naslov
+                      </span>
+                    )}
+                  </div>
                   {editMode ? (
                     <input
                       type="email"

@@ -392,12 +392,11 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`015_add_sms_reminders.sql` — all confirmed run. A further migration,
-`016_add_email_notifications.sql` (email notifications/opt-out via Amazon
-SES — see "Email notifications" below), exists in the repo but **has not
-yet been run** against the live project. `supabase/schema.sql` itself is
-kept in sync to bake in everything through the latest migration (016
-included), so a brand-new project only ever needs that one file.
+`018_reenable_email_on_bounce_fix.sql` — all confirmed run (016–018 are the
+email notifications/opt-out via Amazon SES, see "Email notifications"
+below). `supabase/schema.sql` itself is kept in sync to bake in everything
+through the latest migration (018 included), so a brand-new project only
+ever needs that one file.
 
 **Multi-tenancy (011/012) is the big structural change here — see its own
 section below** for the full reasoning; the short version: every table now
@@ -3338,7 +3337,15 @@ into this repo).
 
 ### Email notifications (Amazon SES)
 
-**Status: code complete, not yet run/deployed against the live project.**
+**Status: built and confirmed live (2026-09-24).** Verified end to end on
+the live project: a real confirmation email with a working `.ics`
+attachment, the unsubscribe page/button, a real hard bounce (`email_log`
+→ `bounced`, patient auto opted out, "Preveri email naslov" pill shown,
+both cleared again by correcting the address), delivery-status tracking
+(`delivered`), and the reminder cron firing on its own at 09:00 Ljubljana
+and delivering. Not exercised: the complaint path (SES mailbox simulator
+`complaint@simulator.amazonses.com`), a custom-domain practice (the
+provisioning script has never been run against a real second domain).
 Appointment confirmation (with an `.ics` calendar attachment) sent on
 booking, and a reminder email 2 days ahead, mirroring the SMS system above
 closely — Supabase Edge Functions + pg_cron + pg_net, same multi-tenancy
@@ -3485,6 +3492,33 @@ immediately after the existing "SMS opomniki" one, gated on
 not SMS's 4-state opt-in badge, since the model here is a plain opt-out
 flag.
 
+**Bounced addresses (migrations 017/018)**: a hard bounce also sets
+`patients.email_bounced`, which shows a red "Preveri email naslov" pill
+next to the E-pošta label (`PatientChart.tsx`) — separate from
+`email_opt_out` so a patient who merely unsubscribed is never told their
+address is wrong. A `BEFORE UPDATE OF email` trigger
+(`reset_email_bounced_on_email_change`) clears `email_bounced` **and**
+re-enables sending (`email_opt_out = false`) when a bounced address is
+edited. Safe because `email_bounced` is only ever set alongside an
+automatic hard-bounce opt-out — a patient who unsubscribed themselves
+never has it, so an address edit can't undo a real unsubscribe. Only a
+*Permanent* bounce sets it (not a complaint or transient bounce).
+
+**Live setup notes (what was actually done)**: the AWS account already had
+`zobozdravstvogoslar.si` verified with production access (50,000/day,
+eu-central-1), so no new SES identity or DNS was needed — SES lets any
+address/subdomain under a verified domain send without separate
+verification. Sender is `obvestila@zobozdravstvogoslar.si`. The IAM user
+`dental-charting-ses-sender` has a policy scoped to **both** the domain
+identity ARN **and** the `dental-charting-notifications` configuration-set
+ARN — the configuration set is the identity's default, so sends also need
+permission on it (missing it fails with "not authorized to perform
+ses:SendRawEmail on … configuration-set/…"). SNS topic
+`ses-bounce-complaint-notifications` → HTTPS subscription to
+`ses-bounce-webhook` (auto-confirmed). Bounce simulator addresses
+(`bounce@simulator.amazonses.com`) are preferable to real-looking typo
+addresses for future tests, which count against the account's bounce rate.
+
 **Setup this depends on, once per project** (see the SETUP NOTES at the
 bottom of `supabase/migrations/016_add_email_notifications.sql` for the
 full checklist): a verified SES sending domain + SES production access
@@ -3497,11 +3531,8 @@ deployed `ses-bounce-webhook` URL, the 4 new functions deployed (the two
 trigger/cron-invoked ones keep default JWT verification ON;
 `email-unsubscribe`/`ses-bounce-webhook` need `--no-verify-jwt`), and
 `docs/email-unsubscribe.html` added to the already-enabled GitHub Pages
-publish. **None of this has been run yet** — this section describes what's
-built in the repo, not a confirmed-live feature (contrast with the SMS
-section above, which is confirmed live); update this status once the
-migration is actually run and a real send/confirm/bounce round trip is
-verified, the same way the SMS section was.
+publish. All of this is done on the live project — see the status line at
+the top of this section.
 
 ---
 
@@ -3900,27 +3931,23 @@ next:
   Pages talking to the functions as JSON (Supabase Edge Functions can't
   serve real HTML on the shared domain — see "SMS appointment reminders
   and consent (Lertify)" above for that gotcha and the full feature).
-- **Email notifications built, via Amazon SES — code complete, not yet run
-  live.** Appointment confirmation (with an `.ics` attachment) on booking +
+- **Email notifications built, via Amazon SES — confirmed live
+  (2026-09-24).** Appointment confirmation (with an `.ics` attachment) on booking +
   a reminder 2 days ahead, mirroring the SMS system's shape but with a
   lighter-touch opt-out consent model instead of double opt-in, and a
   two-tier sending design (a shared platform domain every practice gets for
   free, plus an opt-in per-practice custom domain provisioned by hand via
   `scripts/provision-practice-domain.mjs` — no self-service settings UI
-  yet, deliberately deferred) — migration `016_add_email_notifications.sql`
-  exists in the repo but has not been run against the live project, and no
-  AWS SES setup (domain verification, production access, the SNS
-  bounce/complaint webhook) has been done yet either. See "Email
-  notifications (Amazon SES)" above for the full design and the exact
-  setup checklist this still needs before it can be marked confirmed live,
-  the same way the SMS system above is.
+  yet, deliberately deferred) — migrations 016–018 run, AWS SES/SNS wired
+  up, and a real confirmation, unsubscribe, hard bounce (with the
+  "Preveri email naslov" pill and auto re-enable on address correction),
+  delivery tracking, and the scheduled reminder all verified live. See
+  "Email notifications (Amazon SES)" above for the full design.
 
 **Not started:**
 1. Print view (chart only, A4)
-2. Running the email-notifications migration + AWS SES setup + a real
-   send/unsubscribe/bounce round trip against the live project (see "Email
-   notifications (Amazon SES)" above — the feature is code-complete but
-   unverified)
+2. Email: the complaint path and a real custom-domain practice haven't
+   been exercised yet (see "Email notifications (Amazon SES)" above)
 3. A real self-service Nastavitve settings page — where a practice would
    eventually configure its own email sending domain, among other future
    settings — deliberately deferred per Gregor's explicit instruction
@@ -3936,7 +3963,14 @@ next:
 
 ---
 
-*Last updated: 2026-09-23 (Email notifications built, via Amazon SES —
+*Last updated: 2026-09-24 (Email notifications confirmed live — migrations
+016–018 run, AWS SES/SNS set up, and a real confirmation, unsubscribe, hard
+bounce, delivery tracking and the scheduled reminder all verified. A
+"Preveri email naslov" pill now marks hard-bounced addresses, and
+correcting one auto re-enables sending — see "Email notifications (Amazon
+SES)".)*
+
+*Previous entry: 2026-09-23 (Email notifications built, via Amazon SES —
 code complete, not yet run/deployed live. Mirrors the SMS system's shape
 (Supabase Edge Functions + pg_cron + pg_net, same multi-tenancy RLS
 pattern) but swaps Lertify for SES and a lighter-touch opt-out consent

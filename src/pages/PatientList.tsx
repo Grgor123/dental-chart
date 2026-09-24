@@ -224,6 +224,7 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
       sex: sex || null,
       smsConsentStatus: phone.trim() ? 'pending' : 'unknown',
       emailOptOut: false,
+      emailBounced: false,
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       address: address.trim() || undefined,

@@ -37,6 +37,11 @@ async function optOutByRecipients(emails: string[]): Promise<void> {
     .eq('email_opt_out', false);
 }
 
+async function flagBouncedRecipients(emails: string[]): Promise<void> {
+  if (emails.length === 0) return;
+  await supabase.from('patients').update({ email_bounced: true }).in('email', emails);
+}
+
 async function updateLogByMessageId(messageId: string | undefined, status: 'bounced' | 'complained' | 'delivered'): Promise<void> {
   if (!messageId) return;
   await supabase
@@ -86,6 +91,7 @@ Deno.serve(async (req) => {
     // a Transient bounce (full mailbox, temporary failure) isn't.
     if (sesEvent.bounce?.bounceType === 'Permanent') {
       await optOutByRecipients(recipients);
+      await flagBouncedRecipients(recipients);
     }
   } else if (sesEvent.eventType === 'Complaint') {
     await updateLogByMessageId(messageId, 'complained');

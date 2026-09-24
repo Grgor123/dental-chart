@@ -58,10 +58,14 @@ export type PatientListItem = Pick<
       supabase/functions/ses-bounce-webhook), or this hook's own
       setEmailOptOut manual staff override below. */
   emailOptOut: boolean;
+  /** The address hard-bounced (migration 017_add_email_bounced.sql) — the
+      Patient Record page shows "Preveri email naslov" next to it. Cleared
+      by a DB trigger whenever the email is edited. */
+  emailBounced: boolean;
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out, email_bounced';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
@@ -80,6 +84,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     internalRecordNumber: (row.internal_record_number as string | null) ?? undefined,
     smsConsentStatus: (row.sms_consent_status as PatientListItem['smsConsentStatus']) ?? 'unknown',
     emailOptOut: (row.email_opt_out as boolean | null) ?? false,
+    emailBounced: (row.email_bounced as boolean | null) ?? false,
   };
 }
 

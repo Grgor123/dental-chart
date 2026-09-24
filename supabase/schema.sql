@@ -134,6 +134,7 @@ create table patients (
   email_opt_out boolean not null default false,
   email_opt_out_at timestamptz,
   email_unsubscribe_token text unique,
+  email_bounced boolean not null default false,  -- hard-bounced address (migration 017) — shows "Preveri email naslov"; auto-cleared when email changes, see trigger below
   created_at timestamptz default now()
 );
 create index patients_practice_id_idx on patients(practice_id);
@@ -386,6 +387,26 @@ $$;
 create trigger set_email_log_practice_id_trigger
   before insert or update of appointment_id, patient_id on email_log
   for each row execute function set_email_log_practice_id();
+
+-- When a bounced email address (email_bounced) is edited, clears the flag
+-- AND re-enables sending (migrations 017/018) — a corrected address gets a
+-- fresh chance. Safe because email_bounced is only set alongside an
+-- automatic hard-bounce opt-out, so a patient who unsubscribed themselves
+-- is never re-enabled by an address edit.
+create or replace function reset_email_bounced_on_email_change()
+returns trigger language plpgsql as $$
+begin
+  if new.email is distinct from old.email and old.email_bounced then
+    new.email_bounced := false;
+    new.email_opt_out := false;
+    new.email_opt_out_at := null;
+  end if;
+  return new;
+end;
+$$;
+create trigger reset_email_bounced_on_email_change_trigger
+  before update of email on patients
+  for each row execute function reset_email_bounced_on_email_change();
 
 -- Trigger: request SMS consent whenever a patient's phone is set/changes.
 -- pg_net is Supabase's built-in async HTTP extension — this queues the
