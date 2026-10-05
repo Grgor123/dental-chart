@@ -15,6 +15,9 @@ import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
+import { useHealthQuestionnaire } from '../hooks/useHealthQuestionnaire';
+import { contactDifferences, HealthBanner, HealthQuestionnaireModal } from '../components/questionnaire/HealthQuestionnaire';
+import type { ContactData } from '../../supabase/functions/_shared/questionnaire';
 import { describeToothRecord } from '../lib/describeToothRecord';
 import { APPOINTMENT_STATUS_META } from '../lib/appointmentStatus';
 import type { Surface, ToothStatus, EndoStage, PocketDepths, GumMargin, BleedingPoints } from '../types/dental';
@@ -144,6 +147,8 @@ interface PatientChartProps {
   onNavigateCalendar: () => void;
   /** Wired to AppNavShell's "E-pošta" button below. */
   onNavigateEmail: () => void;
+  /** Wired to AppNavShell's "Nastavitve" button below. */
+  onNavigateSettings: () => void;
 }
 
 // One chart target — a specific surface, or the whole tooth ('all').
@@ -179,9 +184,9 @@ function sameTarget(a: Target, b: Target): boolean {
 // Loads and saves against ONE real Supabase visit, resolved fresh for
 // `patientId` on every mount — see useOpenVisit.ts and useVisit.ts's own
 // comments for exactly what each does.
-export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail }: PatientChartProps) {
+export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
-  const { updatePatient, setSmsConsentStatus, setEmailOptOut } = usePatients();
+  const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   const {
@@ -263,6 +268,27 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     }
     setPatientDraft(result.patient);
     setEditMode(false);
+  }
+  // Marketing consent — staff can only withdraw it (the patient gives it on
+  // the health questionnaire); see usePatients.ts's withdrawMarketingConsent().
+  const [marketingSaving, setMarketingSaving] = useState(false);
+  async function handleWithdrawMarketing() {
+    setMarketingSaving(true);
+    const result = await withdrawMarketingConsent(patientId);
+    setMarketingSaving(false);
+    if (!('error' in result)) setPatientDraft(result.patient);
+  }
+  // Health questionnaire (Frame 1) — see useHealthQuestionnaire.ts.
+  const healthQuestionnaire = useHealthQuestionnaire(patientId);
+  // "Prevzemi" on the patient's own contact corrections — same updatePatient()
+  // path as Frame 2's Shrani. An empty birth date is never written (dob is
+  // required on the record).
+  async function handleApplyQuestionnaireContact(fields: Partial<ContactData>): Promise<{ error?: string }> {
+    const { dob, ...rest } = fields;
+    const result = await updatePatient(patientId, dob ? { ...rest, dob } : rest);
+    if ('error' in result) return { error: result.error };
+    setPatientDraft(result.patient);
+    return {};
   }
   // Manual override for SMS reminder consent — a deliberate compliance
   // action (patient asked by phone to stop, or staff re-sending an opt-in
@@ -854,14 +880,15 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         onSignOut={handleSignOutClick}
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
+        onNavigateSettings={onNavigateSettings}
         onNavigateHome={handleBackClick}
         activeSubmenu="storitve"
       />
       <style>{PHONE_COMPACT_CSS}</style>
       <div className="flex w-full flex-col gap-1.5 pb-4 pt-1.5">
-        {/* ---- Frame 1: health banner + Vprašalnik — placeholder, per
-            Gregor's explicit choice (no real questionnaire/allergies data
-            model exists). Back-link and autosave status are real
+        {/* ---- Frame 1: health banner + Vprašalnik — real, from the
+            patient's latest submitted health questionnaire (see
+            components/questionnaire/HealthQuestionnaire.tsx). Back-link and autosave status are real
             (handleBackClick/saveStatus) — folded into this same row rather
             than a title strip of their own, so this page's total height
             matches the mockup's exactly (an earlier version added a
@@ -883,43 +910,25 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             {saveStatus === 'saved' && 'Shranjeno'}
             {saveStatus === 'error' && <span className="text-[var(--danger,#b3261e)]">Napaka pri shranjevanju</span>}
           </span>
-          <div className="flex flex-1 items-center gap-4 rounded-md bg-[#e0231c] px-4 py-2 text-sm font-bold text-white">
-            <div className="grid flex-1 grid-cols-3 items-center gap-4 text-left">
-              <span>Alergije: penicilin</span>
-              <span>Akutna stanja: povišan krvni tlak</span>
-              <span>Zdravila: Lisinopril 10mg</span>
-            </div>
-            <span className="flex-none text-xs font-normal italic text-white/80">(mockup — iz vprašalnika o zdravju)</span>
-            <button
-              type="button"
-              onClick={() => setQuestionnaireOpen(true)}
-              className="flex-none rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#e0231c] hover:bg-white/90"
-            >
-              Vprašalnik
-            </button>
-          </div>
+          <HealthBanner
+            questionnaire={healthQuestionnaire.latestSubmitted}
+            pending={healthQuestionnaire.pending}
+            hasContactChanges={contactDifferences(healthQuestionnaire.latestSubmitted, patientDraft).length > 0}
+            onOpen={() => setQuestionnaireOpen(true)}
+            onSend={healthQuestionnaire.send}
+          />
         </div>
 
         {questionnaireOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setQuestionnaireOpen(false)}>
-            <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Vprašalnik o zdravju</h2>
-                <button type="button" onClick={() => setQuestionnaireOpen(false)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
-                  ✕
-                </button>
-              </div>
-              <p className="mb-4 text-sm italic text-[var(--muted,#6f7c79)]">
-                Mockup — tu bo prikazan celoten izpolnjen vprašalnik pacienta (odgovori o alergijah, kroničnih boleznih, zdravilih, preteklih operacijah ipd.).
-              </p>
-              <div className="flex flex-col gap-3 text-sm text-[var(--ink,#1c2624)]">
-                <div><span className="font-semibold">Alergije: </span>penicilin</div>
-                <div><span className="font-semibold">Kronične bolezni / akutna stanja: </span>povišan krvni tlak</div>
-                <div><span className="font-semibold">Zdravila: </span>Lisinopril 10mg</div>
-                <div><span className="font-semibold">Datum izpolnitve: </span>4. 1. 2023</div>
-              </div>
-            </div>
-          </div>
+          <HealthQuestionnaireModal
+            questionnaire={healthQuestionnaire.latestSubmitted}
+            pending={healthQuestionnaire.pending}
+            patient={patientDraft}
+            onClose={() => setQuestionnaireOpen(false)}
+            onMarkReviewed={healthQuestionnaire.markReviewed}
+            onApplyContact={handleApplyQuestionnaireContact}
+            onDismissContact={healthQuestionnaire.markContactHandled}
+          />
         )}
 
         <div className="grid grid-cols-1 items-start gap-3 px-3 sm:grid-cols-2 min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
@@ -1129,6 +1138,32 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     </div>
                   </div>
                 )}
+
+                {/* Marketing consent — opt-in only from the patient's own
+                    health questionnaire, so the only staff action is
+                    withdrawing it on request. */}
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>Marketinško obveščanje</span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        patientDraft.marketingConsent ? 'bg-[#e8f5e9] text-[#2e7d32]' : 'bg-[#eef2f1] text-[var(--muted,#6f7c79)]'
+                      }`}
+                    >
+                      {patientDraft.marketingConsent ? 'Soglaša' : 'Ni soglasja'}
+                    </span>
+                    {patientDraft.marketingConsent && (
+                      <button
+                        type="button"
+                        disabled={marketingSaving}
+                        onClick={handleWithdrawMarketing}
+                        className="text-xs text-[var(--danger,#b3261e)] hover:underline disabled:opacity-60"
+                      >
+                        Prekliči soglasje
+                      </button>
+                    )}
+                  </div>
+                </div>
 
                 <div className="flex flex-col gap-1">
                   <span className={VIEW_LABEL_CLASSES}>Št. ZZZS</span>

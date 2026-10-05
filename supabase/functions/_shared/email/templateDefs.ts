@@ -16,6 +16,7 @@ export const TEMPLATE_KEYS = [
   'appointment_rescheduled',
   'post_visit',
   'recall',
+  'health_questionnaire',
 ] as const;
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 
@@ -72,6 +73,9 @@ export interface TemplateDef {
   /** Europe/Ljubljana hour this type sends at, or null if it isn't a
       time-of-day send. */
   sendHourDefault: number | null;
+  /** A fixed button the layout adds under the body (e.g. the questionnaire
+      link) — its label isn't practice-editable, the URL is per recipient. */
+  actionLabel: string | null;
 }
 
 const APPOINTMENT_PLACEHOLDERS = PLACEHOLDER_KEYS;
@@ -89,6 +93,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: 'request',
     timing: null,
     sendHourDefault: null,
+    actionLabel: null,
   },
   appointment_reminder: {
     key: 'appointment_reminder',
@@ -101,6 +106,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: null,
     timing: { unit: 'days_before', default: 2, min: 1, max: 14 },
     sendHourDefault: 9,
+    actionLabel: null,
   },
   appointment_cancelled: {
     key: 'appointment_cancelled',
@@ -114,6 +120,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: 'cancel',
     timing: null,
     sendHourDefault: null,
+    actionLabel: null,
   },
   appointment_rescheduled: {
     key: 'appointment_rescheduled',
@@ -127,6 +134,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: 'request',
     timing: null,
     sendHourDefault: null,
+    actionLabel: null,
   },
   post_visit: {
     key: 'post_visit',
@@ -140,6 +148,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: null,
     timing: { unit: 'hours_after', default: 1, min: 0, max: 24 },
     sendHourDefault: null,
+    actionLabel: null,
   },
   recall: {
     key: 'recall',
@@ -155,6 +164,23 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     ics: null,
     timing: { unit: 'months_after', default: 6, min: 1, max: 36 },
     sendHourDefault: 10,
+    actionLabel: null,
+  },
+  health_questionnaire: {
+    key: 'health_questionnaire',
+    label: 'Vprašalnik o zdravju',
+    description:
+      'Ob naročilu termina, če pacient v zadnjih 12 mesecih še ni izpolnil vprašalnika — ali ročno z gumbom »Pošlji vprašalnik« na kartoteki pacienta.',
+    defaultSubject: 'Vprašalnik o zdravju — {ordinacija}',
+    defaultHeading: 'Vprašalnik o zdravju',
+    defaultBody:
+      'Pozdravljeni {ime},\n\nda bi za vas lahko ustrezno poskrbeli, vas prosimo, da pred obiskom izpolnite kratek vprašalnik o zdravju. Podatki so zaupni in jih bo zobozdravnik uporabil izključno v zdravstvene namene.\n\nPovezava je veljavna 30 dni.',
+    // No appointment details: a manual send isn't tied to any appointment.
+    placeholders: ['ime', 'priimek', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: 'Izpolnite vprašalnik',
   },
 };
 

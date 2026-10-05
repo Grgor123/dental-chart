@@ -28,6 +28,11 @@ const TEXT_COLOR = '#222222';
 const MUTED_COLOR = '#666666';
 const TIME_ZONE = 'Europe/Ljubljana';
 
+function actionButtonHtml(action: { label: string; url: string } | null): string {
+  if (!action) return '';
+  return `<p style="margin:8px 0 16px;"><a href="${escapeHtml(action.url)}" style="display:inline-block;background:${ACCENT_COLOR};color:#ffffff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:6px;">${escapeHtml(action.label)}</a></p>`;
+}
+
 function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHtml: string; unsubscribeUrl: string }): string {
   return `<!doctype html>
 <html lang="sl">
@@ -143,6 +148,8 @@ function paragraphToHtml(paragraph: string): string {
 export interface RenderContext {
   practiceName: string;
   unsubscribeUrl: string;
+  /** Per-recipient URL for the template's fixed action button (actionLabel). */
+  actionUrl?: string;
 }
 
 export function renderTemplate(
@@ -156,13 +163,22 @@ export function renderTemplate(
   const heading = singleLine(substitute(pick(override?.heading, def.defaultHeading), vars).text);
   const paragraphs = paragraphsOf(pick(override?.body, def.defaultBody), vars);
 
+  // The action button goes after the second paragraph (greeting + the ask),
+  // so it's visible without scrolling; anything further follows it.
+  const action = def.actionLabel && context.actionUrl ? { label: def.actionLabel, url: context.actionUrl } : null;
+  const paragraphHtml = paragraphs.map(paragraphToHtml);
+  const bodyHtml = action
+    ? [...paragraphHtml.slice(0, 2), actionButtonHtml(action), ...paragraphHtml.slice(2)].join('\n')
+    : paragraphHtml.join('\n');
+
   const html = wrapEmailLayout({
     practiceName: context.practiceName,
     heading,
-    bodyHtml: paragraphs.map(paragraphToHtml).join('\n'),
+    bodyHtml,
     unsubscribeUrl: context.unsubscribeUrl,
   });
-  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}\n\nOdjava od e-poštnih obvestil: ${context.unsubscribeUrl}`;
+  const actionText = action ? `\n\n${action.label}: ${action.url}` : '';
+  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}${actionText}\n\nOdjava od e-poštnih obvestil: ${context.unsubscribeUrl}`;
 
   return { subject, html, text };
 }

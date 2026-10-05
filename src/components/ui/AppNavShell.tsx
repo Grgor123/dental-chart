@@ -1,12 +1,12 @@
 // Nav shell: visual only, no real routing except the links that actually go
-// somewhere (Domov, Koledar, Storitve, E-pošta — see below) — colors/positions
+// somewhere (Domov, Koledar, Storitve, E-pošta, Nastavitve — see below) — colors/positions
 // pixel-matched off the original design mockup's own header bars (#5CE1E6
 // turquoise, #C8D1D9 grey "active" pill, both sampled directly off the
 // rendered mockup). Rendered at the very top of every signed-in page
-// (PatientList.tsx, PatientChart.tsx, Calendar.tsx, EmailTemplates.tsx) — see
-// CLAUDE.md's "App Shell — top navigation frame" section for the full rule.
-// Sporočila/Nastavitve stay fully inert everywhere, since neither feature
-// exists yet.
+// (PatientList.tsx, PatientChart.tsx, Calendar.tsx, EmailTemplates.tsx,
+// Settings.tsx) — see CLAUDE.md's "App Shell — top navigation frame" section
+// for the full rule. Only Sporočila stays fully inert, since that feature
+// doesn't exist yet.
 //
 // Shared between PatientPageMockup.tsx (dev-only, no props passed — stays
 // fully inert/cosmetic, same as before) and the three real pages (each
@@ -62,6 +62,10 @@ interface AppNavShellProps {
       template editor (EmailTemplates.tsx). Omitted on the dev-only mockup,
       and on EmailTemplates.tsx itself (already there). */
   onNavigateEmail?: () => void;
+  /** "Nastavitve" becomes clickable when this is passed — jumps to the
+      settings page (Settings.tsx: Cenik first). Omitted on the dev-only
+      mockup, and on Settings.tsx itself (already there). */
+  onNavigateSettings?: () => void;
 }
 
 export function AppNavShell({
@@ -72,6 +76,7 @@ export function AppNavShell({
   onNavigateCalendar,
   onNavigateStoritve,
   onNavigateEmail,
+  onNavigateSettings,
 }: AppNavShellProps) {
   return (
     <div className="flex w-full flex-col">
@@ -116,7 +121,9 @@ export function AppNavShell({
                   ? onNavigateStoritve
                   : key === 'eposta' && activeSubmenu !== 'eposta'
                     ? onNavigateEmail
-                    : undefined
+                    : key === 'nastavitve' && activeSubmenu !== 'nastavitve'
+                      ? onNavigateSettings
+                      : undefined
             }
             className={`rounded-full px-3 py-1.5 text-sm font-medium ${
               key === activeSubmenu

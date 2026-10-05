@@ -71,6 +71,9 @@ Deno.serve(async (req) => {
   const content = renderTemplate(templateKey, override, vars, {
     practiceName: practice.name,
     unsubscribeUrl: '#',
+    // Templates with a fixed action button (the questionnaire link) show it
+    // in the preview too, pointing nowhere.
+    actionUrl: '#',
   });
 
   if (!body.sendTest) return json({ subject: content.subject, html: content.html });

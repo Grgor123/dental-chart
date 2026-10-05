@@ -181,6 +181,61 @@ async function main() {
     check("account 2 cannot insert an email template under account 1's practice_id", false, "skipped — couldn't resolve account 1's practice_id");
   }
 
+  // 4e. Price list (020_add_price_list.sql) — service_categories and services
+  // are root tables too, so account 2 must not be able to spoof account 1's
+  // practice_id onto either, nor read account 1's rows. Run only after 020 is
+  // live.
+  if (account1PracticeId) {
+    const { error: foreignCategoryError } = await client2
+      .from('service_categories')
+      .insert({ practice_id: account1PracticeId, name: 'Spoofed category' });
+    check(
+      "account 2 cannot insert a service category under account 1's practice_id",
+      !!foreignCategoryError,
+      foreignCategoryError ? foreignCategoryError.message : 'insert unexpectedly succeeded'
+    );
+
+    const { error: foreignServiceError } = await client2
+      .from('services')
+      .insert({ practice_id: account1PracticeId, name: 'Spoofed service', price_eur: 1 });
+    check(
+      "account 2 cannot insert a service under account 1's practice_id",
+      !!foreignServiceError,
+      foreignServiceError ? foreignServiceError.message : 'insert unexpectedly succeeded'
+    );
+
+    const { data: account1Category } = await client1.from('service_categories').select('id').limit(1).maybeSingle();
+    if (account1Category) {
+      const { data: leaked } = await client2.from('service_categories').select('id').eq('id', account1Category.id);
+      check("account 2 cannot read account 1's service categories", !leaked || leaked.length === 0, `${leaked?.length ?? 0} row(s) visible`);
+    }
+  } else {
+    check("account 2 cannot insert price-list rows under account 1's practice_id", false, "skipped — couldn't resolve account 1's practice_id");
+  }
+
+  // 4f. Health questionnaires (021_add_health_questionnaires.sql) — account 2
+  // can't attach one to account 1's patient (the auto-stamp trigger copies
+  // account 1's practice_id, which the insert WITH CHECK then rejects), and
+  // can't read account 1's. Run only after 021 is live.
+  if (foreignPatientId) {
+    const { error: foreignQuestionnaireError } = await client2.from('health_questionnaires').insert({
+      patient_id: foreignPatientId,
+      token: `verify-${Date.now()}`,
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+    });
+    check(
+      "account 2 cannot create a health questionnaire for account 1's patient",
+      !!foreignQuestionnaireError,
+      foreignQuestionnaireError ? foreignQuestionnaireError.message : 'insert unexpectedly succeeded'
+    );
+    const { data: leakedQuestionnaires } = await client2.from('health_questionnaires').select('id').eq('patient_id', foreignPatientId);
+    check(
+      "account 2 cannot read account 1's health questionnaires",
+      !leakedQuestionnaires || leakedQuestionnaires.length === 0,
+      `${leakedQuestionnaires?.length ?? 0} row(s) visible`
+    );
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

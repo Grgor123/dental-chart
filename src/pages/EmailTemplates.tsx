@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AppNavShell } from '../components/ui/AppNavShell';
+import { CardTabs } from '../components/ui/CardTabs';
 import { usePracticeContext } from '../contexts/PracticeContext';
 import { useEmailTemplates, type TemplateFormValues } from '../hooks/useEmailTemplates';
 import {
@@ -16,6 +17,7 @@ interface EmailTemplatesProps {
   onBack: () => void;
   onSignOut: () => void;
   onNavigateCalendar: () => void;
+  onNavigateSettings: () => void;
 }
 
 type EditableField = 'subject' | 'heading' | 'body';
@@ -40,7 +42,7 @@ const NUMBER_CLASS = 'w-16 rounded border border-[var(--line,#ccd6d4)] px-2 py-1
 // calendar attachment and unsubscribe footer are fixed and never editable;
 // see supabase/functions/_shared/email/templates.ts. Everything shown here
 // comes from templateDefs.ts, the same file the Edge Functions render from.
-export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar }: EmailTemplatesProps) {
+export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNavigateSettings }: EmailTemplatesProps) {
   const { practiceName } = usePracticeContext();
   const { overrides, loading, error, saveTemplate, resetTemplate, previewTemplate, sendTestEmail } = useEmailTemplates();
   const [selectedKey, setSelectedKey] = useState<TemplateKey>(TEMPLATE_KEYS[0]);
@@ -56,6 +58,7 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar }: EmailT
         onNavigateHome={onBack}
         onNavigateStoritve={onBack}
         onNavigateCalendar={onNavigateCalendar}
+        onNavigateSettings={onNavigateSettings}
         activeSubmenu="eposta"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">
@@ -70,86 +73,48 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar }: EmailT
         {error && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {error}</p>}
 
         {!loading && !error && (
-          <div className="flex flex-col">
-            {/* One tab per email; the card below shows the selected one. */}
-            <div role="tablist" className="-mb-px flex flex-wrap gap-1">
-              {TEMPLATE_KEYS.map((key, index) => {
-                const override = overrides[key];
-                const isSelected = key === selectedKey;
-                // The first tab sits flush with the card's left edge, so its
-                // left line runs straight down into the card's — no left fillet
-                // there, and the card's own top-left corner is squared off below.
-                const showLeftFillet = isSelected && index > 0;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="tab"
-                    aria-selected={isSelected}
-                    onClick={() => setSelectedKey(key)}
-                    className={`flex items-center gap-2 rounded-t-md border px-3.5 py-2 text-sm font-medium ${
-                      isSelected
-                        ? 'relative z-10 border-[var(--line,#ccd6d4)] border-b-[var(--surface,#fff)] bg-[var(--surface,#fff)] text-[var(--ink,#1c2624)]'
-                        : 'border-transparent text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]'
-                    }`}
-                  >
-                    {TEMPLATE_DEFS[key].label}
+          <CardTabs
+            tabs={TEMPLATE_KEYS.map((key) => {
+              const override = overrides[key];
+              return {
+                key,
+                label: TEMPLATE_DEFS[key].label,
+                badge: (
+                  <>
                     {override && !override.enabled && (
                       <span className="rounded-full bg-[#fdecea] px-1.5 py-0.5 text-[10px] font-semibold text-[#b3261e]">Izklopljeno</span>
                     )}
                     {override && override.enabled && (
                       <span title="Prilagojeno" className="h-1.5 w-1.5 rounded-full bg-[var(--accent,#2e6e62)]" />
                     )}
-                    {/* Concave fillets where the selected tab's sides meet the card's top line, so
-                        the outline curves into the card the same way its top corners curve. */}
-                    {isSelected && <span aria-hidden style={filletStyle('right')} />}
-                    {showLeftFillet && <span aria-hidden style={filletStyle('left')} />}
-                  </button>
-                );
-              })}
-            </div>
-            <TemplateEditor
-              templateKey={selectedKey}
-              formVersion={resetVersion}
-              override={overrides[selectedKey]}
-              saveTemplate={saveTemplate}
-              resetTemplate={async (key) => {
-                const result = await resetTemplate(key);
-                if (!result.error) setResetVersion((v) => v + 1);
-                return result;
-              }}
-              previewTemplate={previewTemplate}
-              sendTestEmail={sendTestEmail}
-              squareTopLeft={selectedKey === TEMPLATE_KEYS[0]}
-            />
-          </div>
+                  </>
+                ),
+              };
+            })}
+            selectedKey={selectedKey}
+            onSelect={(key) => setSelectedKey(key as TemplateKey)}
+          >
+            {({ squareTopLeft }) => (
+              <TemplateEditor
+                templateKey={selectedKey}
+                formVersion={resetVersion}
+                override={overrides[selectedKey]}
+                saveTemplate={saveTemplate}
+                resetTemplate={async (key) => {
+                  const result = await resetTemplate(key);
+                  if (!result.error) setResetVersion((v) => v + 1);
+                  return result;
+                }}
+                previewTemplate={previewTemplate}
+                sendTestEmail={sendTestEmail}
+                squareTopLeft={squareTopLeft}
+              />
+            )}
+          </CardTabs>
         )}
       </div>
     </>
   );
-}
-
-const TAB_LINE = 'var(--line,#ccd6d4)';
-const TAB_SURFACE = 'var(--surface,#fff)';
-const FILLET_SIZE = 9;
-
-// A 9x9 corner piece beside the selected tab, bottom-aligned with the card's
-// top line: white in the corner next to the tab, a 1px arc in the line colour,
-// transparent beyond it. `right` sits just outside the tab's right edge, `left`
-// just outside its left edge (mirrored). It also covers the tab's own 1px side
-// border along those bottom 9px, so the tab's outline doesn't run on past
-// where the curve begins.
-function filletStyle(side: 'left' | 'right'): CSSProperties {
-  const arcCenter = side === 'right' ? '100% 0' : '0 0';
-  return {
-    position: 'absolute',
-    bottom: -1,
-    [side === 'right' ? 'left' : 'right']: '100%',
-    width: FILLET_SIZE,
-    height: FILLET_SIZE,
-    pointerEvents: 'none',
-    background: `radial-gradient(circle at ${arcCenter}, transparent ${FILLET_SIZE - 1}px, ${TAB_LINE} ${FILLET_SIZE - 1}px, ${TAB_LINE} ${FILLET_SIZE}px, ${TAB_SURFACE} ${FILLET_SIZE}px)`,
-  };
 }
 
 interface TemplateEditorProps {

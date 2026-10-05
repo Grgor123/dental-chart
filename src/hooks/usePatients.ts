@@ -62,10 +62,14 @@ export type PatientListItem = Pick<
       Patient Record page shows "Preveri email naslov" next to it. Cleared
       by a DB trigger whenever the email is edited. */
   emailBounced: boolean;
+  /** Optional marketing opt-in (migration 021_add_health_questionnaires.sql)
+      — only ever granted by the patient on the health questionnaire; staff
+      can only withdraw it (withdrawMarketingConsent below). */
+  marketingConsent: boolean;
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out, email_bounced';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out, email_bounced, marketing_consent';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
@@ -85,6 +89,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     smsConsentStatus: (row.sms_consent_status as PatientListItem['smsConsentStatus']) ?? 'unknown',
     emailOptOut: (row.email_opt_out as boolean | null) ?? false,
     emailBounced: (row.email_bounced as boolean | null) ?? false,
+    marketingConsent: (row.marketing_consent as boolean | null) ?? false,
   };
 }
 
@@ -276,5 +281,37 @@ export function usePatients() {
     []
   );
 
-  return { patients, loading, error, createPatient, updatePatient, setSmsConsentStatus, setEmailOptOut };
+  // Withdraw only — a marketing consent can only be GIVEN by the patient
+  // themselves (health questionnaire), so every "yes" on record is theirs.
+  const withdrawMarketingConsent = useCallback(
+    async (patientId: string): Promise<{ patient: PatientListItem } | { error: string }> => {
+      const { data, error } = await supabase
+        .from('patients')
+        .update({
+          marketing_consent: false,
+          marketing_consent_at: new Date().toISOString(),
+          marketing_consent_source: 'staff',
+          marketing_consent_text: null,
+        })
+        .eq('id', patientId)
+        .select(PATIENT_COLUMNS)
+        .single();
+      if (error) return { error: error.message };
+      const patient = rowToPatientListItem(data);
+      setPatients((prev) => prev.map((p) => (p.patientId === patientId ? patient : p)));
+      return { patient };
+    },
+    []
+  );
+
+  return {
+    patients,
+    loading,
+    error,
+    createPatient,
+    updatePatient,
+    setSmsConsentStatus,
+    setEmailOptOut,
+    withdrawMarketingConsent,
+  };
 }

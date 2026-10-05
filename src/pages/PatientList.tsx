@@ -16,6 +16,7 @@ interface PatientListProps {
   onSignOut: () => void;
   onNavigateCalendar: () => void;
   onNavigateEmail: () => void;
+  onNavigateSettings: () => void;
 }
 
 // Formats a patient's own display label consistently everywhere it's
@@ -55,7 +56,7 @@ const SEX_LABELS: Record<Patient['sex'], string> = { M: 'M', F: 'Ž' };
 // lifecycle" and "Current Status & Next Steps"). Selecting a patient hands
 // their id up to App.tsx, which resolves/creates their open visit
 // (useOpenVisit.ts) before mounting PatientChart.
-export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, onNavigateEmail }: PatientListProps) {
+export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings }: PatientListProps) {
   const { patients, loading, error, createPatient } = usePatients();
   const { practiceName } = usePracticeContext();
   const [query, setQuery] = useState('');
@@ -74,6 +75,7 @@ export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, on
         onSignOut={onSignOut}
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
+        onNavigateSettings={onNavigateSettings}
         activeSubmenu="storitve"
       />
       <div className="mx-auto flex max-w-[720px] flex-col gap-5 p-6">
@@ -227,6 +229,7 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
       smsConsentStatus: phone.trim() ? 'pending' : 'unknown',
       emailOptOut: false,
       emailBounced: false,
+      marketingConsent: false,
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       address: address.trim() || undefined,

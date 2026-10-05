@@ -5,6 +5,7 @@ import { PatientList } from './pages/PatientList';
 import { PatientChart } from './pages/PatientChart';
 import { Calendar } from './pages/Calendar';
 import { EmailTemplates } from './pages/EmailTemplates';
+import { Settings } from './pages/Settings';
 import { StatusShowcase } from './pages/StatusShowcase';
 import { PatientPageMockup } from './pages/PatientPageMockup';
 import { PracticeProvider, usePracticeContext } from './contexts/PracticeContext';
@@ -39,7 +40,8 @@ type Route =
   | { page: 'list' }
   | { page: 'chart'; patientId: string; patientLabel: string; patient: PatientListItem }
   | { page: 'calendar' }
-  | { page: 'email' };
+  | { page: 'email' }
+  | { page: 'settings' };
 
 function App() {
   const { session, loading, signIn, signOut, signInError } = useAuth();
@@ -82,6 +84,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onSignOut={onSignOut}
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
         onNavigateEmail={() => setRoute({ page: 'email' })}
+        onNavigateSettings={() => setRoute({ page: 'settings' })}
       />
     );
   }
@@ -93,6 +96,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onSelectPatient={selectPatient}
         onSignOut={onSignOut}
         onNavigateEmail={() => setRoute({ page: 'email' })}
+        onNavigateSettings={() => setRoute({ page: 'settings' })}
       />
     );
   }
@@ -103,6 +107,18 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onBack={() => setRoute({ page: 'list' })}
         onSignOut={onSignOut}
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
+        onNavigateSettings={() => setRoute({ page: 'settings' })}
+      />
+    );
+  }
+
+  if (route.page === 'settings') {
+    return (
+      <Settings
+        onBack={() => setRoute({ page: 'list' })}
+        onSignOut={onSignOut}
+        onNavigateCalendar={() => setRoute({ page: 'calendar' })}
+        onNavigateEmail={() => setRoute({ page: 'email' })}
       />
     );
   }
@@ -113,6 +129,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
       onSignOut={onSignOut}
       onNavigateCalendar={() => setRoute({ page: 'calendar' })}
       onNavigateEmail={() => setRoute({ page: 'email' })}
+      onNavigateSettings={() => setRoute({ page: 'settings' })}
     />
   );
 }

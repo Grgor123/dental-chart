@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vprašalnik o zdravju</title>
+<style>
+  :root { --accent: #2e6e62; --ink: #1c2624; --soft: #45524f; --muted: #6f7c79; --line: #ccd6d4; --danger: #b3261e; --bg: #f4f6f5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); line-height: 1.45; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .practice { font-weight: 600; color: var(--accent); }
+  .lang button { border: 1px solid var(--line); background: #fff; color: var(--soft); padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .lang button:first-child { border-radius: 6px 0 0 6px; }
+  .lang button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .lang button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  p.hint { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .grid .full { grid-column: 1 / -1; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+  input[type=text], input[type=email], input[type=tel], input[type=date], textarea {
+    font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; background: #fff;
+  }
+  textarea { min-height: 64px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+  .q { padding: 14px 0; border-top: 1px solid #eef2f1; }
+  .q:first-child { border-top: none; padding-top: 0; }
+  .q-text { display: flex; gap: 8px; font-size: 15px; }
+  .q-num { flex: none; color: var(--muted); min-width: 22px; }
+  .yn { display: flex; gap: 8px; margin: 8px 0 0 30px; }
+  .yn button { min-width: 72px; padding: 8px 14px; font: inherit; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); cursor: pointer; }
+  .yn button.on-yes { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .yn button.on-no { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .q.missing .q-text { color: var(--danger); }
+  .q.missing .yn button { border-color: var(--danger); }
+  .q.missing .follow label { color: var(--danger); }
+  .q.missing .follow input { border-color: var(--danger); }
+  .follow { margin: 8px 0 0 30px; }
+  .follow label { font-size: 13px; color: var(--soft); display: block; margin-bottom: 4px; }
+  .body-in { margin: 8px 0 0 30px; }
+  .conds { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 10px 0 0 30px; }
+  .conds label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; padding: 6px 8px; border: 1px solid #eef2f1; border-radius: 6px; cursor: pointer; }
+  .conds input { margin-top: 3px; accent-color: var(--accent); }
+  .med-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .med-row input[type=text] { flex: 1; min-width: 0; }
+  .med-row select { font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 6px; background: #fff; flex: none; }
+  .med-lead { flex: none; width: 18px; text-align: center; color: var(--accent); font-weight: 700; font-size: 18px; }
+  .med-remove { flex: none; width: 30px; height: 30px; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: 50%; font-size: 14px; }
+  .med-remove:hover { background: #fdecea; color: var(--danger); }
+  .med-row.new input[type=text] { border-style: dashed; }
+  .notice { font-weight: 600; }
+  .confirm { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 14px; }
+  .confirm input { margin-top: 3px; accent-color: var(--accent); }
+  .submit { width: 100%; font: inherit; font-size: 1.05rem; font-weight: 600; padding: 14px; border: none; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; margin-top: 16px; }
+  .submit:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--danger); font-size: 14px; margin-top: 10px; }
+  .foot { font-size: 12px; color: var(--muted); }
+  .foot p { margin: 0 0 6px; }
+  .center { text-align: center; padding: 40px 20px; }
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: 1fr; }
+    .med-lead { display: none; }
+    .conds { grid-template-columns: 1fr; margin-left: 0; }
+    .yn, .follow, .body-in { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+  <!-- Static page on GitHub Pages: Supabase Edge Functions can't serve real
+       HTML on the shared *.supabase.co domain (see sms-consent.html). The
+       questions themselves come from the health-questionnaire function,
+       which reads supabase/functions/_shared/questionnaire.ts — the same
+       definition the Patient Record page uses. -->
+  <div class="wrap" id="app"><div class="card center">Nalaganje …</div></div>
+  <script>
+    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/health-questionnaire';
+    const token = new URLSearchParams(location.search).get('token');
+    const app = document.getElementById('app');
+
+    const UI = {
+      sl: { yes: 'DA', no: 'NE', submit: 'Oddaj vprašalnik', sending: 'Pošiljanje …',
+            missing: 'Prosimo, odgovorite na vsa vprašanja z DA ali NE.',
+            missingDetail: 'Pri odgovorih DA prosimo izpolnite tudi dodatno vprašanje.', missingContact: 'Ime in priimek sta obvezna.',
+            missingSignature: 'Prosimo, vpišite ime in priimek ter potrdite resničnost podatkov.',
+            failed: 'Pošiljanje ni uspelo. Poskusite znova.', invalid: 'Povezava ni veljavna.',
+            expired: 'Povezava je potekla. Za novo povezavo nas prosimo kontaktirajte.',
+            submitted: 'Vprašalnik je bil že oddan. Hvala!', thanks: 'Hvala! Vaš vprašalnik je oddan.',
+            thanksSub: 'Če se vaše zdravstveno stanje spremeni, nas prosimo obvestite.', error: 'Prišlo je do napake. Poskusite znova.' },
+      en: { yes: 'YES', no: 'NO', submit: 'Submit questionnaire', sending: 'Sending …',
+            missing: 'Please answer every question with YES or NO.',
+            missingDetail: 'For every YES answer, please also fill in the follow-up question.', missingContact: 'First and last name are required.',
+            missingSignature: 'Please type your full name and confirm the information is true.',
+            failed: 'Sending failed. Please try again.', invalid: 'This link is not valid.',
+            expired: 'This link has expired. Please contact us for a new one.',
+            submitted: 'This questionnaire has already been submitted. Thank you!', thanks: 'Thank you! Your questionnaire has been submitted.',
+            thanksSub: 'If your health condition changes, please let us know.', error: 'Something went wrong. Please try again.' },
+    };
+
+    let lang = navigator.language && !navigator.language.toLowerCase().startsWith('sl') ? 'en' : 'sl';
+    let data = null;
+    const state = {
+      contact: {}, yesNo: {}, details: {}, texts: {}, conditions: new Set(), signatureName: '', confirmed: false,
+      // Question 4: committed rows + the always-present empty "+" row at the bottom.
+      medications: [], newMed: { name: '', frequency: 'regular' },
+      marketingConsent: false,
+    };
+    let showMissing = false;
+    let errorText = '';
+
+    function esc(s) {
+      return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    const t = (localized) => (localized ? localized[lang] : '');
+
+    // Unanswered, or answered DA with its follow-up box left empty.
+    function isIncomplete(q) {
+      const v = state.yesNo[q.id];
+      if (!v) return true;
+      return v === 'yes' && !!q.detail && !(state.details[q.id] || '').trim();
+    }
+
+    function message(text, sub) {
+      document.documentElement.lang = lang;
+      app.innerHTML = `<div class="card center"><h1>${esc(text)}</h1>${sub ? `<p class="hint">${esc(sub)}</p>` : ''}</div>`;
+    }
+
+    function inputType(key) {
+      return key === 'dob' ? 'date' : key === 'email' ? 'email' : key === 'phone' ? 'tel' : 'text';
+    }
+
+    function render() {
+      document.documentElement.lang = lang;
+      const f = data.form;
+      const ui = UI[lang];
+      let n = 0;
+
+      const contactHtml = f.contactFields.map((field) => `
+        <label class="field ${field.key === 'address' || field.key === 'email' ? 'full' : ''}">
+          ${esc(t(field.label))}
+          <input type="${inputType(field.key)}" data-contact="${field.key}" value="${esc(state.contact[field.key])}">
+        </label>`).join('');
+
+      const questionsHtml = f.questions.map((q) => {
+        n += 1;
+        const head = `<div class="q-text"><span class="q-num">${n}.</span><span>${esc(t(q.text))}</span></div>`;
+        if (q.kind === 'yesno') {
+          const v = state.yesNo[q.id];
+          const missing = showMissing && isIncomplete(q) ? 'missing' : '';
+          const follow = v === 'yes' && q.detail ? `
+            <div class="follow"><label>${esc(t(q.detail))}</label>
+            <input type="text" data-detail="${q.id}" value="${esc(state.details[q.id])}"></div>` : '';
+          return `<div class="q ${missing}">${head}
+            <div class="yn">
+              <button type="button" data-yn="${q.id}" data-v="yes" class="${v === 'yes' ? 'on-yes' : ''}">${ui.yes}</button>
+              <button type="button" data-yn="${q.id}" data-v="no" class="${v === 'no' ? 'on-no' : ''}">${ui.no}</button>
+            </div>${follow}</div>`;
+        }
+        if (q.kind === 'text') {
+          return `<div class="q">${head}<div class="body-in"><textarea data-text="${q.id}">${esc(state.texts[q.id])}</textarea></div></div>`;
+        }
+        if (q.kind === 'medications') {
+          return `<div class="q">${head}<div class="body-in" id="meds"></div></div>`;
+        }
+        const boxes = f.conditions.map((c) => `
+          <label><input type="checkbox" data-cond="${c.id}" ${state.conditions.has(c.id) ? 'checked' : ''}><span>${esc(t(c.label))}</span></label>`).join('');
+        return `<div class="q">${head}<div class="conds">${boxes}</div></div>`;
+      }).join('');
+
+      app.innerHTML = `
+        <div class="card">
+          <div class="top">
+            <span class="practice">${esc(data.practiceName)}</span>
+            <span class="lang"><button type="button" data-lang="sl" class="${lang === 'sl' ? 'on' : ''}">SL</button><button type="button" data-lang="en" class="${lang === 'en' ? 'on' : ''}">EN</button></span>
+          </div>
+          <h1>${esc(t(f.text.title))}</h1>
+          <p class="hint">${esc(t(f.text.intro))}</p>
+        </div>
+        <div class="card">
+          <h2>${esc(t(f.text.contactHeading))}</h2>
+          <p class="hint">${esc(t(f.text.contactHint))}</p>
+          <div class="grid">${contactHtml}</div>
+        </div>
+        <div class="card">${questionsHtml}</div>
+        ${data.alreadyConsented ? '' : `<div class="card">
+          <h2>${esc(t(f.text.marketingHeading))}</h2>
+          <label class="confirm"><input type="checkbox" id="marketing" ${state.marketingConsent ? 'checked' : ''}><span>${esc(t(f.text.marketingText))}</span></label>
+          <p class="hint" style="margin: 6px 0 0 26px;">${esc(t(f.text.marketingHint))}</p>
+        </div>`}
+        <div class="card">
+          <p class="notice">${esc(t(f.text.changeNotice))}</p>
+          <label class="field">${esc(t(f.text.signatureLabel))}
+            <input type="text" id="signature" value="${esc(state.signatureName)}" autocomplete="name">
+          </label>
+          <label class="confirm"><input type="checkbox" id="confirmed" ${state.confirmed ? 'checked' : ''}><span>${esc(t(f.text.confirmLabel))}</span></label>
+          <button type="button" class="submit" id="submitBtn">${ui.submit}</button>
+          ${errorText ? `<div class="error">${esc(errorText)}</div>` : ''}
+        </div>
+        <div class="card foot">${f.text.footnotes[lang].map((x, i) => `<p>${i + 1} ${esc(x)}</p>`).join('')}</div>`;
+      renderMeds();
+    }
+
+    // Question 4 re-renders only its own box, never the whole page, so a
+    // click on "Oddaj" right after typing a medicine isn't swallowed by a
+    // page re-render.
+    function frequencyOptions(selected) {
+      return data.form.frequencies.map((fr) =>
+        `<option value="${fr.id}" ${fr.id === selected ? 'selected' : ''}>${esc(t(fr.label))}</option>`).join('');
+    }
+    function renderMeds(focusNew) {
+      const box = document.getElementById('meds');
+      if (!box) return;
+      const rows = state.medications.map((m, i) => `
+        <div class="med-row">
+          <span class="med-lead"></span>
+          <input type="text" data-med-name="${i}" value="${esc(m.name)}">
+          <select data-med-freq="${i}">${frequencyOptions(m.frequency)}</select>
+          <button type="button" class="med-remove" data-med-remove="${i}" aria-label="✕">✕</button>
+        </div>`).join('');
+      box.innerHTML = `${rows}
+        <div class="med-row new" id="medNewRow">
+          <span class="med-lead">+</span>
+          <input type="text" id="medNewName" placeholder="${esc(t(data.form.text.medicationName))}" value="${esc(state.newMed.name)}">
+          <select id="medNewFreq">${frequencyOptions(state.newMed.frequency)}</select>
+          <span class="med-remove" aria-hidden="true"></span>
+        </div>`;
+      if (focusNew) document.getElementById('medNewName').focus();
+    }
+    // The "+" row turns into a real row once it has a name and focus leaves
+    // the row (Enter does the same) — like the price list's new-service row.
+    function commitNewMed(focusNew) {
+      const name = state.newMed.name.trim();
+      if (!name) return;
+      state.medications.push({ name, frequency: state.newMed.frequency });
+      state.newMed = { name: '', frequency: 'regular' };
+      renderMeds(focusNew);
+    }
+
+    // Event delegation, so re-rendering (language switch, a yes/no click)
+    // never loses anything: every input writes straight into `state`.
+    app.addEventListener('input', (e) => {
+      const el = e.target;
+      if (el.dataset.contact) state.contact[el.dataset.contact] = el.value;
+      else if (el.dataset.detail) state.details[el.dataset.detail] = el.value;
+      else if (el.dataset.text) state.texts[el.dataset.text] = el.value;
+      else if (el.id === 'signature') state.signatureName = el.value;
+      else if (el.dataset.medName !== undefined) state.medications[Number(el.dataset.medName)].name = el.value;
+      else if (el.id === 'medNewName') state.newMed.name = el.value;
+    });
+    app.addEventListener('focusout', (e) => {
+      const el = e.target;
+      const newRow = document.getElementById('medNewRow');
+      if (newRow && newRow.contains(el) && !newRow.contains(e.relatedTarget)) commitNewMed(false);
+      // A row emptied out is removed.
+      if (el.dataset.medName !== undefined && !el.value.trim()) {
+        state.medications.splice(Number(el.dataset.medName), 1);
+        renderMeds();
+      }
+    });
+    app.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.id === 'medNewName') { e.preventDefault(); commitNewMed(true); }
+    });
+    app.addEventListener('change', (e) => {
+      const el = e.target;
+      if (el.dataset.cond) el.checked ? state.conditions.add(el.dataset.cond) : state.conditions.delete(el.dataset.cond);
+      else if (el.id === 'confirmed') state.confirmed = el.checked;
+      else if (el.id === 'marketing') state.marketingConsent = el.checked;
+      else if (el.dataset.medFreq !== undefined) state.medications[Number(el.dataset.medFreq)].frequency = el.value;
+      else if (el.id === 'medNewFreq') state.newMed.frequency = el.value;
+    });
+    app.addEventListener('click', (e) => {
+      const el = e.target.closest('button');
+      if (!el || !data) return;
+      if (el.dataset.lang) { lang = el.dataset.lang; render(); }
+      else if (el.dataset.yn) { state.yesNo[el.dataset.yn] = el.dataset.v; render(); }
+      else if (el.dataset.medRemove !== undefined) { state.medications.splice(Number(el.dataset.medRemove), 1); renderMeds(); }
+      else if (el.id === 'submitBtn') submit();
+    });
+
+    async function submit() {
+      const ui = UI[lang];
+      commitNewMed(false); // a name typed in the "+" row counts even if never left
+      const yesNoQuestions = data.form.questions.filter((q) => q.kind === 'yesno');
+      const unanswered = yesNoQuestions.some((q) => !state.yesNo[q.id]);
+      const detailMissing = yesNoQuestions.some(isIncomplete);
+      errorText = '';
+      if (unanswered) { showMissing = true; errorText = ui.missing; }
+      else if (detailMissing) { showMissing = true; errorText = ui.missingDetail; }
+      else if (!(state.contact.firstName || '').trim() || !(state.contact.lastName || '').trim()) errorText = ui.missingContact;
+      else if (!state.signatureName.trim() || !state.confirmed) errorText = ui.missingSignature;
+      if (errorText) {
+        render();
+        const first = app.querySelector('.q.missing') || app.querySelector('.error');
+        if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = ui.sending;
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            language: lang,
+            contact: state.contact,
+            answers: {
+              yesNo: state.yesNo, details: state.details, texts: state.texts, conditions: [...state.conditions],
+              medications: state.medications.filter((m) => m.name.trim()),
+            },
+            signatureName: state.signatureName,
+            confirmed: state.confirmed,
+            marketingConsent: state.marketingConsent,
+          }),
+        });
+        if (!res.ok) throw new Error('failed');
+        message(ui.thanks, ui.thanksSub);
+        window.scrollTo(0, 0);
+      } catch (err) {
+        errorText = ui.failed;
+        render();
+      }
+    }
+
+    async function load() {
+      if (!token) return message(UI[lang].invalid);
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`);
+        const body = await res.json();
+        if (!res.ok) return message(UI[lang].invalid);
+        if (body.status === 'submitted') return message(UI[lang].submitted);
+        if (body.status === 'expired') return message(UI[lang].expired);
+        data = body;
+        state.contact = { ...body.contact };
+        render();
+      } catch (err) {
+        message(UI[lang].error);
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

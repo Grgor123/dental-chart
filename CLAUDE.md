@@ -117,6 +117,15 @@ src/
                                 # day to jump into Day view
       MiniCalendar.tsx         # Sidebar mini month-picker, its own frame
                                 # bottom-aligned with TherapistPanel's
+    questionnaire/
+      HealthQuestionnaire.tsx  # Frame 1's health banner (alerts + the
+                                # "Vprašalnik"/"Pošlji vprašalnik" buttons)
+                                # and the full-answers modal — see "Health
+                                # questionnaire" below
+    settings/
+      PriceListSection.tsx     # Nastavitve → Cenik: always-editable price
+                                # list table + category strip — see "Not
+                                # started" item 5a below
   data/
     toothProfiles.ts           # Per-FDI silhouette/detail paths + on-screen
                                 # sizing (real mm, not photo pixels — see
@@ -165,6 +174,16 @@ src/
                                 # — see "Native scheduling calendar" below
     useAppointmentSearch.ts     # Cross-date patient-name search backing
                                 # CalendarSearch.tsx
+    useEmailTemplates.ts        # A practice's email-template overrides
+                                # (email_templates) + save/reset, and the
+                                # preview/test-send calls to the
+                                # email-template-preview Edge Function — see
+                                # "Email templates (E-pošta)" below
+    usePriceList.ts             # Price-list services + categories CRUD
+    useHealthQuestionnaire.ts   # One patient's health questionnaires: latest
+                                # submitted + any open link, send/review/
+                                # contact-correction actions — see "Health
+                                # questionnaire" below
   lib/
     supabase.ts                # Supabase client
     describeToothRecord.ts     # One tooth_records row -> its bullet-point
@@ -209,7 +228,20 @@ src/
                                 # (therapist columns, appointment creation/
                                 # editing incl. inline new-patient) — see
                                 # "Native scheduling calendar" below
+    EmailTemplates.tsx          # "E-pošta" page — one tab per automatic
+                                # email, editable wording/timing + live
+                                # preview — see "Email templates (E-pošta)"
+                                # below
+    Settings.tsx                # "Nastavitve" page (CardTabs) — currently
+                                # just the Cenik (price list) tab
 ```
+
+Outside `src/`: `supabase/functions/_shared/questionnaire.ts` holds the
+health questionnaire's questions (Slovene + English) and is imported by the
+Edge Functions **and** the React app, the same pattern as
+`_shared/email/templateDefs.ts`; `docs/*.html` are the patient-facing pages
+published on GitHub Pages (see the SMS section for why they can't be Edge
+Function HTML).
 
 ---
 
@@ -392,11 +424,17 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`018_reenable_email_on_bounce_fix.sql` — all confirmed run (016–018 are the
-email notifications/opt-out via Amazon SES, see "Email notifications"
-below). `supabase/schema.sql` itself is kept in sync to bake in everything
-through the latest migration (018 included), so a brand-new project only
-ever needs that one file.
+`021_add_health_questionnaires.sql` — all confirmed run (016–019 are the
+email notifications/opt-out/templates via Amazon SES, see "Email
+notifications" below; 020 the price list; 021 the health questionnaire +
+marketing consent, see "Health questionnaire" below). `supabase/schema.sql`
+itself is kept in sync to bake in everything through the latest migration
+(021 included), so a brand-new project only ever needs that one file.
+**Run migrations in the "Dental charting" project's SQL editor** — the
+Supabase dashboard also lists the booking widget's "Consent storage for
+zobozdravstvogoslar…" project, and running 021 there failed with
+`relation "public.practices" does not exist` (harmlessly — every migration
+is wrapped in `begin;`/`commit;`, so a failure rolls back completely).
 
 **Multi-tenancy (011/012) is the big structural change here — see its own
 section below** for the full reasoning; the short version: every table now
@@ -2887,13 +2925,15 @@ a JSX/layout port around code that already worked, not a rewrite.
   7 (the chart + `StatusToolbar` + a "Storitve po zobeh" tab reading real
   per-tooth history via `useToothHistory`) are all real, backed by the same
   hooks/handlers `PatientChart.tsx` already had.
-- **Placeholder frames, deliberately**: the health-questionnaire banner
-  (Frame 1), Rentgeni/Fotografije/SMS/E-pošta tabs (Frame 3), and
+- **Placeholder frames, deliberately**: Rentgeni/Fotografije/SMS/E-pošta
+  tabs (Frame 3), and
   Podrobnosti termina/appointment+invoice card (Frame 5) all stay clearly
   fabricated placeholder content — per Gregor's explicit choice, since no
   real questionnaire/imaging/messaging/appointments/billing backend exists
   yet (see "Out of Scope for Phase 1" below). Building any of those for
-  real is future work, not an oversight.
+  real is future work, not an oversight. (Frame 1's health banner started
+  out as one of these placeholders and is now real — see "Health
+  questionnaire" below.)
 - **`ToothDetailPanel` still renders separately below the frame grid**,
   unchanged — a deliberately different, more detailed surface (editable
   chips + picker + notes + its own "Zgodovina" tab) than Frame 7's quick
@@ -2935,14 +2975,14 @@ a JSX/layout port around code that already worked, not a rewrite.
 header — a turquoise (`#5CE1E6`) top bar with "Domov"/"CRM" on the left and
 the signed-in user's practice name + an Odjava (sign-out) icon button on
 the right, then a white submenu row (Koledar / Storitve / Sporočila /
-El. pošta / Nastavitve) with one pill highlighted grey (`#C8D1D9`) to show
+E-pošta / Nastavitve) with one pill highlighted grey (`#C8D1D9`) to show
 which section is active — pixel-matched off the original design mockup
 Gregor supplied for the Patient Record page (see "Patient Record page"
 above for how it was first extracted out of `PatientPageMockup.tsx`).
 
 **Every real page in the signed-in app renders this at the very top, full
 width, above its own content** — `PatientList.tsx` (the landing page),
-`PatientChart.tsx`, and `Calendar.tsx` all do, per Gregor's explicit
+`PatientChart.tsx`, `Calendar.tsx` and `EmailTemplates.tsx` all do, per Gregor's explicit
 request that the app have one consistent frame rather than each page
 inventing its own header/back-link/sign-out button. `PatientPageMockup.tsx`
 (the dev-only design sandbox, port 5182) keeps its own zero-prop, fully
@@ -2959,9 +2999,12 @@ inert `<AppNavShell />` — nothing here changes that.
   implemented that way before Gregor's explicit correction: that was a
   quirk/inconsistency in the mockup screenshot itself, not the intended
   design — Koledar and Storitve are genuinely separate active states.
-  Sporočila/El. pošta/Nastavitve have no real page behind them yet, so
-  they're never passed as `activeSubmenu` and stay permanently inert (no
-  `onClick` at all).
+  `'eposta'` is the active pill on `EmailTemplates.tsx` (its label is
+  "E-pošta"; `onNavigateEmail` makes it clickable from every other page,
+  each of which passes it through from `App.tsx`'s `Route`).
+  Sporočila/Nastavitve have no real page behind them yet, so they're never
+  passed as `activeSubmenu` and stay permanently inert (no `onClick` at
+  all).
 - **Both "Koledar" and "Storitve" are clickable from wherever they aren't
   already the active pill** — `onNavigateCalendar` fires when
   `activeSubmenu !== 'koledar'`, `onNavigateStoritve` when
@@ -3441,9 +3484,11 @@ through Deno's native `npm:` specifier support — no hand-rolled SigV4;
 also `resolveSenderIdentity()`, the platform-vs-custom-domain routing
 described above), `ics.ts` (a hand-rolled plain-text VCALENDAR/VEVENT
 builder, no library, matching this project's existing minimal-dependency
-approach elsewhere), `templates.ts` (inline-styled HTML layout + the two
-real templates — inline styles only, since most email clients strip
-external/`<style>` CSS), and `log.ts` (`logEmail()` +
+approach elsewhere), `templates.ts` (inline-styled HTML layout + the
+renderer that turns a template into a finished email — inline styles
+only, since most email clients strip external/`<style>` CSS; the default
+wording itself now lives in `templateDefs.ts`, see "Email templates
+(E-pošta)" below), and `log.ts` (`logEmail()` +
 `resolveUnsubscribeToken()`, shared by both send functions so the opt-out
 check and token handling live in exactly one place). `email-unsubscribe`
 (public, `--no-verify-jwt`) is the JSON API behind
@@ -3468,14 +3513,200 @@ for now (a spoofed request could only wrongly opt someone out, not expose
 data) — unlike the `Authorization: Bearer` check every trigger/cron-invoked
 function still has, which stays mandatory.
 
+### Email templates (E-pošta)
+
+**Status: built, deployed and pushed (2026-09-24); partly confirmed live.**
+Confirmed by Gregor on the live project: the E-pošta editor (tabs, fields,
+live preview) and a **reschedule** email after moving an appointment.
+**Not yet confirmed live**: the cancellation email from each of its two
+entry points, a customized reminder send hour, and the **post-visit** and
+**recall** cron sends (both fire on the hourly schedule, so they only prove
+themselves when a real appointment reaches their window).
+
+Until this, the two emails (confirmation, reminder) had hard-coded wording.
+Now **every automatic email is a template a practice can edit**, and there
+are seven of them (the seventh, `health_questionnaire`, was added later — see
+"Health questionnaire" below):
+
+| key | trigger | timing (editable per practice) |
+|---|---|---|
+| `appointment_confirmation` | `AFTER INSERT` on appointments | immediate |
+| `appointment_reminder` | hourly cron | days before (default 2) + send hour (default 09:00) |
+| `appointment_cancelled` | status becomes `cancelled` | immediate; `.ics` `METHOD:CANCEL` removes the calendar entry |
+| `appointment_rescheduled` | `starts_at` changes, new time in the future | immediate; `.ics` with the same UID and a higher `SEQUENCE` updates the entry |
+| `post_visit` | hourly cron, appointment `completed` and ended long enough ago | hours after the appointment ends (default 1) |
+| `recall` | hourly cron, last completed visit N months ago, no upcoming appointment | months (default 6) + send hour (default 10:00) |
+| `health_questionnaire` | on booking (same function as the confirmation) if no questionnaire in 12 months, or the manual "Pošlji vprašalnik" button | immediate; not editable — carries a fixed "Izpolnite vprašalnik" button (`TemplateDef.actionLabel`) |
+
+**Design**
+- **Defaults in code, overrides in the DB.** `supabase/functions/_shared/email/templateDefs.ts`
+  holds every template's default subject/heading/body, allowed
+  placeholders and timing spec — pure data with no Deno APIs, so the Edge
+  Functions **and** the React editor import the same file (`EmailTemplates.tsx`
+  imports it by relative path from `supabase/`). One source of truth, nothing
+  to keep in sync. `email_templates` (migration 019) only stores a practice's
+  overrides (`subject`/`heading`/`body`, `enabled`, `timing_value`, `send_hour`);
+  no row or a null column means "use the default", and deleting the row is
+  "reset to default". The client stores a field as null when it equals the
+  default, so a later improvement to the default reaches practices that never
+  customized that field. Root table, so the client sets `practice_id`
+  (`usePracticeContext()`), 4 RLS policies, extended in
+  `scripts/verify-tenant-isolation.mjs`.
+- **Practices edit content, never structure.** The layout shell, practice
+  header, `.ics` attachment and unsubscribe footer are fixed
+  (`templates.ts`), so a practice can't break deliverability or remove the
+  opt-out link. The body is **plain text with `{placeholders}`**
+  (`{ime}`, `{priimek}`, `{datum}`, `{ura}`, `{storitev}`, `{terapevt}`,
+  `{ordinacija}`), a blank line is a new paragraph, `**bold**` is the only
+  markup, and every value is HTML-escaped — no raw HTML from a practice
+  (XSS/spam risk). A paragraph containing a known placeholder that resolved
+  to empty is dropped (so "Storitev: {storitev}" vanishes when there's no
+  service); an unknown placeholder like a typo is left visible. Subject and
+  heading are forced to one line — the subject goes into a raw MIME header
+  and both the template text and the placeholder values are untrusted, so no
+  CR/LF may survive (header-injection guard).
+- **One send path.** `_shared/email/sendAppointmentEmail.ts` does everything
+  from "should this go out" (no address / opted out / template disabled /
+  already sent) through render, optional `.ics`, SES send and the `email_log`
+  write; every appointment email calls it with a `template_key`. Dedup is a
+  cheap `email_log` lookup **before** sending (the unique index alone only
+  fires after the SES send). `email_log`'s unique index now **excludes
+  `appointment_rescheduled`**, since an appointment can move more than once
+  and each move sends an email; every other type sends once per appointment
+  (recall is keyed to the patient's last completed appointment, so once per
+  last visit).
+- **Timing is part of the template.** `timing_value` (unit depends on the
+  key) and `send_hour` (Europe/Ljubljana, 0–23) are set in the same editor;
+  `templateDefs.ts` declares which fields each type supports and the editor
+  shows only those, in plain language ("Kdaj pošljemo"). The reminder cron
+  (`send-appointment-reminder-emails`) still runs hourly but gates **per
+  practice** on that practice's effective send hour instead of one global
+  09:00; defaults preserve the old behavior. Recall does the same. The SMS
+  reminder (14:00) is untouched.
+- **`post_visit` is time-after-visit, not invoice-driven** — no invoicing
+  exists yet. Trigger: `status = 'completed'` and `ends_at` + N hours has
+  passed, looking back only 48h so a visit marked completed late is still
+  picked up but old history is never emailed. When invoicing is built, add
+  "invoice issued" as an alternative trigger for this same template.
+- **`recall` only emails patients whose last completed visit was between N
+  and N+1 months ago** — turning it on must never mass-email years of
+  history; the one-month window still lets an outage catch up on a later run.
+- **A `cancelled` status flip always sends the cancellation email, whichever
+  button caused it** — the trigger is in the database
+  (`send_appointment_change_email`, `AFTER UPDATE OF status, starts_at`,
+  same `pg_net` + Vault pattern), so the calendar's status field, Storitve's
+  "Prekliči" and the SMS "Ne pridem" link all behave the same. It skips
+  appointments already in the past. Storitve's "Prestavi termin" **updates
+  the existing row** (`useAppointments.ts` `scheduleAppointment`), so a
+  reschedule sends one reschedule email, not a cancellation plus a new
+  confirmation.
+- `recall` and `post_visit` are treated as **service messages** (implied
+  consent + unsubscribe, same as the others), not marketing. Worth
+  confirming with whoever handles the practice's ZVOP-3 obligations.
+
+**Edge Functions added/changed** (all default JWT verification ON):
+`send-appointment-change-email` (trigger-invoked: cancelled/rescheduled),
+`send-post-visit-emails` and `send-recall-emails` (hourly crons),
+`email-template-preview` (called from the browser with the signed-in
+user's own session — it reads the practice through that JWT so RLS decides
+which one, and its **test send only ever goes to the signed-in user's own
+auth email**, never an address from the request, so it can't be an open
+relay). The preview runs the exact renderer real emails use, so what a
+practice sees can't drift from what patients receive. `send-appointment-confirmation-email`
+and `send-appointment-reminder-emails` were refactored onto the shared helper.
+New shared modules: `templateDefs.ts`, `sendAppointmentEmail.ts`, `time.ts`
+(Ljubljana hour/date helpers); `ics.ts` gained `method` and `sequence`,
+`send.ts` gained the attachment `method`.
+
+**Frontend**: `EmailTemplates.tsx` (the "E-pošta" submenu page): one **tab
+per email** above a single card, split in half — fields (subject, heading,
+body, clickable placeholder chips, "Kdaj pošljemo", Shrani / Pošlji testni
+e-mail / Ponastavi na privzeto) on the left, live **Predogled** on the
+right (debounced, rendered server-side into a sandboxed `<iframe>`, stretched
+to the fields column's height so the card ends 20px below the buttons; a
+taller Besedilo box just makes the page scroll). A small teal dot on a tab
+marks a customized email, a red "Izklopljeno" tag a disabled one. The
+selected tab is joined to the card (raised above the card's top border, with
+small concave fillets; the first tab squares the card's top-left corner so
+its left line continues straight down). Layout went through several rounds
+of Gregor's explicit feedback — don't rearrange it without asking; in
+particular he rejected a vertical-compaction attempt (side-by-side
+subject/heading, shorter body) and asked for the card's bottom edge to be
+moved, not the content shrunk. **Dev-server gotcha found along the way**:
+Tailwind's dev compile can go stale so new utility classes never appear and
+the page looks unchanged — restart `npm run dev:patient` before assuming
+the layout code is wrong.
+
+**Deploy**: `npx supabase functions deploy <name>` (the CLI isn't installed
+globally, use `npx`), the six functions above, after running migration 019.
+
+**Planned next, agreed but not built** (each shippable on its own, re-confirm
+before starting):
+1. **Aftercare emails ("topics"), driven by the invoice — designed
+   2026-09-25, deliberately BLOCKED on building the price list and invoicing
+   first (Gregor's explicit decision: "first build invoicing and price list";
+   this is the note for later).** Care instructions after a treatment (e.g.
+   after an extraction) are sent **from the app, never via an external
+   autoresponder or webhook** — the treatment is clinical data, so topic
+   usage must never be emitted as an event or tag to an external tool.
+   - **Trigger = the invoice, not the chart.** The price list gives every
+     service a **category**; each category maps to **topics**; the invoice-
+     creation screen shows a **topics list at the bottom**, pre-ticked from
+     the categories of the invoice's line items (adding an implant line ticks
+     "Implantat"), and staff can tick/untick manually. **Issuing the invoice
+     sends one email with the ticked topics attached.**
+   - **Topics** = named, practice-editable blocks of instruction text.
+     Starting set: **extraction, filling, root canal, implant,
+     toothbrushing**. We write default Slovene wording; Monika reviews and
+     edits it. Toothbrushing isn't tied to a treatment, so it's mostly ticked
+     by hand.
+   - **Category ↔ topic is many-to-many** (a category can have several
+     topics; a topic can belong to several categories), configured while
+     building the price list.
+   - **Format: one email per invoice, each topic a section** under a short
+     intro, inline text, in the existing template system (a new template plus
+     topic blocks, same `{placeholders}`, fixed shell and unsubscribe footer).
+     PDF leaflet attachments are a later step (needs file storage).
+   - **Editing: library only** — a practice edits each topic's standard text
+     once, in an editor like the E-pošta one; the send step only ticks/unticks
+     topics, no per-send text edits.
+   - **Superseded idea**: suggesting topics from the visit's `tooth_records`
+     with staff confirmation. Dropped because the chart can't tell "done
+     today" from "recorded as history" (`extracted` is used for both), while
+     an invoice line is unambiguous.
+   - **Open items for when it's built**: the invoice design itself
+     (numbering, VAT, Slovenian fiscalisation rules, PDF) isn't decided;
+     whether the invoice PDF goes in the same email; a warning when the
+     patient has unsubscribed from email so staff hand over printed
+     instructions instead.
+   - **Independent of invoicing, can be built earlier**: the Frame 3
+     "E-pošta" tab on the patient record (`PatientChart.tsx`, currently a
+     mock-up) becoming a real communication history for that patient —
+     emails from `email_log` **and** SMS from `appointment_reminders`/
+     `patient_sms_consents`, in one chronological list.
+2. **Tags** (`tags`/`patient_tags`, manual + automatic) with a **share
+   externally** flag per tag — treatment-derived tags (`implantat`,
+   `ortodontija`) are clinical and must never reach an external autoresponder.
+3. **Outbound webhooks** using **`patients.marketing_consent`** (explicit
+   opt-in, separate from `email_opt_out` — the column **exists now**,
+   collected on the health questionnaire, see "Health questionnaire" below;
+   only consented patients are ever included in a payload). Every marketing
+   message these send must carry a working unsubscribe that sets it back to
+   false — the questionnaire deliberately never offers withdrawal. Flat JSON payload (`event`, `email`,
+   `first_name`, `last_name`, `phone`, `tags`, `tag`, `marketing_consent`) so
+   it maps onto **FluentCRM's incoming webhook** (Gregor's autoresponder) and
+   onto Make/Zapier/n8n/Brevo without an adapter; HMAC-signed, retried,
+   delivery log.
+4. **Inbound API** with per-practice hashed API keys (list/search patients,
+   add/remove tags, create/update, set marketing consent), plus syncing an
+   unsubscribe made in the autoresponder back to `marketing_consent = false`.
+   Webhook/API-key configuration belongs on the deferred Nastavitve page.
+
 **Explicitly out of scope this phase**: confirm/decline via email (SMS's
 own `appointment-confirm` token flow already covers that; duplicating it
 for email would mean two channels racing to set `appointments.status` for
 no real benefit — these emails are informational-only: time, service,
-`.ics` attachment, unsubscribe link); resending the confirmation on
-reschedule (the trigger is `AFTER INSERT` only, not
-`AFTER UPDATE OF starts_at` — an easy, contained future addition to the
-same trigger); speculative email types with no real trigger yet (a welcome
+`.ics` attachment, unsubscribe link); speculative email types with no real trigger yet (a welcome
 email has no practice-signup code path to hang off, since practices are
 still created manually via the dashboard; a staff-invite email has no
 invite UI, per "Out of Scope for Phase 1" below) — the `_shared/email/`
@@ -3527,12 +3758,90 @@ full checklist): a verified SES sending domain + SES production access
 `SES_ACCESS_KEY_ID`/`SES_SECRET_ACCESS_KEY`/`SES_REGION`/
 `SES_SENDER_ADDRESS` (`supabase secrets set`), an SES configuration set
 with Bounce/Complaint event publishing → an SNS topic subscribed to the
-deployed `ses-bounce-webhook` URL, the 4 new functions deployed (the two
+deployed `ses-bounce-webhook` URL, the 4 original functions deployed (the two
 trigger/cron-invoked ones keep default JWT verification ON;
 `email-unsubscribe`/`ses-bounce-webhook` need `--no-verify-jwt`), and
 `docs/email-unsubscribe.html` added to the already-enabled GitHub Pages
 publish. All of this is done on the live project — see the status line at
 the top of this section.
+
+### Health questionnaire (Vprašalnik o zdravju) + marketing consent
+
+**Status: built and deployed (2026-10-05) — migration 021 run, the four
+functions below deployed, pushed. Not yet confirmed end to end live** (a real
+send → fill in on a phone → banner/"Vprašalnik" view round trip).
+
+The practice's paper "Vprašalnik o zdravju" (based on the Medical Chamber of
+Slovenia's form) as an online form a patient fills in before their visit.
+
+- **Questions live in code**, `supabase/functions/_shared/questionnaire.ts`
+  — Slovene text **verbatim from Monika's own paper form** (supplied as a
+  PDF), English from the practice's English version. Deliberate deviations,
+  all per Gregor's explicit requests: follow-ups shortened ("Za katero?",
+  "Zaradi katere bolezni ali stanja?", "Kdaj pričakujete porod?"); question
+  4 (medications) is a **list of rows** — a "+" row like the price list,
+  each medicine with a **redno/pogosto** dropdown; question 6 (allergies) is
+  **DA/NE with a follow-up box**, not free text; "zobozdravnica" →
+  **"zobozdravnik"** (gender-neutral for other practices); "Obkrožite" →
+  "Označite" (ticking, not circling, online); footnote 2 keeps **"ZZPZ"**
+  exactly as on the paper form. Every DA with a follow-up box **requires**
+  that box (client highlights it red, server rejects blank). The pregnancy
+  question is hidden for patients recorded as male. `FORM_VERSION` is
+  stored with every submission — bump it when a question's meaning changes.
+- **Sending**: a separate, editable email template (`health_questionnaire`).
+  Automatically on booking (`send-appointment-confirmation-email` calls
+  `sendQuestionnaireEmail()` after the confirmation, independent of it) —
+  **only if the patient has no questionnaire submitted in the last 12
+  months** and no link already open — and by hand via **"Pošlji vprašalnik"**
+  on the Patient Record banner (`send-health-questionnaire`, browser-called,
+  JWT ON, patient checked through the user's own RLS first). Manual sends
+  always go out (even if the template is switched off) but re-use an open
+  link, so a patient never has two. Each link is a random 32-char token,
+  valid **30 days** and until submitted; after that the endpoint returns no
+  personal data. **No captcha** — discussed and deliberately not added: the
+  token is the gate, a bot has nothing to reach, and captcha would only lose
+  older patients.
+- **Patient page**: `docs/health-questionnaire.html` on GitHub Pages (same
+  JSON-API pattern as the SMS pages), backed by the public
+  `health-questionnaire` function (`--no-verify-jwt`), which serves the form
+  definition + prefilled contact data and saves the submission once
+  (`.is('submitted_at', null)` makes a double submit a no-op). SL/EN switch,
+  phone-friendly. Contact details (name, birth date, address, phone, email)
+  are **prefilled from the patient record**; phones are normalized to E.164.
+  Signature = typed full name + a "podatki so resnični" checkbox.
+- **Contact corrections are never applied automatically** (Gregor's choice):
+  the submission stores `submitted_contact`; the banner shows "Posodobljeni
+  podatki" and the "Vprašalnik" view lists old vs. new with **Prevzemi**
+  (applies via the same `updatePatient()` as Frame 2's Shrani) or
+  **Zavrzi**.
+- **Frame 1 banner** (`components/questionnaire/HealthQuestionnaire.tsx`):
+  **red only when there's something to warn about** — Alergije, Stanja
+  (every DA answer with its detail + ticked conditions), Zdravila (name +
+  frequency) — otherwise grey ("Vprašalnik o zdravju še ni izpolnjen" or the
+  calm summary). Tags for "Ni pregledano" and "Posodobljeni podatki", plus
+  sent/older-than-12-months notes. **"Vprašalnik"** opens every answer (DA in
+  red); **"Pregledano"** replaces the paper form's "Pregledal" and records
+  the reviewer's login email + time.
+- **Marketing consent** (`patients.marketing_consent` + `_at`/`_source`/
+  `_text`): an **optional, unticked** checkbox in its own "Obveščanje
+  (neobvezno)" section on the questionnaire — placeholder wording accepted
+  as-is by Gregor ("…po e-pošti in SMS-ih. Soglasje lahko kadarkoli
+  prekličem."), **still to be confirmed with whoever handles the practice's
+  ZVOP-3/GDPR obligations**. The exact wording shown is stored with each
+  consent (and on the questionnaire row as the audit record). **Hidden
+  entirely for a patient who already consented** — Gregor's explicit choice,
+  to avoid patients unsubscribing by accident — so a questionnaire can only
+  ever grant it. Staff can only **withdraw** it ("Prekliči soglasje" on the
+  Frame 2 "Marketinško obveščanje" badge), never grant it, so every "true"
+  was ticked by the patient. The booking widget's own GDPR checkbox (sibling
+  project) covers only appointment communication, not marketing — checked.
+  Nothing sends marketing yet.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4f
+  (spoof insert + read isolation) — added, not yet re-run.
+
+**Deploy** (done): `health-questionnaire --no-verify-jwt`,
+`send-health-questionnaire`, and redeploys of
+`send-appointment-confirmation-email` and `email-template-preview`.
 
 ---
 
@@ -3658,7 +3967,11 @@ the top of this section.
 
 ## Out of Scope for Phase 1
 - eZdravje / ZZZS integration
-- Billing / invoicing
+- Billing / invoicing — **planned next, after the calendar/email work**: a
+  price list with service categories, then invoices. Must support the
+  invoice-driven aftercare emails described under "Email templates
+  (E-pošta)" → "Planned next", item 1 (a category per service, and a topics
+  list on the invoice screen)
 - ~~Appointment booking~~ — **built**, see "Native scheduling calendar
   (Koledar)" above. A separate, unrelated Google-Calendar-*backed* public
   booking widget also exists at
@@ -3948,22 +4261,148 @@ next:
 1. Print view (chart only, A4)
 2. Email: the complaint path and a real custom-domain practice haven't
    been exercised yet (see "Email notifications (Amazon SES)" above)
-3. A real self-service Nastavitve settings page — where a practice would
-   eventually configure its own email sending domain, among other future
-   settings — deliberately deferred per Gregor's explicit instruction
-   rather than built alongside the email feature above
+3. Email-domain settings on the Nastavitve page — the page itself now
+   exists (Cenik tab), but configuring a practice's own sending domain is
+   still deliberately deferred per Gregor's explicit instruction
 4. A Gmail-OAuth "send via your own mailbox" email tier — considered and
    deferred, since it depends on a Google OAuth app-verification review
    (CASA assessment) outside this project's control — see "Email
    notifications (Amazon SES)" above
-5. Everything past Phase 1: CRM features, invoicing, appointment
+5. Email follow-ups agreed in design but not built: tags, outbound webhooks
+   + `marketing_consent`, and the inbound API/API keys for autoresponders
+   like FluentCRM — see "Email templates (E-pošta)" above, "Planned next"
+5a. **Price list built (Nastavitve → Cenik, migration `020_add_price_list.sql`); invoicing itself is next.**
+   `services`/`service_categories`, both practice-scoped root tables (4 RLS
+   policies each, like `therapists`), every practice seeded with a starter
+   set of 9 categories (`seed_default_service_categories()`, called from
+   `handle_new_user_practice()` too). `src/hooks/usePriceList.ts` +
+   `src/components/settings/PriceListSection.tsx`: one plain editable table —
+   **no popup, for either adding or editing** — every field commits on
+   blur/change directly in its cell, and the permanent last row (a "+" in its
+   Šifra cell) creates a new service the moment a name and a valid price are
+   filled in and the row is left; a fresh blank row reappears below it.
+   Categories are managed in a slim strip above the table (add/rename/delete)
+   — **not a filter**; an earlier version had them as a filtering sidebar,
+   removed per Gregor's explicit request ("why are these categories needed at
+   the left side" — he wanted the whole table visible, not narrowed). Price
+   accepts `12,50` or `12.5`; VAT defaults to 0% (oproščeno, since health
+   services are generally VAT-exempt in Slovenia — presets 0/5/9.5/22%, to be
+   confirmed with the practice's accountant before invoicing relies on it);
+   services are archived, never deleted, since invoices will reference them.
+   Deleting a category (✕) and archiving a service ("Arhiviraj") both ask
+   first — a shared `ConfirmDialog` with Prekliči / Da, per Gregor's explicit
+   request; restoring ("Obnovi") stays one click.
+   `CardTabs.tsx` (`src/components/ui/`) is shared with `EmailTemplates.tsx`
+   — the folder-tab-onto-a-card look, extracted so both pages stay pixel
+   identical.
+
+   **Chart → invoice design, recorded 2026-09-25, not built** (this needs
+   invoicing to exist before any of it can be built, so nothing here is
+   scheduled yet — it's notes for whoever builds invoicing next). The user
+   wants the dental chart to populate invoice line items, and flagged two
+   real problems against the actual ZZZS šifrant data pulled earlier this
+   session (see "Email templates (E-pošta)" → "Planned next" below for that
+   data-pull episode): several ZZZS codes can exist for what the chart
+   records as one clinical fact (extraction complexity, crown material, root-
+   canal count aren't things the chart tracks or should guess), and custom
+   practice services (implants, e.g.) aren't on the ZZZS šifrant at all.
+   Resolution, all per the user's explicit choices:
+   - **Three buckets, not one uniform rule.** *Auto-resolves exactly*:
+     fillings — `SurfaceMap` already records exactly which surfaces are
+     `caries_treated` on a tooth, so once a service is tagged "this is the
+     1-surface filling code," "2-surface," etc., invoicing can pick the right
+     line with zero clicks; a solved case, not an open question. *Same
+     clinical action, several billable variants* (extraction type, crown
+     material, root-canal count) — the chart can flag "this tooth needs an
+     extraction" but never which billable variant, so the invoice line starts
+     unresolved until the person picks from a **short, pre-filtered list**
+     of just that clinical group's services (e.g. ~4–6 extraction-type rows,
+     never a search across the whole price list, and **never a silent
+     default** — the user explicitly chose "always require one pick" over a
+     smart-default-you-can-correct). *Not derivable from the chart at all* —
+     custom services like implants — same short-list mechanism, but the
+     practice ties its own service to a chart status by hand.
+   - **Root canal count stays a billing-time question, not a chart field** —
+     `tooth_records`/`EndoStage` are not extended; picked at invoicing time,
+     same as extraction complexity or crown material, per the user's explicit
+     choice (the alternative — adding canal count to the chart so root-canal
+     billing could also auto-resolve like fillings — was considered and
+     declined for now).
+   - **The trigger→service mapping and the ZZZS-vs-custom marker are both
+     deferred to when invoicing/import are actually built** — per the user's
+     explicit choice, not prepared on today's price list. Today's
+     `services`/`service_categories` schema is unchanged by this design pass.
+   - **Proposed mechanism for later** (a proposal for invoicing's own design
+     pass to confirm or revise, not a committed schema): a practice-configured
+     `procedure_service_links` table (`practice_id`, `trigger_key`,
+     `service_id`, an optional `surface_count` used only by the `filling`
+     trigger to resolve to one exact service automatically). `trigger_key` is
+     a fixed vocabulary mirroring `ToothStatus`/`EndoStage` values already in
+     `src/types/dental.ts` — `extraction`, `filling`, `root_canal`, `crown`,
+     `implant`, `sealant`, `overlay`, `bridge_pontic`, `prosthesis` — not a
+     new taxonomy invented for billing.
+
+   Requirements the earlier aftercare-topics design (see "Email templates
+   (E-pošta)" → "Planned next", item 1) puts on invoicing specifically:
+   categories map many-to-many to aftercare **topics**; the invoice-creation
+   screen has a **topics list at the bottom** (pre-ticked from the line
+   items' categories, manually tick/untick-able); issuing the invoice emails
+   the ticked topics as sections of one email.
+5b. The Frame 3 "E-pošta" tab on the patient record made real: a combined
+   email + SMS history for that patient (independent of invoicing)
+6. Live confirmation still missing for the new email types: the cancellation
+   email from both cancel buttons, a customized reminder send hour, and the
+   post-visit and recall cron sends
+6a. Health questionnaire: a full live round trip (send → fill in on a phone
+   → banner, "Vprašalnik", Prevzemi, Pregledano), and the marketing-consent
+   wording confirmed with whoever handles the practice's ZVOP-3/GDPR
+   obligations — see "Health questionnaire" above
+7. Everything past Phase 1: CRM features, invoicing, appointment
    integration with the separate calendar app, staff-invite UI for
    `practice_members`, self-serve practice signup — see "Multi-tenancy" and
    "Out of Scope for Phase 1" above
 
 ---
 
-*Last updated: 2026-09-24 (Email notifications confirmed live — migrations
+*Last updated: 2026-10-05 (Health questionnaire + marketing consent built
+and deployed — migration 021 run, four functions deployed. The paper form
+went online with Monika's own Slovene wording plus Gregor's edits
+(medications as rows with redno/pogosto, allergies as DA/NE, required
+follow-ups, "zobozdravnik", ZZPZ kept); sent on booking if none in 12 months
+or by hand; contact corrections need staff's "Prevzemi"; Frame 1's banner is
+now real. Marketing consent is an optional checkbox on the questionnaire,
+hidden once given, withdraw-only for staff. Also: confirmation popups before
+deleting a price-list category or archiving a service. See "Health
+questionnaire (Vprašalnik o zdravju) + marketing consent".)*
+
+*Previous entry: 2026-09-25 (Price list built — Nastavitve → Cenik, migration
+020, a single always-editable table with no popup for adding or editing,
+category management moved from a filtering sidebar to a slim management strip
+per Gregor's explicit request. Separately, the chart→invoice design was
+recorded per Gregor's explicit choices — fillings auto-resolve from surface
+count, ambiguous procedures (extraction type, crown material, root-canal
+count) always require picking from a short list rather than a silent default,
+and both the trigger-mapping table and a ZZZS-vs-custom marker are deferred
+to when invoicing/import are actually built. Nothing beyond the price list
+itself was implemented; see "Not started" item 5a for the full design.
+Aftercare emails were redesigned and parked in the same style earlier this
+day: they will be driven by the invoice — price-list categories tick topics
+on the invoice screen, issuing the invoice sends one email with the topics as
+sections, wording edited in a library, all in-app — see "Email templates
+(E-pošta)" → "Planned next".)*
+
+*Previous entry: 2026-09-24 (Customizable email templates built, deployed
+and pushed — migration 019 run, six Edge Functions deployed. Every automatic
+email is now an editable template (confirmation, reminder, cancellation,
+reschedule, post-visit thank-you, recall), each with its own timing, edited
+on the new "E-pošta" page (tabs + live preview, server-rendered by the same
+code real emails use). Reschedule confirmed live; cancellation from both
+buttons and the post-visit/recall crons not yet. Agreed but not built:
+treatment-based aftercare emails (in-app, never via an autoresponder), tags,
+outbound webhooks with a separate marketing-consent flag, and an inbound API
+for autoresponders such as FluentCRM — see "Email templates (E-pošta)".)*
+
+*Previous entry: 2026-09-24 (Email notifications confirmed live — migrations
 016–018 run, AWS SES/SNS set up, and a real confirmation, unsubscribe, hard
 bounce, delivery tracking and the scheduled reminder all verified. A
 "Preveri email naslov" pill now marks hard-bounced addresses, and

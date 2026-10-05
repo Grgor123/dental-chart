@@ -89,6 +89,7 @@ begin
   practice_name := left(practice_name, 200);
   insert into practices (name) values (practice_name) returning id into new_practice_id;
   insert into practice_members (practice_id, user_id, role) values (new_practice_id, new.id, 'owner');
+  perform seed_default_service_categories(new_practice_id);  -- starter price-list categories — see 020_add_price_list.sql
   return new;
 end;
 $$;
@@ -278,7 +279,7 @@ create table email_log (
   appointment_id uuid references appointments(id) on delete cascade,
   email_type text not null check (email_type in (
     'appointment_confirmation','appointment_reminder','appointment_cancelled',
-    'appointment_rescheduled','post_visit','recall'
+    'appointment_rescheduled','post_visit','recall','health_questionnaire'
   )),
   recipient_email text not null,
   subject text not null,
@@ -310,7 +311,7 @@ create table email_templates (
   practice_id uuid not null references practices(id),
   template_key text not null check (template_key in (
     'appointment_confirmation','appointment_reminder','appointment_cancelled',
-    'appointment_rescheduled','post_visit','recall'
+    'appointment_rescheduled','post_visit','recall','health_questionnaire'
   )),
   subject text,
   heading text,
@@ -323,6 +324,114 @@ create table email_templates (
   updated_at timestamptz not null default now(),
   unique (practice_id, template_key)
 );
+
+-- Health questionnaires (vprašalnik o zdravju) — see
+-- supabase/migrations/021_add_health_questionnaires.sql. One row per
+-- questionnaire sent; answers filled in once the patient submits. The
+-- questions themselves live in code (supabase/functions/_shared/questionnaire.ts).
+create table health_questionnaires (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),  -- auto-stamped from patient_id
+  patient_id uuid not null references patients(id) on delete cascade,
+  appointment_id uuid references appointments(id) on delete set null,  -- null for a manual send
+  token text not null unique,
+  sent_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  submitted_at timestamptz,
+  language text check (language in ('sl','en')),
+  form_version smallint,
+  answers jsonb,
+  signature_name text,
+  submitted_contact jsonb,      -- as the patient submitted it; staff apply differences by hand
+  contact_applied_at timestamptz,
+  reviewed_at timestamptz,      -- "Pregledano" (the paper form's "Inspected by")
+  reviewed_by text,
+  marketing_consent boolean,    -- the optional marketing checkbox, as submitted
+  marketing_consent_text text,  -- the exact wording shown
+  created_at timestamptz not null default now()
+);
+create index health_questionnaires_practice_id_idx on health_questionnaires(practice_id);
+create index health_questionnaires_patient_id_idx on health_questionnaires(patient_id, sent_at desc);
+
+create or replace function set_health_questionnaire_practice_id()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  select practice_id into new.practice_id from patients where id = new.patient_id;
+  if new.practice_id is null then raise exception 'cannot resolve practice_id for patient %', new.patient_id; end if;
+  return new;
+end;
+$$;
+create trigger set_health_questionnaire_practice_id_trigger
+  before insert or update of patient_id on health_questionnaires
+  for each row execute function set_health_questionnaire_practice_id();
+
+-- Price list (Nastavitve → Cenik) — see supabase/migrations/020_add_price_list.sql.
+-- Root tables like therapists: the client sets practice_id on insert.
+create table service_categories (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),
+  name text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  unique (practice_id, name)
+);
+create index service_categories_practice_id_idx on service_categories(practice_id);
+
+create table services (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references practices(id),
+  category_id uuid references service_categories(id) on delete restrict,  -- a category that still has services can't be deleted
+  code text,  -- šifra
+  name text not null,
+  description text,
+  price_eur numeric(10,2) not null check (price_eur >= 0),
+  vat_rate numeric(4,1) not null default 0 check (vat_rate between 0 and 100),  -- percent; 0 = exempt (health services generally are in Slovenia)
+  is_active boolean not null default true,  -- archive, never hard-delete: invoices will reference services
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index services_practice_code_idx
+  on services(practice_id, lower(code)) where code is not null and code <> '';
+create index services_practice_id_idx on services(practice_id);
+create index services_category_id_idx on services(category_id);
+
+-- A service may only point at a category of the SAME practice.
+create or replace function check_service_category_practice()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if new.category_id is not null and not exists (
+    select 1 from service_categories c
+    where c.id = new.category_id and c.practice_id = new.practice_id
+  ) then
+    raise exception 'category does not belong to this practice';
+  end if;
+  return new;
+end;
+$$;
+create trigger check_service_category_practice_trigger
+  before insert or update of category_id, practice_id on services
+  for each row execute function check_service_category_practice();
+
+-- Starter categories every practice gets (called by handle_new_user_practice()
+-- above); only seeds a practice that has none.
+create or replace function seed_default_service_categories(p_practice_id uuid)
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if exists (select 1 from service_categories where practice_id = p_practice_id) then
+    return;
+  end if;
+  insert into service_categories (practice_id, name, sort_order) values
+    (p_practice_id, 'Preventiva', 10),
+    (p_practice_id, 'Diagnostika in RTG', 20),
+    (p_practice_id, 'Restavrativa', 30),
+    (p_practice_id, 'Endodontija', 40),
+    (p_practice_id, 'Parodontologija', 50),
+    (p_practice_id, 'Kirurgija', 60),
+    (p_practice_id, 'Implantologija', 70),
+    (p_practice_id, 'Protetika', 80),
+    (p_practice_id, 'Ortodontija', 90);
+end;
+$$;
 
 -- Auto-stamp triggers: derive practice_id from the parent row, so
 -- useOpenVisit.ts / useVisit.ts never need to know practice_id exists at
@@ -751,3 +860,51 @@ create policy email_templates_update on email_templates for update
   with check (practice_id = current_practice_id());
 create policy email_templates_delete on email_templates for delete
   using (practice_id = current_practice_id());
+
+alter table service_categories enable row level security;
+create policy service_categories_select on service_categories for select
+  using (practice_id = current_practice_id());
+create policy service_categories_insert on service_categories for insert
+  with check (practice_id = current_practice_id());
+create policy service_categories_update on service_categories for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy service_categories_delete on service_categories for delete
+  using (practice_id = current_practice_id());
+
+alter table services enable row level security;
+create policy services_select on services for select
+  using (practice_id = current_practice_id());
+create policy services_insert on services for insert
+  with check (practice_id = current_practice_id());
+create policy services_update on services for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy services_delete on services for delete
+  using (practice_id = current_practice_id());
+
+alter table health_questionnaires enable row level security;
+create policy health_questionnaires_select on health_questionnaires for select
+  using (practice_id = current_practice_id());
+create policy health_questionnaires_insert on health_questionnaires for insert
+  with check (practice_id = current_practice_id());
+create policy health_questionnaires_update on health_questionnaires for update
+  using (practice_id = current_practice_id())
+  with check (practice_id = current_practice_id());
+create policy health_questionnaires_delete on health_questionnaires for delete
+  using (practice_id = current_practice_id());
+
+-- ---- Marketing consent ------------------------------------------------------
+-- Explicit, optional opt-in for marketing messages (news, offers, preventive
+-- check-up invitations) — separate from the transactional email/SMS consent,
+-- which only covers appointment messages. Collected on the health
+-- questionnaire as an unticked, optional checkbox; staff can only WITHDRAW it
+-- (on the patient's request), never grant it, so every "true" traces back to
+-- the patient ticking it themselves. Nothing sends marketing yet — the
+-- planned tags/webhooks feature (CLAUDE.md) will only ever include patients
+-- with marketing_consent = true.
+alter table patients
+  add column marketing_consent boolean not null default false,
+  add column marketing_consent_at timestamptz,          -- when it was last granted or withdrawn
+  add column marketing_consent_source text check (marketing_consent_source in ('questionnaire','staff')),
+  add column marketing_consent_text text;               -- the exact wording the patient agreed to
