@@ -666,6 +666,40 @@ create trigger send_appointment_change_email_trigger
   after update of status, starts_at on appointments
   for each row execute function send_appointment_change_email();
 
+-- Trigger: send the health questionnaire when an appointment becomes
+-- 'confirmed' (only if none in 12 months — rules in
+-- supabase/functions/_shared/email/sendQuestionnaireEmail.ts) — see
+-- supabase/migrations/022_questionnaire_on_confirmation.sql.
+create or replace function send_questionnaire_on_confirmation()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_service_role_key text;
+begin
+  if new.status <> 'confirmed' then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.status = 'confirmed' then
+    return new;
+  end if;
+
+  select decrypted_secret into v_service_role_key
+    from vault.decrypted_secrets where name = 'edge_function_service_role_key';
+
+  if v_service_role_key is not null then
+    perform net.http_post(
+      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-health-questionnaire',
+      headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
+      body := jsonb_build_object('appointmentId', new.id)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+create trigger send_questionnaire_on_confirmation_trigger
+  after insert or update of status on appointments
+  for each row execute function send_questionnaire_on_confirmation();
+
 -- Daily cron: send reminders 2 days ahead. Requires the Supabase Pro plan
 -- or above (pg_cron isn't on the Free tier) — if this fails, trigger
 -- send-appointment-reminders from an external scheduler instead (same

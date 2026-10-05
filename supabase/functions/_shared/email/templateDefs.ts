@@ -170,7 +170,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     key: 'health_questionnaire',
     label: 'Vprašalnik o zdravju',
     description:
-      'Ob naročilu termina, če pacient v zadnjih 12 mesecih še ni izpolnil vprašalnika — ali ročno z gumbom »Pošlji vprašalnik« na kartoteki pacienta.',
+      'Ko je termin potrjen, če pacient v zadnjih 12 mesecih še ni izpolnil vprašalnika — ali ročno z gumbom »Pošlji vprašalnik« na kartoteki pacienta.',
     defaultSubject: 'Vprašalnik o zdravju — {ordinacija}',
     defaultHeading: 'Vprašalnik o zdravju',
     defaultBody:

@@ -1,7 +1,6 @@
 // Sends the health questionnaire (vprašalnik o zdravju) email — the one send
-// path for both the automatic send on booking
-// (send-appointment-confirmation-email) and the manual "Pošlji vprašalnik"
-// button (send-health-questionnaire).
+// path for both the automatic send when an appointment is confirmed and the
+// manual "Pošlji vprašalnik" button (both via send-health-questionnaire).
 //
 // Rules:
 //   - automatic (force = false): skipped if the patient submitted one in the

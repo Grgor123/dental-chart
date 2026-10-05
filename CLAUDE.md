@@ -3536,7 +3536,7 @@ are seven of them (the seventh, `health_questionnaire`, was added later — see
 | `appointment_rescheduled` | `starts_at` changes, new time in the future | immediate; `.ics` with the same UID and a higher `SEQUENCE` updates the entry |
 | `post_visit` | hourly cron, appointment `completed` and ended long enough ago | hours after the appointment ends (default 1) |
 | `recall` | hourly cron, last completed visit N months ago, no upcoming appointment | months (default 6) + send hour (default 10:00) |
-| `health_questionnaire` | on booking (same function as the confirmation) if no questionnaire in 12 months, or the manual "Pošlji vprašalnik" button | immediate; not editable — carries a fixed "Izpolnite vprašalnik" button (`TemplateDef.actionLabel`) |
+| `health_questionnaire` | appointment becomes `confirmed` (trigger, migration 022) if no questionnaire in 12 months, or the manual "Pošlji vprašalnik" button | immediate; not editable — carries a fixed "Izpolnite vprašalnik" button (`TemplateDef.actionLabel`) |
 
 **Design**
 - **Defaults in code, overrides in the DB.** `supabase/functions/_shared/email/templateDefs.ts`
@@ -3767,9 +3767,11 @@ the top of this section.
 
 ### Health questionnaire (Vprašalnik o zdravju) + marketing consent
 
-**Status: built and deployed (2026-10-05) — migration 021 run, the four
-functions below deployed, pushed. Not yet confirmed end to end live** (a real
-send → fill in on a phone → banner/"Vprašalnik" view round trip).
+**Status: built, deployed and confirmed live (2026-10-05)** — migration 021
+run, the four functions below deployed, pushed. Gregor ran a real round trip
+(manual send → filled in on a phone → banner, "Vprašalnik" view, Prevzemi,
+Pregledano, marketing consent) and confirmed it works, UX included. Not yet
+exercised live: the automatic send on confirmation (migration 022).
 
 The practice's paper "Vprašalnik o zdravju" (based on the Medical Chamber of
 Slovenia's form) as an online form a patient fills in before their visit.
@@ -3789,12 +3791,18 @@ Slovenia's form) as an online form a patient fills in before their visit.
   question is hidden for patients recorded as male. `FORM_VERSION` is
   stored with every submission — bump it when a question's meaning changes.
 - **Sending**: a separate, editable email template (`health_questionnaire`).
-  Automatically on booking (`send-appointment-confirmation-email` calls
-  `sendQuestionnaireEmail()` after the confirmation, independent of it) —
-  **only if the patient has no questionnaire submitted in the last 12
-  months** and no link already open — and by hand via **"Pošlji vprašalnik"**
-  on the Patient Record banner (`send-health-questionnaire`, browser-called,
-  JWT ON, patient checked through the user's own RLS first). Manual sends
+  Automatically **when an appointment becomes `confirmed`** — the patient
+  taps "Pridem" in the SMS reminder (~2 days before) or staff set "Potrjen"
+  (trigger `send_questionnaire_on_confirmation`, migration 022, insert or
+  status change INTO confirmed) — **only if the patient has no questionnaire
+  submitted in the last 12 months** and no link already open. This replaced
+  an earlier send-on-booking (Gregor's explicit choice, "only on
+  confirmation" — a fallback "2 days before if never confirmed" was offered
+  and declined, so a patient who never confirms gets it only via the
+  button). And by hand via **"Pošlji vprašalnik"** on the Patient Record
+  banner. Both go through `send-health-questionnaire`: service-role bearer +
+  `appointmentId` = the trigger; a user JWT + `patientId` = the button
+  (patient checked through the user's own RLS first). Manual sends
   always go out (even if the template is switched off) but re-use an open
   link, so a patient never has two. Each link is a random 32-char token,
   valid **30 days** and until submitted; after that the endpoint returns no
@@ -3824,10 +3832,9 @@ Slovenia's form) as an online form a patient fills in before their visit.
   the reviewer's login email + time.
 - **Marketing consent** (`patients.marketing_consent` + `_at`/`_source`/
   `_text`): an **optional, unticked** checkbox in its own "Obveščanje
-  (neobvezno)" section on the questionnaire — placeholder wording accepted
-  as-is by Gregor ("…po e-pošti in SMS-ih. Soglasje lahko kadarkoli
-  prekličem."), **still to be confirmed with whoever handles the practice's
-  ZVOP-3/GDPR obligations**. The exact wording shown is stored with each
+  (neobvezno)" section on the questionnaire — wording ("…po e-pošti
+  in SMS-ih. Soglasje lahko kadarkoli prekličem.") **checked and approved by
+  Gregor (2026-10-05)**. The exact wording shown is stored with each
   consent (and on the questionnaire row as the audit record). **Hidden
   entirely for a patient who already consented** — Gregor's explicit choice,
   to avoid patients unsubscribing by accident — so a questionnaire can only
@@ -3839,9 +3846,16 @@ Slovenia's form) as an online form a patient fills in before their visit.
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4f
   (spoof insert + read isolation) — added, not yet re-run.
 
-**Deploy** (done): `health-questionnaire --no-verify-jwt`,
-`send-health-questionnaire`, and redeploys of
-`send-appointment-confirmation-email` and `email-template-preview`.
+**Deploy**: `health-questionnaire --no-verify-jwt`,
+`send-health-questionnaire`, `send-appointment-confirmation-email`,
+`email-template-preview` (all done for 021; migration 022 then needs
+`send-health-questionnaire` and `send-appointment-confirmation-email`
+redeployed).
+
+**Banner layout**: the three columns are 1 : 2 : 1.4 (Stanja widest) and
+each wraps to two lines before an ellipsis, so the banner grows taller, never
+wider — per Gregor's request after a long "Stanja" got cut off on one line.
+Items are separated by " · ".
 
 ---
 
@@ -4353,10 +4367,9 @@ next:
 6. Live confirmation still missing for the new email types: the cancellation
    email from both cancel buttons, a customized reminder send hour, and the
    post-visit and recall cron sends
-6a. Health questionnaire: a full live round trip (send → fill in on a phone
-   → banner, "Vprašalnik", Prevzemi, Pregledano), and the marketing-consent
-   wording confirmed with whoever handles the practice's ZVOP-3/GDPR
-   obligations — see "Health questionnaire" above
+6a. Health questionnaire: the automatic send on confirmation (migration
+   022) not yet seen live — the manual round trip is confirmed — see "Health
+   questionnaire" above
 7. Everything past Phase 1: CRM features, invoicing, appointment
    integration with the separate calendar app, staff-invite UI for
    `practice_members`, self-serve practice signup — see "Multi-tenancy" and
@@ -4364,8 +4377,9 @@ next:
 
 ---
 
-*Last updated: 2026-10-05 (Health questionnaire + marketing consent built
-and deployed — migration 021 run, four functions deployed. The paper form
+*Last updated: 2026-10-05 (Health questionnaire + marketing consent built,
+deployed and confirmed live by Gregor — migration 021 run, four functions
+deployed. The paper form
 went online with Monika's own Slovene wording plus Gregor's edits
 (medications as rows with redno/pogosto, allergies as DA/NE, required
 follow-ups, "zobozdravnik", ZZPZ kept); sent on booking if none in 12 months

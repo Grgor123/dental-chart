@@ -1,6 +1,13 @@
-// Deno Edge Function — backs the "Pošlji vprašalnik" button on the Patient
-// Record page. Called from the browser with the signed-in user's own session
-// (default JWT verification ON), same shape as email-template-preview.
+// Deno Edge Function — sends the health questionnaire email. Two callers:
+//
+//   1. The send_questionnaire_on_confirmation trigger (migration 022), when an
+//      appointment becomes 'confirmed' — body { appointmentId }, authorized
+//      with the service-role key like every trigger-invoked function. This is
+//      the automatic send, so the 12-month / open-link rules apply.
+//   2. The "Pošlji vprašalnik" button on the Patient Record page — body
+//      { patientId }, called with the signed-in user's own session (default
+//      JWT verification ON), same shape as email-template-preview. Always
+//      sends (staff asked for it).
 //
 // The patient is looked up through a client carrying THAT user's JWT first,
 // so RLS decides whether this user may touch this patient at all — a patient
@@ -34,6 +41,24 @@ Deno.serve(async (req) => {
   if (!authHeader) return json({ error: 'Unauthorized' }, 401);
 
   const body = await req.json().catch(() => null);
+
+  // 1. Trigger call (automatic, on confirmation).
+  if (authHeader === `Bearer ${SERVICE_ROLE_KEY}`) {
+    const appointmentId = typeof body?.appointmentId === 'string' ? body.appointmentId : null;
+    if (!appointmentId) return json({ error: 'Missing appointmentId' }, 400);
+    const service = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const { data: appointment } = await service.from('appointments').select('patient_id').eq('id', appointmentId).maybeSingle();
+    if (!appointment?.patient_id) return json({ status: 'skipped', reason: 'appointment not found' });
+    const outcome = await sendQuestionnaireEmail(service, {
+      patientId: appointment.patient_id as string,
+      appointmentId,
+      force: false,
+    });
+    if (outcome.status === 'failed') return json({ error: outcome.error }, 502);
+    return json(outcome);
+  }
+
+  // 2. Manual button.
   const patientId = typeof body?.patientId === 'string' ? body.patientId : null;
   if (!patientId) return json({ error: 'Missing patientId' }, 400);
 

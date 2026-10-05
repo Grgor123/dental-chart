@@ -107,14 +107,18 @@ export function HealthBanner({ questionnaire, pending, hasContactChanges, onOpen
       style={{ background: tone.background, color: tone.color }}
     >
       {alerts ? (
-        <div className="grid min-w-0 flex-1 grid-cols-3 items-center gap-4 text-left">
-          <span className="truncate" title={alerts.allergies ?? undefined}>
+        // Stanja usually carries the most text, so it gets the widest column;
+        // every column wraps onto a second line (then ellipsis) instead of
+        // being cut off after one, so the banner grows taller, never wider.
+        // Items are separated by " · " since a detail can itself contain commas.
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1.4fr)] items-center gap-4 text-left text-[13px] leading-tight">
+          <span className="line-clamp-2" title={alerts.allergies ?? undefined}>
             Alergije: {alerts.allergies ?? 'ni navedeno'}
           </span>
-          <span className="truncate" title={alerts.conditions.join(', ') || undefined}>
-            Stanja: {alerts.conditions.length > 0 ? alerts.conditions.join(', ') : 'brez'}
+          <span className="line-clamp-2" title={alerts.conditions.join(' · ') || undefined}>
+            Stanja: {alerts.conditions.length > 0 ? alerts.conditions.join(' · ') : 'brez'}
           </span>
-          <span className="truncate" title={alerts.medications ?? undefined}>
+          <span className="line-clamp-2" title={alerts.medications ?? undefined}>
             Zdravila: {alerts.medications ?? 'ni navedeno'}
           </span>
         </div>

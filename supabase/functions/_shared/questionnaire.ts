@@ -359,6 +359,6 @@ export function summarizeAlerts(answers: QuestionnaireAnswers): QuestionnaireAle
   const allergies = answers.yesNo.allergies === 'yes' ? (answers.details.allergies ?? 'DA (snov ni navedena)') : null;
   const medicationList = answers.medications ?? [];
   const medications =
-    medicationList.length > 0 ? medicationList.map((m) => `${m.name} (${frequencyLabel(m.frequency)})`).join(', ') : null;
+    medicationList.length > 0 ? medicationList.map((m) => `${m.name} (${frequencyLabel(m.frequency)})`).join(' · ') : null;
   return { allergies, medications, conditions };
 }
