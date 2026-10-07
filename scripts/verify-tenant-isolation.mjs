@@ -236,6 +236,46 @@ async function main() {
     );
   }
 
+  // 4g. Invoicing (023_add_invoicing.sql) — account 2 can't open an invoice
+  // for account 1's patient, can't spoof account 1's issuer settings, can't
+  // read account 1's invoices, and can't issue or cancel one of them through
+  // the security-definer functions. Run only after 023 is live.
+  if (foreignPatientId) {
+    const { error: foreignInvoiceError } = await client2.from('invoices').insert({ patient_id: foreignPatientId });
+    check(
+      "account 2 cannot create an invoice for account 1's patient",
+      !!foreignInvoiceError,
+      foreignInvoiceError ? foreignInvoiceError.message : 'insert unexpectedly succeeded'
+    );
+    const { data: leakedInvoices } = await client2.from('invoices').select('id').eq('patient_id', foreignPatientId);
+    check("account 2 cannot read account 1's invoices", !leakedInvoices || leakedInvoices.length === 0, `${leakedInvoices?.length ?? 0} row(s) visible`);
+  }
+  if (account1PracticeId) {
+    // 025: an invoice without a patient carries a client-set practice_id —
+    // account 2 must not be able to point one at account 1's practice.
+    const { error: foreignPayerInvoiceError } = await client2.from('invoices').insert({ practice_id: account1PracticeId });
+    check(
+      "account 2 cannot create a patient-less invoice under account 1's practice_id",
+      !!foreignPayerInvoiceError,
+      foreignPayerInvoiceError ? foreignPayerInvoiceError.message : 'insert unexpectedly succeeded'
+    );
+    const { error: foreignSettingsError } = await client2
+      .from('invoice_settings')
+      .upsert({ practice_id: account1PracticeId, legal_name: 'Spoofed issuer' });
+    check(
+      "account 2 cannot write account 1's invoice settings",
+      !!foreignSettingsError,
+      foreignSettingsError ? foreignSettingsError.message : 'upsert unexpectedly succeeded'
+    );
+  }
+  const { data: account1Invoice } = await client1.from('invoices').select('id').limit(1).maybeSingle();
+  if (account1Invoice) {
+    const { error: foreignIssueError } = await client2.rpc('issue_invoice', { p_invoice_id: account1Invoice.id });
+    check("account 2 cannot issue account 1's invoice", !!foreignIssueError, foreignIssueError ? foreignIssueError.message : 'rpc unexpectedly succeeded');
+    const { error: foreignCancelError } = await client2.rpc('cancel_invoice', { p_invoice_id: account1Invoice.id });
+    check("account 2 cannot cancel account 1's invoice", !!foreignCancelError, foreignCancelError ? foreignCancelError.message : 'rpc unexpectedly succeeded');
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

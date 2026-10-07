@@ -18,6 +18,7 @@ interface EmailTemplatesProps {
   onSignOut: () => void;
   onNavigateCalendar: () => void;
   onNavigateSettings: () => void;
+  onNavigateInvoices: () => void;
 }
 
 type EditableField = 'subject' | 'heading' | 'body';
@@ -42,7 +43,7 @@ const NUMBER_CLASS = 'w-16 rounded border border-[var(--line,#ccd6d4)] px-2 py-1
 // calendar attachment and unsubscribe footer are fixed and never editable;
 // see supabase/functions/_shared/email/templates.ts. Everything shown here
 // comes from templateDefs.ts, the same file the Edge Functions render from.
-export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNavigateSettings }: EmailTemplatesProps) {
+export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNavigateSettings, onNavigateInvoices }: EmailTemplatesProps) {
   const { practiceName } = usePracticeContext();
   const { overrides, loading, error, saveTemplate, resetTemplate, previewTemplate, sendTestEmail } = useEmailTemplates();
   const [selectedKey, setSelectedKey] = useState<TemplateKey>(TEMPLATE_KEYS[0]);
@@ -59,13 +60,14 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
         onNavigateStoritve={onBack}
         onNavigateCalendar={onNavigateCalendar}
         onNavigateSettings={onNavigateSettings}
+        onNavigateInvoices={onNavigateInvoices}
         activeSubmenu="eposta"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--ink,#1c2624)]">E-poštna sporočila</h1>
           <p className="mt-1.5 text-sm text-[var(--ink-soft,#45524f)]">
-            Prilagodite besedilo in čas pošiljanja samodejnih e-poštnih sporočil pacientom.
+            Prilagodite besedilo in čas pošiljanja samodejnih e-poštnih sporočil pacientom ter besedilo e-pošte, s katero pošiljate račune.
           </p>
         </div>
 
@@ -278,10 +280,13 @@ function TemplateEditor({
           <h2 className="text-lg font-semibold text-[var(--ink,#1c2624)]">{def.label}</h2>
           <p className="mt-0.5 text-xs text-[var(--muted,#6f7c79)]">{def.description}</p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-[var(--ink,#1c2624)]">
-          <input type="checkbox" checked={values.enabled} onChange={(e) => setValues((v) => ({ ...v, enabled: e.target.checked }))} />
-          Pošiljanje vklopljeno
-        </label>
+        {/* Emails sent only by hand (the invoice) have nothing to switch off. */}
+        {!def.manualOnly && (
+          <label className="flex items-center gap-2 text-sm text-[var(--ink,#1c2624)]">
+            <input type="checkbox" checked={values.enabled} onChange={(e) => setValues((v) => ({ ...v, enabled: e.target.checked }))} />
+            Pošiljanje vklopljeno
+          </label>
+        )}
       </div>
 
       {/* Card body, split in half: fields on the left, live preview on the right. */}

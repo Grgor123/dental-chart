@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AppNavShell } from '../components/ui/AppNavShell';
 import { CardTabs } from '../components/ui/CardTabs';
 import { PriceListSection } from '../components/settings/PriceListSection';
+import { InvoiceSettingsSection } from '../components/settings/InvoiceSettingsSection';
 import { usePracticeContext } from '../contexts/PracticeContext';
 
 interface SettingsProps {
@@ -10,19 +11,25 @@ interface SettingsProps {
   onSignOut: () => void;
   onNavigateCalendar: () => void;
   onNavigateEmail: () => void;
+  onNavigateInvoices: () => void;
+  /** Tab to open on (e.g. 'racuni' from the invoice editor's warning). */
+  initialSection?: string;
 }
 
-// One entry per settings section. Only "Cenik" exists so far — the sending
-// domain, webhooks and API keys planned in CLAUDE.md will each become another
-// tab here rather than a page of their own.
-const SECTIONS = [{ key: 'cenik', label: 'Cenik' }];
+// One entry per settings section — the sending domain, webhooks and API keys
+// planned in CLAUDE.md will each become another tab here rather than a page
+// of their own.
+const SECTIONS = [
+  { key: 'cenik', label: 'Cenik' },
+  { key: 'racuni', label: 'Podatki za račune' },
+];
 
 // "Nastavitve" — the practice-wide setup area (the submenu item used to be an
 // inert placeholder). See supabase/migrations/020_add_price_list.sql for the
 // price list this first section manages.
-export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmail }: SettingsProps) {
+export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateInvoices, initialSection }: SettingsProps) {
   const { practiceName } = usePracticeContext();
-  const [section, setSection] = useState(SECTIONS[0].key);
+  const [section, setSection] = useState(SECTIONS.some((s) => s.key === initialSection) ? initialSection! : SECTIONS[0].key);
 
   return (
     <>
@@ -33,6 +40,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
         onNavigateStoritve={onBack}
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
+        onNavigateInvoices={onNavigateInvoices}
         activeSubmenu="nastavitve"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">
@@ -47,6 +55,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
               className={`rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-5 ${squareTopLeft ? 'rounded-tl-none' : ''}`}
             >
               {section === 'cenik' && <PriceListSection />}
+              {section === 'racuni' && <InvoiceSettingsSection />}
             </div>
           )}
         </CardTabs>

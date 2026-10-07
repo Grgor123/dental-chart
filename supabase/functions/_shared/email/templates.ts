@@ -33,7 +33,7 @@ function actionButtonHtml(action: { label: string; url: string } | null): string
   return `<p style="margin:8px 0 16px;"><a href="${escapeHtml(action.url)}" style="display:inline-block;background:${ACCENT_COLOR};color:#ffffff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:6px;">${escapeHtml(action.label)}</a></p>`;
 }
 
-function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHtml: string; unsubscribeUrl: string }): string {
+function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHtml: string; unsubscribeUrl: string | null }): string {
   return `<!doctype html>
 <html lang="sl">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -48,17 +48,56 @@ function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHt
           <h1 style="margin:0 0 16px;font-size:18px;color:${TEXT_COLOR};">${escapeHtml(params.heading)}</h1>
           ${params.bodyHtml}
         </td></tr>
-        <tr><td style="padding:16px 24px;border-top:1px solid #eeeeee;">
+        ${
+          params.unsubscribeUrl
+            ? `<tr><td style="padding:16px 24px;border-top:1px solid #eeeeee;">
           <span style="color:${MUTED_COLOR};font-size:12px;">
             Če ne želite več prejemati e-poštnih obvestil,
             <a href="${params.unsubscribeUrl}" style="color:${MUTED_COLOR};">se odjavite tukaj</a>.
           </span>
-        </td></tr>
+        </td></tr>`
+            : ''
+        }
       </table>
     </td></tr>
   </table>
 </body>
 </html>`;
+}
+
+/**
+ * A one-off message typed by staff (e.g. the invoice email): same layout and
+ * header as the automatic emails, plain text only (every paragraph escaped,
+ * blank line = new paragraph), and no unsubscribe footer — it isn't a
+ * notification the patient subscribed to, and it may go to a company.
+ */
+export function renderPlainEmail(params: { practiceName: string; heading: string; message: string }): string {
+  const bodyHtml = params.message
+    .replace(/\r\n/g, '\n')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map(paragraphToHtml)
+    .join('\n');
+  return wrapEmailLayout({ practiceName: params.practiceName, heading: singleLine(params.heading), bodyHtml, unsubscribeUrl: null });
+}
+
+/**
+ * Fills a template's text for editing before a manual send (the invoice email
+ * window): the same substitution as a real send — a paragraph whose known
+ * placeholder is empty is dropped — returned as plain text.
+ */
+export function fillTemplateText(
+  key: TemplateKey,
+  override: Pick<TemplateOverride, 'subject' | 'heading' | 'body'> | null,
+  vars: TemplateVars
+): { subject: string; heading: string; body: string } {
+  const def = TEMPLATE_DEFS[key];
+  return {
+    subject: singleLine(substitute(pick(override?.subject, def.defaultSubject), vars).text),
+    heading: singleLine(substitute(pick(override?.heading, def.defaultHeading), vars).text),
+    body: paragraphsOf(pick(override?.body, def.defaultBody), vars).join('\n\n'),
+  };
 }
 
 function escapeHtml(text: string): string {
@@ -110,7 +149,7 @@ function substitute(template: string, vars: TemplateVars): { text: string; hadEm
   let hadEmpty = false;
   const text = template.replace(PLACEHOLDER_PATTERN, (match, name: string) => {
     if (!isKnownPlaceholder(name)) return match;
-    const value = vars[name];
+    const value = vars[name] ?? '';
     if (!value) hadEmpty = true;
     return value;
   });
@@ -171,14 +210,16 @@ export function renderTemplate(
     ? [...paragraphHtml.slice(0, 2), actionButtonHtml(action), ...paragraphHtml.slice(2)].join('\n')
     : paragraphHtml.join('\n');
 
+  const unsubscribeUrl = def.noUnsubscribeFooter ? null : context.unsubscribeUrl;
   const html = wrapEmailLayout({
     practiceName: context.practiceName,
     heading,
     bodyHtml,
-    unsubscribeUrl: context.unsubscribeUrl,
+    unsubscribeUrl,
   });
   const actionText = action ? `\n\n${action.label}: ${action.url}` : '';
-  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}${actionText}\n\nOdjava od e-poštnih obvestil: ${context.unsubscribeUrl}`;
+  const unsubscribeText = unsubscribeUrl ? `\n\nOdjava od e-poštnih obvestil: ${unsubscribeUrl}` : '';
+  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}${actionText}${unsubscribeText}`;
 
   return { subject, html, text };
 }

@@ -6,6 +6,8 @@ import { PatientChart } from './pages/PatientChart';
 import { Calendar } from './pages/Calendar';
 import { EmailTemplates } from './pages/EmailTemplates';
 import { Settings } from './pages/Settings';
+import { Invoices } from './pages/Invoices';
+import { InvoiceEditor } from './pages/InvoiceEditor';
 import { StatusShowcase } from './pages/StatusShowcase';
 import { PatientPageMockup } from './pages/PatientPageMockup';
 import { PracticeProvider, usePracticeContext } from './contexts/PracticeContext';
@@ -41,7 +43,11 @@ type Route =
   | { page: 'chart'; patientId: string; patientLabel: string; patient: PatientListItem }
   | { page: 'calendar' }
   | { page: 'email' }
-  | { page: 'settings' };
+  | { page: 'settings'; section?: string }
+  | { page: 'invoices' }
+  // One invoice; `returnTo` is where its back link goes (the patient record
+  // or the Računi list), kept when hopping to a credit note and back.
+  | { page: 'invoice'; invoiceId: string; returnTo: Route };
 
 function App() {
   const { session, loading, signIn, signOut, signInError } = useAuth();
@@ -73,6 +79,45 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   function selectPatient(patient: PatientListItem, patientLabel: string) {
     setRoute({ page: 'chart', patientId: patient.patientId, patientLabel, patient });
   }
+  const goList = () => setRoute({ page: 'list' });
+  const goCalendar = () => setRoute({ page: 'calendar' });
+  const goEmail = () => setRoute({ page: 'email' });
+  const goSettings = () => setRoute({ page: 'settings' });
+  const goInvoices = () => setRoute({ page: 'invoices' });
+
+  if (route.page === 'invoice') {
+    const { returnTo } = route;
+    return (
+      <InvoiceEditor
+        key={route.invoiceId}
+        invoiceId={route.invoiceId}
+        onBack={() => setRoute(returnTo)}
+        backLabel={returnTo.page === 'chart' ? `Nazaj na pacienta ${returnTo.patientLabel}` : 'Nazaj na seznam računov'}
+        onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo })}
+        onSignOut={onSignOut}
+        onNavigateHome={goList}
+        onNavigateStoritve={goList}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
+        onNavigateInvoiceSettings={() => setRoute({ page: 'settings', section: 'racuni' })}
+        onNavigateInvoices={goInvoices}
+      />
+    );
+  }
+
+  if (route.page === 'invoices') {
+    return (
+      <Invoices
+        onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo: { page: 'invoices' } })}
+        onBack={goList}
+        onSignOut={onSignOut}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
+      />
+    );
+  }
 
   if (route.page === 'chart') {
     return (
@@ -85,6 +130,8 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
         onNavigateEmail={() => setRoute({ page: 'email' })}
         onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateInvoices={goInvoices}
+        onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo: route })}
       />
     );
   }
@@ -97,6 +144,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onSignOut={onSignOut}
         onNavigateEmail={() => setRoute({ page: 'email' })}
         onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateInvoices={goInvoices}
       />
     );
   }
@@ -108,6 +156,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onSignOut={onSignOut}
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
         onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateInvoices={goInvoices}
       />
     );
   }
@@ -115,6 +164,9 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'settings') {
     return (
       <Settings
+        key={route.section ?? 'default'}
+        initialSection={route.section}
+        onNavigateInvoices={goInvoices}
         onBack={() => setRoute({ page: 'list' })}
         onSignOut={onSignOut}
         onNavigateCalendar={() => setRoute({ page: 'calendar' })}
@@ -130,6 +182,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
       onNavigateCalendar={() => setRoute({ page: 'calendar' })}
       onNavigateEmail={() => setRoute({ page: 'email' })}
       onNavigateSettings={() => setRoute({ page: 'settings' })}
+      onNavigateInvoices={goInvoices}
     />
   );
 }

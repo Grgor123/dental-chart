@@ -23,6 +23,7 @@
 const SUBMENU_ITEMS = [
   { key: 'koledar', label: 'Koledar' },
   { key: 'storitve', label: 'Storitve' },
+  { key: 'racuni', label: 'Računi' },
   { key: 'sporocila', label: 'Sporočila' },
   { key: 'eposta', label: 'E-pošta' },
   { key: 'nastavitve', label: 'Nastavitve' },
@@ -66,6 +67,10 @@ interface AppNavShellProps {
       settings page (Settings.tsx: Cenik first). Omitted on the dev-only
       mockup, and on Settings.tsx itself (already there). */
   onNavigateSettings?: () => void;
+  /** "Računi" becomes clickable when this is passed — jumps to the invoice
+      list (Invoices.tsx). Omitted on the dev-only mockup, and on the
+      invoice pages themselves (already there). */
+  onNavigateInvoices?: () => void;
 }
 
 export function AppNavShell({
@@ -77,6 +82,7 @@ export function AppNavShell({
   onNavigateStoritve,
   onNavigateEmail,
   onNavigateSettings,
+  onNavigateInvoices,
 }: AppNavShellProps) {
   return (
     <div className="flex w-full flex-col">
@@ -123,7 +129,9 @@ export function AppNavShell({
                     ? onNavigateEmail
                     : key === 'nastavitve' && activeSubmenu !== 'nastavitve'
                       ? onNavigateSettings
-                      : undefined
+                      : key === 'racuni' && activeSubmenu !== 'racuni'
+                        ? onNavigateInvoices
+                        : undefined
             }
             className={`rounded-full px-3 py-1.5 text-sm font-medium ${
               key === activeSubmenu

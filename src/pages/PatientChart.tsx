@@ -16,6 +16,8 @@ import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
 import { useHealthQuestionnaire } from '../hooks/useHealthQuestionnaire';
+import { invoiceState, useInvoiceList } from '../hooks/useInvoices';
+import { formatDate, formatEur } from '../../supabase/functions/_shared/invoice/render';
 import { contactDifferences, HealthBanner, HealthQuestionnaireModal } from '../components/questionnaire/HealthQuestionnaire';
 import type { ContactData } from '../../supabase/functions/_shared/questionnaire';
 import { describeToothRecord } from '../lib/describeToothRecord';
@@ -59,9 +61,8 @@ const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
 // referencing it, since the mockup stays a separate, independent dev-only
 // sandbox (same role StatusShowcase.tsx already plays) — not imported from
 // here. Frame 5's own appointment status/date/time is real now (see
-// useNextAppointment below) — only its unpaid-invoice panel
-// (MOCK_INVOICES) is still fabricated, since invoicing is separate,
-// out-of-scope work.
+// useNextAppointment below), and so is its invoice panel (useInvoiceList,
+// supabase/migrations/023_add_invoicing.sql).
 // ---------------------------------------------------------------------
 // "Ni termina" has no equivalent in the real AppointmentStatus enum (see
 // useAppointments.ts) — it means "no appointment row exists at all," not a
@@ -69,12 +70,6 @@ const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
 // APPOINTMENT_STATUS_META's shape rather than widening that shared type
 // with a value the database itself never stores.
 const NI_TERMINA_META = { label: 'Ni termina', pillClass: 'border-2 border-[#9CA3AF] bg-white text-[var(--ink,#1c2624)]' };
-
-const MOCK_INVOICES = [
-  { id: 'R-2026-014', date: '14. 3. 2026', storitev: 'Pregled + čiščenje', amount: 45, paid: false },
-  { id: 'R-2025-098', date: '2. 11. 2025', storitev: 'Zalitje fisur', amount: 30, paid: false },
-  { id: 'R-2025-072', date: '5. 8. 2025', storitev: 'Plomba', amount: 60, paid: true },
-];
 
 const MOCK_RTG_GALLERY = [
   { date: '11. 10. 2026', opis: 'Panoramski posnetek (OPG)' },
@@ -149,6 +144,10 @@ interface PatientChartProps {
   onNavigateEmail: () => void;
   /** Wired to AppNavShell's "Nastavitve" button below. */
   onNavigateSettings: () => void;
+  /** Wired to AppNavShell's "Računi" button below. */
+  onNavigateInvoices: () => void;
+  /** Opens one invoice (InvoiceEditor) — Frame 5's invoice panel. */
+  onOpenInvoice: (invoiceId: string) => void;
 }
 
 // One chart target — a specific surface, or the whole tooth ('all').
@@ -184,7 +183,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // Loads and saves against ONE real Supabase visit, resolved fresh for
 // `patientId` on every mount — see useOpenVisit.ts and useVisit.ts's own
 // comments for exactly what each does.
-export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings }: PatientChartProps) {
+export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings, onNavigateInvoices, onOpenInvoice }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
   const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
@@ -333,15 +332,18 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
 
   // ---- Frame 3 placeholder local state — copied verbatim from
   // PatientPageMockup.tsx, per Gregor's explicit choice to keep this
-  // section fabricated (no real imaging/messaging backend). The
-  // invoice panel below it is likewise still fabricated (invoicing is
-  // separate, out-of-scope work) even though the rest of Frame 5 is real.
+  // section fabricated (no real imaging/messaging backend).
   const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
   const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sms' | 'eposta'>('rentgeni');
   const [rtgGalleryOpen, setRtgGalleryOpen] = useState(false);
-  const [selectedInvoice, setSelectedInvoice] = useState<(typeof MOCK_INVOICES)[number] | null>(null);
-  const unpaidInvoices = MOCK_INVOICES.filter((inv) => !inv.paid);
-  const totalUnpaid = unpaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+
+  // ---- Frame 5: this patient's invoices — drafts to finish, and issued
+  // bank-transfer invoices not yet paid (cash/card are paid on the spot).
+  const { invoices: patientInvoices, createDraft } = useInvoiceList(patientId);
+  const draftInvoices = patientInvoices.filter((inv) => inv.status === 'draft');
+  const unpaidInvoices = patientInvoices.filter((inv) => invoiceState(inv) === 'unpaid');
+  const totalUnpaid = unpaidInvoices.reduce((sum, inv) => sum + inv.totalEur, 0);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
   // ---- Frame 5: real appointment data (supabase/migrations/
   // 013_add_appointments.sql) — one modal handles both "Naroči naslednji
@@ -677,6 +679,28 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     await closeVisit();
     onBack();
   }
+  // Leaving for the invoice editor: save the chart first, but keep the visit
+  // open — coming back resumes it.
+  async function openInvoice(invoiceId: string) {
+    await flush();
+    onOpenInvoice(invoiceId);
+  }
+  async function handleNewInvoice() {
+    setInvoiceError(null);
+    const emptyDraft = draftInvoices.find((inv) => inv.totalEur === 0);
+    if (emptyDraft) {
+      await openInvoice(emptyDraft.id);
+      return;
+    }
+    const today = new Date().toLocaleDateString('sv-SE');
+    const appointmentId = nextAppointment && nextAppointment.startsAt.slice(0, 10) === today ? nextAppointment.id : null;
+    const result = await createDraft(patientId, appointmentId);
+    if (result.error || !result.id) {
+      setInvoiceError(result.error ?? 'Računa ni bilo mogoče ustvariti.');
+      return;
+    }
+    await openInvoice(result.id);
+  }
   async function handleSignOutClick() {
     await flush();
     await closeVisit();
@@ -726,33 +750,62 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           )}
         </div>
         <div className="flex w-[150px] flex-none flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={handleNewInvoice}
+            className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          >
+            Nov račun
+          </button>
+          {invoiceError && <span className="text-xs text-[var(--danger,#b3261e)]">{invoiceError}</span>}
+          {draftInvoices.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {draftInvoices.map((inv) => (
+                <li key={inv.id}>
+                  <button
+                    type="button"
+                    onClick={() => openInvoice(inv.id)}
+                    className="w-full rounded border border-dashed border-[#9CA3AF] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+                  >
+                    <div className="font-medium">Osnutek</div>
+                    <div className="text-[var(--muted,#6f7c79)]">{formatEur(inv.totalEur)}</div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           {unpaidInvoices.length > 0 ? (
             <>
               <span className="w-fit rounded-full bg-[#e0231c] px-3 py-1 text-xs font-semibold text-white">
-                Neplačani račun
+                {unpaidInvoices.length === 1 ? 'Neplačan račun' : 'Neplačani računi'}
               </span>
               <ul className="flex flex-col gap-1">
                 {unpaidInvoices.map((inv) => (
                   <li key={inv.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedInvoice(inv)}
+                      onClick={() => openInvoice(inv.id)}
                       className="w-full rounded border border-[var(--line,#ccd6d4)] px-2 py-1 text-left text-xs text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
                     >
-                      <div className="font-medium">{inv.date}</div>
-                      <div className="text-[var(--muted,#6f7c79)]">{inv.amount.toFixed(2)} €</div>
+                      <div className="font-medium">{inv.number}</div>
+                      <div className="text-[var(--muted,#6f7c79)]">
+                        {inv.dueDate ? `rok ${formatDate(inv.dueDate)} · ` : ''}
+                        {formatEur(inv.totalEur)}
+                      </div>
                     </button>
                   </li>
                 ))}
               </ul>
               <span className="mt-1 text-xs font-semibold text-[var(--ink,#1c2624)]">
-                Skupaj: {totalUnpaid.toFixed(2)} €
+                Skupaj: {formatEur(totalUnpaid)}
               </span>
             </>
           ) : (
-            <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
-              Računi plačani
-            </span>
+            patientInvoices.some((inv) => inv.status === 'issued') && (
+              <span className="w-fit rounded-full bg-[#4CAF50] px-3 py-1 text-xs font-medium text-white">
+                Računi plačani
+              </span>
+            )
           )}
         </div>
       </div>
@@ -881,6 +934,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
         onNavigateSettings={onNavigateSettings}
+        onNavigateInvoices={onNavigateInvoices}
         onNavigateHome={handleBackClick}
         activeSubmenu="storitve"
       />
@@ -1471,25 +1525,6 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           </div>
         )}
 
-        {selectedInvoice && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setSelectedInvoice(null)}>
-            <div className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">Račun {selectedInvoice.id}</h2>
-                <button type="button" onClick={() => setSelectedInvoice(null)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
-                  ✕
-                </button>
-              </div>
-              <div className="flex flex-col gap-2 text-sm text-[var(--ink,#1c2624)]">
-                <div><span className="font-semibold">Datum: </span>{selectedInvoice.date}</div>
-                <div><span className="font-semibold">Storitev: </span>{selectedInvoice.storitev}</div>
-                <div><span className="font-semibold">Znesek: </span>{selectedInvoice.amount.toFixed(2)} €</div>
-                <div><span className="font-semibold">Status: </span>{selectedInvoice.paid ? 'Plačano' : 'Neplačano'}</div>
-              </div>
-              <p className="mt-4 text-xs italic text-[var(--muted,#6f7c79)]">Mockup — tu bo celoten podroben pregled računa.</p>
-            </div>
-          </div>
-        )}
       </div>
     </>
   );

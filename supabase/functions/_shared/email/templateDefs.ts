@@ -17,12 +17,32 @@ export const TEMPLATE_KEYS = [
   'post_visit',
   'recall',
   'health_questionnaire',
+  'invoice',
+  'credit_note',
 ] as const;
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 
-export const PLACEHOLDER_KEYS = ['ime', 'priimek', 'datum', 'ura', 'storitev', 'terapevt', 'ordinacija'] as const;
+export const PLACEHOLDER_KEYS = [
+  'ime',
+  'priimek',
+  'datum',
+  'ura',
+  'storitev',
+  'terapevt',
+  'ordinacija',
+  // Invoice email (invoice / credit_note):
+  'placnik',
+  'stevilka',
+  'racun',
+  'znesek',
+  'rok_placila',
+  'iban',
+  'sklic',
+] as const;
 export type PlaceholderKey = (typeof PLACEHOLDER_KEYS)[number];
-export type TemplateVars = Record<PlaceholderKey, string>;
+// Partial: each email only fills the placeholders it uses. A missing value is
+// an empty one, so a paragraph built around it is dropped (see templates.ts).
+export type TemplateVars = Partial<Record<PlaceholderKey, string>>;
 
 export const PLACEHOLDER_LABELS: Record<PlaceholderKey, string> = {
   ime: 'Ime pacienta',
@@ -32,6 +52,13 @@ export const PLACEHOLDER_LABELS: Record<PlaceholderKey, string> = {
   storitev: 'Predvidena storitev',
   terapevt: 'Terapevt',
   ordinacija: 'Ime ordinacije',
+  placnik: 'Plačnik (ime ali naziv)',
+  stevilka: 'Številka računa',
+  racun: 'Številka izvirnega računa',
+  znesek: 'Znesek',
+  rok_placila: 'Rok plačila (samo nakazilo)',
+  iban: 'IBAN (samo nakazilo)',
+  sklic: 'Sklicna številka (samo nakazilo)',
 };
 
 /** Shown in the editor preview / test send. */
@@ -43,6 +70,13 @@ export const SAMPLE_VARS: TemplateVars = {
   storitev: 'Kontrolni pregled',
   terapevt: 'Monika Goslar',
   ordinacija: 'Vaša ordinacija',
+  placnik: 'Ana Novak',
+  stevilka: 'P1-B1-14',
+  racun: 'P1-B1-12',
+  znesek: '45,00 €',
+  rok_placila: '14. 10. 2026',
+  iban: 'SI56 0400 0027 9667 334',
+  sklic: 'SI00 1-2026-14',
 };
 
 /** What the timing number means for a template — also the unit its
@@ -76,6 +110,11 @@ export interface TemplateDef {
   /** A fixed button the layout adds under the body (e.g. the questionnaire
       link) — its label isn't practice-editable, the URL is per recipient. */
   actionLabel: string | null;
+  /** Sent only by hand (no automatic trigger), so there's no on/off switch. */
+  manualOnly?: boolean;
+  /** No unsubscribe footer — a business document (an invoice), not a
+      notification the recipient subscribed to; it may go to a company. */
+  noUnsubscribeFooter?: boolean;
 }
 
 const APPOINTMENT_PLACEHOLDERS = PLACEHOLDER_KEYS;
@@ -181,6 +220,42 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     timing: null,
     sendHourDefault: null,
     actionLabel: 'Izpolnite vprašalnik',
+  },
+  invoice: {
+    key: 'invoice',
+    label: 'Račun',
+    description:
+      'Ročno — gumb »Pošlji po e-pošti« na izdanem računu, račun je v priponki (PDF). Besedilo lahko pred pošiljanjem še spremenite.',
+    defaultSubject: 'Račun {stevilka} — {ordinacija}',
+    defaultHeading: 'Račun št. {stevilka}',
+    // The payment paragraph only has values for an unpaid bank-transfer
+    // invoice; otherwise it's dropped automatically.
+    defaultBody:
+      'Pozdravljeni,\n\nv priponki vam pošiljamo račun št. {stevilka} v znesku {znesek}.\n\nProsimo, da ga poravnate do {rok_placila} na TRR {iban}, sklic {sklic}. Za plačilo lahko uporabite tudi UPN QR kodo na računu.\n\nLep pozdrav,\n{ordinacija}',
+    placeholders: ['placnik', 'stevilka', 'znesek', 'rok_placila', 'iban', 'sklic', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: null,
+    manualOnly: true,
+    noUnsubscribeFooter: true,
+  },
+  credit_note: {
+    key: 'credit_note',
+    label: 'Dobropis',
+    description:
+      'Ročno — gumb »Pošlji po e-pošti« na dobropisu (storno računa), dobropis je v priponki (PDF). Besedilo lahko pred pošiljanjem še spremenite.',
+    defaultSubject: 'Dobropis {stevilka} — {ordinacija}',
+    defaultHeading: 'Dobropis št. {stevilka}',
+    defaultBody:
+      'Pozdravljeni,\n\nv priponki vam pošiljamo dobropis št. {stevilka} k računu št. {racun} v znesku {znesek}.\n\nLep pozdrav,\n{ordinacija}',
+    placeholders: ['placnik', 'stevilka', 'racun', 'znesek', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: null,
+    manualOnly: true,
+    noUnsubscribeFooter: true,
   },
 };
 

@@ -87,6 +87,8 @@ export interface SendEmailInput {
   subject: string;
   html: string;
   attachmentIcs?: { filename: string; content: string; method?: 'REQUEST' | 'CANCEL' } | null;
+  /** Other files (e.g. an invoice PDF), already base64-encoded. */
+  attachments?: { filename: string; contentType: string; base64: string }[];
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<{ messageId: string | null }> {
@@ -121,7 +123,19 @@ export async function sendEmail(input: SendEmailInput): Promise<{ messageId: str
       ].join('\r\n')
     : '';
 
-  const raw = [headers.join('\r\n'), '', htmlPart, ...(icsPart ? [icsPart] : []), `--${boundary}--`, ''].join('\r\n');
+  const fileParts = (input.attachments ?? []).map((file) => {
+    const filename = file.filename.replace(/[^A-Za-z0-9._-]/g, '_');
+    return [
+      `--${boundary}`,
+      `Content-Type: ${file.contentType}; name="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${filename}"`,
+      '',
+      wrapBase64(file.base64.replace(/\s/g, '')),
+    ].join('\r\n');
+  });
+
+  const raw = [headers.join('\r\n'), '', htmlPart, ...(icsPart ? [icsPart] : []), ...fileParts, `--${boundary}--`, ''].join('\r\n');
 
   const rawBytes = new TextEncoder().encode(raw);
 

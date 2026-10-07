@@ -126,6 +126,12 @@ src/
       PriceListSection.tsx     # Nastavitve → Cenik: always-editable price
                                 # list table + category strip — see "Not
                                 # started" item 5a below
+      InvoiceSettingsSection.tsx # Nastavitve → Podatki za račune: issuer
+                                # details, logo, contacts, print settings —
+                                # see "Invoicing" below
+    invoices/
+      InvoiceEmailDialog.tsx   # "Pošlji po e-pošti" popup (recipients,
+                                # subject, message + attachment preview)
   data/
     toothProfiles.ts           # Per-FDI silhouette/detail paths + on-screen
                                 # sizing (real mm, not photo pixels — see
@@ -180,6 +186,10 @@ src/
                                 # email-template-preview Edge Function — see
                                 # "Email templates (E-pošta)" below
     usePriceList.ts             # Price-list services + categories CRUD
+    useInvoiceSettings.ts       # Issuer details for invoices (one row per
+                                # practice) — see "Invoicing" below
+    useInvoices.ts              # Invoice list + one invoice (draft edit,
+                                # issue, storno, mark paid, send by email)
     useHealthQuestionnaire.ts   # One patient's health questionnaires: latest
                                 # submitted + any open link, send/review/
                                 # contact-correction actions — see "Health
@@ -197,6 +207,13 @@ src/
                                 # PatientChart.tsx's Frame 5, so one status
                                 # can never render two different ways — see
                                 # "Native scheduling calendar" below
+    printInvoice.ts             # Prints an invoice document via a hidden
+                                # iframe — see "Invoicing" below
+    pagedScript.ts              # Lazy-loads the Paged.js polyfill (real A4
+                                # pages for the invoice preview/print/PDF)
+    invoicePdf.ts               # Invoice → PDF in the browser (html2canvas +
+                                # jsPDF) for emailing
+    upnQr.ts                    # UPN QR payload → inline SVG (qrcode)
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -232,11 +249,18 @@ src/
                                 # email, editable wording/timing + live
                                 # preview — see "Email templates (E-pošta)"
                                 # below
-    Settings.tsx                # "Nastavitve" page (CardTabs) — currently
-                                # just the Cenik (price list) tab
+    Settings.tsx                # "Nastavitve" page (CardTabs) — Cenik and
+                                # Podatki za račune tabs
+    Invoices.tsx                # "Računi" page — every invoice, filters,
+                                # sum, "+ Nov račun"
+    InvoiceEditor.tsx           # One invoice: draft editor (lines from the
+                                # price list, payer) or issued view (print,
+                                # email, storno) + live A4 preview
 ```
 
-Outside `src/`: `supabase/functions/_shared/questionnaire.ts` holds the
+Outside `src/`: `supabase/functions/_shared/invoice/` (`calc.ts` invoice
+arithmetic, `render.ts` A4/receipt HTML, `payment.ts` IBAN/sklic/UPN QR
+payload) is pure TS shared the same way. `supabase/functions/_shared/questionnaire.ts` holds the
 health questionnaire's questions (Slovene + English) and is imported by the
 Edge Functions **and** the React app, the same pattern as
 `_shared/email/templateDefs.ts`; `docs/*.html` are the patient-facing pages
@@ -424,12 +448,13 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`021_add_health_questionnaires.sql` — all confirmed run (016–019 are the
+`028_default_print_format.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
-notifications" below; 020 the price list; 021 the health questionnaire +
-marketing consent, see "Health questionnaire" below). `supabase/schema.sql`
+notifications" below; 020 the price list; 021–022 the health questionnaire +
+marketing consent, see "Health questionnaire" below; 023–028 invoicing, see
+"Invoicing" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(021 included), so a brand-new project only ever needs that one file.
+(028 included), so a brand-new project only ever needs that one file.
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3525,8 +3550,9 @@ themselves when a real appointment reaches their window).
 
 Until this, the two emails (confirmation, reminder) had hard-coded wording.
 Now **every automatic email is a template a practice can edit**, and there
-are seven of them (the seventh, `health_questionnaire`, was added later — see
-"Health questionnaire" below):
+are seven automatic ones (the seventh, `health_questionnaire`, was added later — see
+"Health questionnaire" below), plus two sent by hand with an invoice
+(`invoice`, `credit_note` — see "Invoicing" below):
 
 | key | trigger | timing (editable per practice) |
 |---|---|---|
@@ -3537,6 +3563,7 @@ are seven of them (the seventh, `health_questionnaire`, was added later — see
 | `post_visit` | hourly cron, appointment `completed` and ended long enough ago | hours after the appointment ends (default 1) |
 | `recall` | hourly cron, last completed visit N months ago, no upcoming appointment | months (default 6) + send hour (default 10:00) |
 | `health_questionnaire` | appointment becomes `confirmed` (trigger, migration 022) if no questionnaire in 12 months, or the manual "Pošlji vprašalnik" button | immediate; not editable — carries a fixed "Izpolnite vprašalnik" button (`TemplateDef.actionLabel`) |
+| `invoice` / `credit_note` | by hand only — "Pošlji po e-pošti" on an issued invoice / credit note (`manualOnly`: no on/off switch) | wording only; no unsubscribe footer (`noUnsubscribeFooter`); invoice placeholders `{placnik}` `{stevilka}` `{racun}` `{znesek}` `{rok_placila}` `{iban}` `{sklic}` |
 
 **Design**
 - **Defaults in code, overrides in the DB.** `supabase/functions/_shared/email/templateDefs.ts`
@@ -3857,6 +3884,102 @@ each wraps to two lines before an ellipsis, so the banner grows taller, never
 wider — per Gregor's request after a long "Stanja" got cut off on one line.
 Items are separated by " · ".
 
+### Invoicing (Računi) — phase 1: invoices, printing, email
+
+**Status: built, all migrations run (023–028) and functions deployed,
+confirmed by Gregor (2026-10-07)** — issuing (cash/card/transfer), A4 +
+thermal printing, multi-page A4, UPN QR (scanned with a real bank app),
+storno, invoices without a patient, sending by email (PDF attached,
+verified in Gmail) and the editable email templates.
+
+**NOT fiscally verified yet.** Phase 2 is FURS davčno potrjevanje (ZOI/EOR,
+certificate, premise registration, operator tax numbers). Until it exists,
+invoices paid in **cash or by card must not be used for real payments** —
+the draft editor shows a warning. Everything below was built so phase 2
+only *adds* (new columns + a fiscalize Edge Function), never changes.
+
+- **Tables** (023): `invoice_settings` (one row per practice — issuer
+  details; a separate table because `practices` has no update policy and
+  opening one would expose the email-domain columns), `invoice_sequences`
+  (RLS on with **no** policies — only the issuing function touches it),
+  `invoices`, `invoice_lines`. Later migrations only add columns: 024 logo/
+  contacts/show-ticks + `invoices.buyer_tax_number`, 025
+  `invoices.patient_id` nullable (payer typed by hand), 026
+  `email_log.invoice_id` + type `'invoice'`, 027 template keys `invoice`/
+  `credit_note`, 028 `invoice_settings.default_print_format`.
+- **Numbering**: `P1-B1-14` = premise–device–sequence, FURS's own shape,
+  assigned centrally per premise (FURS numbering structure "C") by
+  `issue_invoice()` — gapless via an upsert row lock, restarts each year.
+  Premise/device are `P1`/`B1` and read-only in the UI until phase 2
+  registers the premise.
+- **Immutability**: triggers (`guard_invoice`, `prepare_invoice_line`) allow
+  a client only to create and edit **drafts**; issuing/storno go through
+  `issue_invoice()` / `cancel_invoice()` (security definer, checking
+  `current_practice_id()`), which set a transaction-local flag the guards
+  honour. An issued invoice can change only `paid_at` (cancellation sets
+  `cancelled_at`); a correction is a **credit note** (negated lines, own
+  number, `original_invoice_id`). Line totals are recomputed server-side.
+- **Snapshots**: at issue, `issuer` (from `invoice_settings`) and `buyer`
+  (the payer as entered on the draft — editable "Plačnik" box, prefilled
+  from the patient, e.g. a company paying) are frozen into the invoice.
+  **Presentation is NOT frozen**: logo, footer and phone/email/website
+  always come from current settings (Gregor's choice after an old invoice
+  lacked a footer added later).
+- **Money**: price-list prices are **final prices (VAT included)**;
+  `vat = round(gross × rate / (100 + rate), 2)` **per rate** (the binding
+  figure, stored in `vat_breakdown`); per-line net/VAT columns are shown too
+  and may differ from the per-rate total by a cent. `calc.ts` mirrors the
+  SQL exactly (round half away from zero, like Postgres). VAT exemption
+  text is a setting (default 42. člen ZDDV-1 — to be confirmed by the
+  practice's accountant).
+- **A4 layout** (Gregor's spec, `render.ts`): logo (≤ 500 × 250 px, refused
+  with a notice if bigger) top left, issuer details top right; payer under
+  the logo, invoice data (Račun št., kraj in datum izdaje, datum storitve,
+  datum zapadlosti for TRR, način plačila) under the issuer; columns Zap.
+  št. · Vrsta blaga/storitve ("Puljenje 123" — name + šifra) · Zob ·
+  Količina · EM ("kos") · Cena brez DDV · Popust % · DDV % · Vrednost brez
+  DDV · Vrednost z DDV; totals with one DDV row per rate (0 % shown); for
+  TRR "Podatki za plačilo" (IBAN always as `SI56 0400 …` in groups of four —
+  normalized and mod-97 checked on save — banka, sklic) and the UPN QR right
+  under the VAT note; 2-line footer 2 cm above the paper edge.
+- **Multi-page**: Paged.js lays the A4 invoice out as real sheets — header
+  and footer repeat, pages numbered "2/3" (hidden on a single page) — in
+  the preview, the printout and the emailed PDF alike. Lines are a CSS
+  grid of blocks, **not a `<table>`**: Paged.js dropped the row that fell on
+  a page break when splitting a table (verified missing, fixed, verified
+  at 26/40/70 lines). Paged.js is imported by path (`node_modules/…?raw`)
+  because the package's `exports` field hides the polyfill.
+- **Sklic / UPN QR**: `SI00 {premise}-{year}-{sequence}` (model 00 allows
+  digits + hyphens only, so not the invoice number itself). UPN QR per the
+  ZBS standard (19 fields, checksum, version 15, ECC M), purpose `MDCS`,
+  text transliterated to ASCII (common encoders can't write the ISO-8859-2
+  ECI marker). Shown only on an unpaid, non-cancelled TRR invoice.
+- **Printing**: a hidden iframe, the browser's dialog every time (a web page
+  can't pick a printer or print silently). **Privzeto tiskanje** (A4 /
+  trak) makes that button the filled one and drives **"Izdaj in natisni"**;
+  receipt width 58/80 mm. Real per-format printer assignment would need the
+  QZ Tray helper app — discussed, deferred.
+- **Email**: "Pošlji po e-pošti" popup (patient's address prefilled, up to
+  5 recipients, each sent separately); the PDF is made in the browser
+  (html2canvas 3× + jsPDF from the Paged.js pages) and sent by
+  `send-invoice-email` (user JWT, invoice read through RLS, must be issued,
+  attachment checked to be a PDF ≤ 8 MB), logged per recipient in
+  `email_log` and shown on the invoice. Wording = the `invoice`/`credit_note`
+  templates, editable **only on the E-pošta page** — a "save as default"
+  link in the popup was built and removed again at Gregor's request (with
+  values already filled in, placeholders could be lost unnoticed).
+- **Gmail note**: a re-sent identical email in the same conversation shows
+  as "•••" (Gmail compares visible text; an invisible per-email marker was
+  tried and didn't help, so it was removed). Real invoices have distinct
+  subjects, so it doesn't occur in practice.
+- **Pages**: patient record Frame 5 (drafts, unpaid TRR invoices, "Nov
+  račun" — reuses an empty draft), "Računi" submenu page (filters, sum,
+  "+ Nov račun" for a patient or a payer typed by hand), Nastavitve →
+  Podatki za račune.
+
+**Deploy**: `send-invoice-email`, and `email-template-preview` (renders the
+new tabs). No other function depends on invoicing.
+
 ---
 
 ## ZVOP-3 / GDPR Compliance Notes
@@ -3981,11 +4104,12 @@ Items are separated by " · ".
 
 ## Out of Scope for Phase 1
 - eZdravje / ZZZS integration
-- Billing / invoicing — **planned next, after the calendar/email work**: a
-  price list with service categories, then invoices. Must support the
-  invoice-driven aftercare emails described under "Email templates
-  (E-pošta)" → "Planned next", item 1 (a category per service, and a topics
-  list on the invoice screen)
+- ~~Billing / invoicing~~ — **phase 1 built** (price list, invoices,
+  printing, email — see "Invoicing" above); **FURS fiscal verification is
+  phase 2, not built**. Still to come on top of it: the invoice-driven
+  aftercare emails described under "Email templates (E-pošta)" →
+  "Planned next", item 1 (a category per service, and a topics list on the
+  invoice screen)
 - ~~Appointment booking~~ — **built**, see "Native scheduling calendar
   (Koledar)" above. A separate, unrelated Google-Calendar-*backed* public
   booking widget also exists at
@@ -4285,7 +4409,7 @@ next:
 5. Email follow-ups agreed in design but not built: tags, outbound webhooks
    + `marketing_consent`, and the inbound API/API keys for autoresponders
    like FluentCRM — see "Email templates (E-pošta)" above, "Planned next"
-5a. **Price list built (Nastavitve → Cenik, migration `020_add_price_list.sql`); invoicing itself is next.**
+5a. **Price list built (Nastavitve → Cenik, migration `020_add_price_list.sql`); invoicing phase 1 built too (see "Invoicing" above) — FURS fiscal verification (phase 2) is next.**
    `services`/`service_categories`, both practice-scoped root tables (4 RLS
    policies each, like `therapists`), every practice seeded with a starter
    set of 9 categories (`seed_default_service_categories()`, called from
@@ -4370,14 +4494,35 @@ next:
 6a. Health questionnaire: the automatic send on confirmation (migration
    022) not yet seen live — the manual round trip is confirmed — see "Health
    questionnaire" above
-7. Everything past Phase 1: CRM features, invoicing, appointment
+6b. **FURS fiscal verification (invoicing phase 2)** — not started:
+   a `fiscalize-invoice` Edge Function signing with the practice's FURS
+   certificate (.p12 in secrets), ZOI + EOR, mutual TLS to FURS (start on
+   the test environment), premise registration, an operator tax number per
+   staff login, ZOI/EOR + FURS QR in the reserved `fiscal` print block, and
+   re-sending invoices issued while FURS was unreachable. Until then cash/
+   card invoices aren't for real payments.
+6c. Invoicing follow-ups noted, not built: repeating the line-table column
+   headings on continuation pages; a unit (EM) per price-list service (all
+   "kos" now); printer assignment via QZ Tray.
+7. Everything past Phase 1: CRM features, appointment
    integration with the separate calendar app, staff-invite UI for
    `practice_members`, self-serve practice signup — see "Multi-tenancy" and
    "Out of Scope for Phase 1" above
 
 ---
 
-*Last updated: 2026-10-05 (Health questionnaire + marketing consent built,
+*Last updated: 2026-10-07 (Invoicing phase 1 built, deployed and confirmed
+by Gregor — migrations 023–028, `send-invoice-email` deployed. Invoices
+from the patient record or the new Računi page (payer editable, or typed by
+hand), gapless FURS-shaped numbers, immutable once issued, storno via credit
+note; A4 (logo, Gregor's layout, multi-page with Paged.js) and thermal
+58/80 mm printing with a default format and "Izdaj in natisni"; IBAN/sklic/
+UPN QR (scanned with a bank app); sending by email with a browser-made PDF
+and editable "Račun"/"Dobropis" templates on the E-pošta page. FURS fiscal
+verification is phase 2 — cash/card invoices are not for real use until
+then. See "Invoicing".)*
+
+*Previous entry: 2026-10-05 (Health questionnaire + marketing consent built,
 deployed and confirmed live by Gregor — migration 021 run, four functions
 deployed. The paper form
 went online with Monika's own Slovene wording plus Gregor's edits

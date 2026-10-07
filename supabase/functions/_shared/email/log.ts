@@ -25,11 +25,14 @@ export async function resolveUnsubscribeToken(supabase: SupabaseClient, patientI
 }
 
 export type EmailLogStatus = 'sent' | 'failed';
-export type EmailType = TemplateKey; // one email_log type per template key
+// One email_log type per template key, plus 'invoice' (a staff-written
+// message with the invoice PDF attached — not a template).
+export type EmailType = TemplateKey | 'invoice';
 
 export interface LogEmailInput {
   patientId?: string | null;
   appointmentId?: string | null;
+  invoiceId?: string | null;
   emailType: EmailType;
   recipientEmail: string;
   subject: string;
@@ -43,6 +46,9 @@ export async function logEmail(supabase: SupabaseClient, input: LogEmailInput): 
   const { error } = await supabase.from('email_log').insert({
     patient_id: input.patientId ?? null,
     appointment_id: input.appointmentId ?? null,
+    // Only sent when set: the column exists from migration 026 on, and the
+    // other functions sharing this helper mustn't depend on it.
+    ...(input.invoiceId ? { invoice_id: input.invoiceId } : {}),
     email_type: input.emailType,
     recipient_email: input.recipientEmail,
     subject: input.subject,
