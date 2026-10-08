@@ -21,6 +21,8 @@ export interface Service {
   priceEur: number;
   /** Percent. 0 = exempt (health services generally are, in Slovenia). */
   vatRate: number;
+  /** Enota mere printed on invoices (migration 029), e.g. "kos". */
+  unit: string;
   isActive: boolean;
 }
 
@@ -33,10 +35,11 @@ export interface ServiceFields {
   description: string;
   priceEur: number;
   vatRate: number;
+  unit: string;
 }
 
 const CATEGORY_COLUMNS = 'id, name, sort_order';
-const SERVICE_COLUMNS = 'id, category_id, code, name, description, price_eur, vat_rate, is_active';
+const SERVICE_COLUMNS = 'id, category_id, code, name, description, price_eur, vat_rate, unit, is_active';
 
 function rowToCategory(row: Record<string, unknown>): ServiceCategory {
   return { id: row.id as string, name: row.name as string, sortOrder: row.sort_order as number };
@@ -51,6 +54,7 @@ function rowToService(row: Record<string, unknown>): Service {
     description: (row.description as string | null) ?? null,
     priceEur: Number(row.price_eur),
     vatRate: Number(row.vat_rate),
+    unit: (row.unit as string | null) ?? 'kos',
     isActive: row.is_active as boolean,
   };
 }
@@ -166,6 +170,7 @@ export function usePriceList() {
         description: fields.description.trim() || null,
         price_eur: fields.priceEur,
         vat_rate: fields.vatRate,
+        unit: fields.unit.trim() || 'kos',
       });
       if (error) return { error: friendlyError(error) };
       await reload();
@@ -185,6 +190,7 @@ export function usePriceList() {
           description: fields.description.trim() || null,
           price_eur: fields.priceEur,
           vat_rate: fields.vatRate,
+        unit: fields.unit.trim() || 'kos',
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);

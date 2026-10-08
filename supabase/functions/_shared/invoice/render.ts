@@ -50,12 +50,14 @@ export interface InvoiceBuyer {
   taxNumber: string;
 }
 
-/** Enota mere — the price list has no unit yet, so every line is one piece. */
+/** Enota mere for a service that doesn't set its own (migration 029). */
 export const DEFAULT_UNIT = 'kos';
 
 export interface InvoiceDocumentLine extends CalcLine {
   code: string | null;
   name: string;
+  /** Enota mere, e.g. "kos"; empty falls back to DEFAULT_UNIT. */
+  unit?: string;
   toothFdi: string | null;
 }
 
@@ -299,7 +301,7 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
         cell('l', esc(lineLabel(l))),
         showTooth ? cell('c', esc(l.toothFdi)) : '',
         cell('r', formatNumber(l.quantity)),
-        cell('c', DEFAULT_UNIT),
+        cell('c', esc(l.unit || DEFAULT_UNIT)),
         cell('r', formatEur(unitNet(l))),
         cell('r', formatNumber(l.discountPercent)),
         cell('r', formatNumber(l.vatRate)),
@@ -379,7 +381,13 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
       ${
         extras.autoPrint
           ? 'window.focus(); window.print();'
-          : `var first = document.querySelector('.pagedjs_page');
+          : `// On screen only (never in print/PDF): grey desk with a gap and a
+      // shadow between sheets, so page breaks are visible. Added after layout
+      // because Paged.js rewrites the invoice's own stylesheet.
+      var screenCss = document.createElement('style');
+      screenCss.textContent = '@media screen { html, body { background: #e9eeed !important; } .pagedjs_pages { padding: 16px 0; } .pagedjs_page { background: #fff; margin: 0 auto 24px; box-shadow: 0 1px 6px rgba(0,0,0,.3); } }';
+      document.head.appendChild(screenCss);
+      var first = document.querySelector('.pagedjs_page');
       if (first) { document.body.style.zoom = String(Math.min(1, (window.innerWidth - 32) / first.getBoundingClientRect().width)); }
       report('ready');`
       }
@@ -392,6 +400,24 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
       document.body.appendChild(page);
       ${extras.autoPrint ? 'window.focus(); window.print();' : ''}
     }
+    // The line-table headings repeat on every continuation page: when the
+    // first row of a page is laid out into a split-off copy of .lines, the
+    // heading row is put in front of it — during layout, so its height counts
+    // towards the page.
+    class RepeatLineHead extends window.Paged.Handler {
+      renderNode(clone) {
+        var el = clone.nodeType === 1 ? clone : clone.parentElement;
+        var lines = el && el.closest ? el.closest('.lines[data-split-from]') : null;
+        if (!lines || lines.querySelector('.lhead')) return;
+        var source = content.content.querySelector('.lines .lhead');
+        if (!source) return;
+        var head = source.cloneNode(true);
+        head.removeAttribute('data-ref');
+        head.querySelectorAll('[data-ref]').forEach(function (n) { n.removeAttribute('data-ref'); });
+        lines.insertBefore(head, lines.firstChild);
+      }
+    }
+    window.Paged.registerHandlers(RepeatLineHead);
     try {
       new window.Paged.Previewer().preview(content.content, [sheet], document.body).then(after, failed);
     } catch (e) { failed(e); }
@@ -504,7 +530,8 @@ ${paged ? `<script>${pagedConfig}</script><script>${extras.pagedScript!.replace(
       ? `<div class="qr-row"><div class="qr">${extras.upnQrSvg}<div class="qr-label">UPN QR</div></div></div>`
       : ''
   }
-  <div class="fiscal"></div>
+  <!-- FURS phase 2: ZOI, EOR and the QR code go here, in a .fiscal block. Not
+       rendered while empty: its margin alone could spill onto a blank page. -->
 </div>
 ${paged ? `<script>${pagedRun}</script>` : ''}
 </body></html>`;
@@ -523,7 +550,7 @@ function renderReceipt(doc: InvoiceDocument, widthMm: 58 | 80, extras: RenderExt
   const lines = doc.lines
     .map((l) => {
       const detail = [
-        `${formatNumber(l.quantity)} ${DEFAULT_UNIT} × ${formatEur(l.unitPriceEur)}`,
+        `${formatNumber(l.quantity)} ${l.unit || DEFAULT_UNIT} × ${formatEur(l.unitPriceEur)}`,
         l.discountPercent ? `−${formatNumber(l.discountPercent)} %` : '',
         `DDV ${formatNumber(l.vatRate)} %`,
         l.toothFdi ? `zob ${l.toothFdi}` : '',

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { usePriceList, type Service, type ServiceCategory, type ServiceFields } from '../../hooks/usePriceList';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { DEFAULT_UNIT } from '../../../supabase/functions/_shared/invoice/render';
 
 // Nastavitve → Cenik — a single editable table, spreadsheet-style: every
 // field is edited directly in its cell (no popup for adding or editing),
@@ -101,6 +102,7 @@ export function PriceListSection() {
               <th className="px-2 py-2 font-semibold">Naziv</th>
               <th className="px-2 py-2 font-semibold">Kategorija</th>
               <th className="px-2 py-2 text-right font-semibold">Cena</th>
+              <th className="px-2 py-2 font-semibold" title="Enota mere na računu">EM</th>
               <th className="px-2 py-2 font-semibold">DDV</th>
               <th className="px-2 py-2 font-semibold"></th>
             </tr>
@@ -117,7 +119,7 @@ export function PriceListSection() {
             ))}
             {visible.length === 0 && services.length > 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-[var(--muted,#6f7c79)]">
+                <td colSpan={7} className="px-3 py-4 text-center text-[var(--muted,#6f7c79)]">
                   Ni storitev za ta iskalni niz.
                 </td>
               </tr>
@@ -253,6 +255,7 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
   const [categoryId, setCategoryId] = useState(service.categoryId ?? '');
   const [priceStr, setPriceStr] = useState(priceText(service.priceEur));
   const [vatRate, setVatRate] = useState(service.vatRate);
+  const [unit, setUnit] = useState(service.unit);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
@@ -263,6 +266,7 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
     description: service.description ?? '',
     priceEur: service.priceEur,
     vatRate: service.vatRate,
+    unit: service.unit,
   });
 
   const vatOptions = VAT_PRESETS.includes(vatRate) ? VAT_PRESETS : [...VAT_PRESETS, vatRate].sort((a, b) => a - b);
@@ -274,7 +278,8 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
       fields.code === saved.current.code &&
       fields.categoryId === saved.current.categoryId &&
       fields.priceEur === saved.current.priceEur &&
-      fields.vatRate === saved.current.vatRate;
+      fields.vatRate === saved.current.vatRate &&
+      fields.unit === saved.current.unit;
     if (unchanged) return;
     setBusy(true);
     const result = await onSave(fields);
@@ -304,6 +309,15 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
     }
     setPriceStr(priceText(parsed));
     commit({ priceEur: parsed });
+  }
+
+  function handleUnitBlur() {
+    if (!unit.trim()) {
+      setUnit(saved.current.unit); // a line always has a unit
+      return;
+    }
+    setUnit(unit.trim());
+    commit({ unit: unit.trim() });
   }
 
   function blurOnEnter(e: KeyboardEvent<HTMLInputElement>) {
@@ -355,6 +369,16 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
           onKeyDown={blurOnEnter}
           inputMode="decimal"
           className={INPUT_CLASS + ' text-right'}
+        />
+      </td>
+      <td className="p-0.5">
+        <input
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          onBlur={handleUnitBlur}
+          onKeyDown={blurOnEnter}
+          maxLength={12}
+          className={INPUT_CLASS + ' w-16'}
         />
       </td>
       <td className="p-0.5">
@@ -415,6 +439,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
   const [categoryId, setCategoryId] = useState('');
   const [priceStr, setPriceStr] = useState('');
   const [vatRate, setVatRate] = useState(0);
+  const [unit, setUnit] = useState(DEFAULT_UNIT);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rowRef = useRef<HTMLTableRowElement>(null);
@@ -438,7 +463,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
       return;
     }
     setBusy(true);
-    const result = await onCreate({ name, code, categoryId: categoryId || null, description: '', priceEur: price, vatRate });
+    const result = await onCreate({ name, code, categoryId: categoryId || null, description: '', priceEur: price, vatRate, unit });
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -450,6 +475,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
     setCategoryId('');
     setPriceStr('');
     setVatRate(0);
+    setUnit(DEFAULT_UNIT);
   }
 
   return (
@@ -492,6 +518,15 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
           inputMode="decimal"
           placeholder="0,00"
           className={INPUT_CLASS + ' text-right placeholder:text-[var(--muted,#6f7c79)]'}
+        />
+      </td>
+      <td className="p-0.5">
+        <input
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          onKeyDown={blurOnEnter}
+          maxLength={12}
+          className={INPUT_CLASS + ' w-16'}
         />
       </td>
       <td className="p-0.5">

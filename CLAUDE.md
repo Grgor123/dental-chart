@@ -448,13 +448,13 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`028_default_print_format.sql` — all confirmed run (016–019 are the
+`029_service_unit.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
-marketing consent, see "Health questionnaire" below; 023–028 invoicing, see
+marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Invoicing" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(028 included), so a brand-new project only ever needs that one file.
+(029 included), so a brand-new project only ever needs that one file.
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3886,7 +3886,7 @@ Items are separated by " · ".
 
 ### Invoicing (Računi) — phase 1: invoices, printing, email
 
-**Status: built, all migrations run (023–028) and functions deployed,
+**Status: built, all migrations run (023–029) and functions deployed,
 confirmed by Gregor (2026-10-07)** — issuing (cash/card/transfer), A4 +
 thermal printing, multi-page A4, UPN QR (scanned with a real bank app),
 storno, invoices without a patient, sending by email (PDF attached,
@@ -3906,7 +3906,9 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
   contacts/show-ticks + `invoices.buyer_tax_number`, 025
   `invoices.patient_id` nullable (payer typed by hand), 026
   `email_log.invoice_id` + type `'invoice'`, 027 template keys `invoice`/
-  `credit_note`, 028 `invoice_settings.default_print_format`.
+  `credit_note`, 028 `invoice_settings.default_print_format`, 029
+  `services.unit` + `invoice_lines.unit` (EM per service, copied onto the
+  line like code/name/VAT; `cancel_invoice()` copies it to the credit note).
 - **Numbering**: `P1-B1-14` = premise–device–sequence, FURS's own shape,
   assigned centrally per premise (FURS numbering structure "C") by
   `issue_invoice()` — gapless via an upsert row lock, restarts each year.
@@ -3937,7 +3939,8 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
   the logo, invoice data (Račun št., kraj in datum izdaje, datum storitve,
   datum zapadlosti for TRR, način plačila) under the issuer; columns Zap.
   št. · Vrsta blaga/storitve ("Puljenje 123" — name + šifra) · Zob ·
-  Količina · EM ("kos") · Cena brez DDV · Popust % · DDV % · Vrednost brez
+  Količina · EM (the service's own unit, "kos" by default — Cenik's "EM"
+  column) · Cena brez DDV · Popust % · DDV % · Vrednost brez
   DDV · Vrednost z DDV; totals with one DDV row per rate (0 % shown); for
   TRR "Podatki za plačilo" (IBAN always as `SI56 0400 …` in groups of four —
   normalized and mod-97 checked on save — banka, sklic) and the UPN QR right
@@ -3949,6 +3952,17 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
   a page break when splitting a table (verified missing, fixed, verified
   at 26/40/70 lines). Paged.js is imported by path (`node_modules/…?raw`)
   because the package's `exports` field hides the polyfill.
+  The line-table **headings repeat on every continuation page** — a Paged.js
+  `renderNode` handler in `render.ts` puts a copy of the heading row into
+  each split-off `.lines` block during layout, so its height counts. **Don't
+  add `break-after: avoid` to the heading row**: Paged.js then pushed the
+  whole table onto page 2, leaving page 1 empty (seen live, 23–26 lines).
+  Nothing may render empty at the end of the page either — an empty
+  placeholder's margin alone spilled onto a blank last page (the FURS
+  `.fiscal` block is therefore left out until phase 2 fills it). On screen
+  only, the preview shows sheets on a grey desk with a gap between pages
+  (style added after layout, since Paged.js rewrites the invoice's own CSS;
+  print/PDF unaffected).
 - **Sklic / UPN QR**: `SI00 {premise}-{year}-{sequence}` (model 00 allows
   digits + hyphens only, so not the invoice number itself). UPN QR per the
   ZBS standard (19 fields, checksum, version 15, ECC M), purpose `MDCS`,
@@ -3979,6 +3993,10 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
   na seznam računov" and "← Nazaj na pacienta …".
 - **Draft saving**: leaving the editor (back links, menu, sign-out) saves
   unsaved draft changes first; closing/reloading the tab asks to confirm.
+  `saveDraft()` writes the new lines **before** deleting the old ones — the
+  earlier delete-then-insert order emptied a draft whenever the insert
+  failed (two of Gregor's drafts, 2026-10-08). A failed save keeps the
+  editor open with the error.
 - **Preview blank-sheet bug (fixed 2026-10-08)** — three separate causes,
   all confirmed on Gregor's own Chrome:
   1. *Browser extensions* inject stylesheets/elements into every frame;
@@ -4526,9 +4544,9 @@ next:
    staff login, ZOI/EOR + FURS QR in the reserved `fiscal` print block, and
    re-sending invoices issued while FURS was unreachable. Until then cash/
    card invoices aren't for real payments.
-6c. Invoicing follow-ups noted, not built: repeating the line-table column
-   headings on continuation pages; a unit (EM) per price-list service (all
-   "kos" now); printer assignment via QZ Tray.
+6c. Invoicing follow-up noted, not built: printer assignment via QZ Tray.
+   (Repeating line-table headings and a unit per service are built — see
+   "Invoicing".)
 7. Everything past Phase 1: CRM features, appointment
    integration with the separate calendar app, staff-invite UI for
    `practice_members`, self-serve practice signup — see "Multi-tenancy" and
@@ -4536,7 +4554,13 @@ next:
 
 ---
 
-*Last updated: 2026-10-07 (Invoicing phase 1 built, deployed and confirmed
+*Last updated: 2026-10-08 (Invoicing follow-ups: line-table headings repeat
+on every page, a unit (EM) per price-list service — migration 029, page gaps
+in the preview, a blank trailing page removed, and draft saving no longer
+loses lines when a save fails. Earlier the same day: the preview blank-sheet
+bug, saving drafts on leave, every submenu item clickable.)*
+
+*Previous entry: 2026-10-07 (Invoicing phase 1 built, deployed and confirmed
 by Gregor — migrations 023–028, `send-invoice-email` deployed. Invoices
 from the patient record or the new Računi page (payer editable, or typed by
 hand), gapless FURS-shaped numbers, immutable once issued, storno via credit

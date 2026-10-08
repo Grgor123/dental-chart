@@ -324,6 +324,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         serviceId: service.id,
         code: service.code,
         name: service.name,
+        unit: service.unit,
         vatRate: service.vatRate,
         toothFdi: null,
         quantity: 1,

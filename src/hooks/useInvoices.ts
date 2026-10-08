@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { usePracticeContext } from '../contexts/PracticeContext';
 import { rowToInvoiceSettings, type InvoiceSettings } from './useInvoiceSettings';
-import type { InvoiceBuyer, PaymentMethod } from '../../supabase/functions/_shared/invoice/render';
+import { DEFAULT_UNIT, type InvoiceBuyer, type PaymentMethod } from '../../supabase/functions/_shared/invoice/render';
 
 // Invoices — supabase/migrations/023_add_invoicing.sql. Drafts are edited
 // freely through RLS; issuing and storno go through the issue_invoice() /
@@ -55,6 +55,8 @@ export interface InvoiceLineDraft {
   serviceId: string | null;
   code: string | null;
   name: string;
+  /** Enota mere, copied from the price list (migration 029). */
+  unit: string;
   vatRate: number;
   toothFdi: string | null;
   quantity: number;
@@ -289,6 +291,7 @@ export function useInvoice(invoiceId: string) {
         serviceId: (l.service_id as string | null) ?? null,
         code: (l.code as string | null) ?? null,
         name: l.name as string,
+        unit: (l.unit as string | null) ?? DEFAULT_UNIT,
         vatRate: Number(l.vat_rate),
         toothFdi: (l.tooth_fdi as string | null) ?? null,
         quantity: Number(l.quantity),
@@ -345,8 +348,15 @@ export function useInvoice(invoiceId: string) {
         })
         .eq('id', invoiceId);
       if (updateError) return { error: friendlyError(updateError.message) };
-      const { error: deleteError } = await supabase.from('invoice_lines').delete().eq('invoice_id', invoiceId);
-      if (deleteError) return { error: friendlyError(deleteError.message) };
+      // New lines are written BEFORE the old ones are removed, so a failed
+      // write leaves the previously saved lines in place instead of an empty
+      // draft (the old delete-then-insert order lost every line when the
+      // insert failed).
+      const { data: oldLines, error: oldLinesError } = await supabase
+        .from('invoice_lines')
+        .select('id')
+        .eq('invoice_id', invoiceId);
+      if (oldLinesError) return { error: friendlyError(oldLinesError.message) };
       if (lines.length > 0) {
         const { error: insertError } = await supabase.from('invoice_lines').insert(
           lines.map((l, i) => ({
@@ -355,6 +365,7 @@ export function useInvoice(invoiceId: string) {
             service_id: l.serviceId,
             code: l.code,
             name: l.name,
+            unit: l.unit,
             vat_rate: l.vatRate,
             tooth_fdi: l.toothFdi?.trim() || null,
             quantity: l.quantity,
@@ -363,6 +374,14 @@ export function useInvoice(invoiceId: string) {
           }))
         );
         if (insertError) return { error: friendlyError(insertError.message) };
+      }
+      const oldIds = (oldLines ?? []).map((l) => l.id as string);
+      if (oldIds.length > 0) {
+        const { error: deleteError } = await supabase.from('invoice_lines').delete().in('id', oldIds);
+        if (deleteError) {
+          await reload();
+          return { error: friendlyError(deleteError.message) };
+        }
       }
       await reload();
       return {};
