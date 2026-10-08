@@ -58,18 +58,20 @@ Deno.serve(async (req) => {
   const consentText =
     'Zobozdravstvo Goslar bo na to številko pošiljal SMS opomnike pred vašimi termini. S klikom na spodnji gumb se s tem strinjate.';
 
-  const { error: insertError } = await supabase.from('patient_sms_consents').insert({
-    patient_id: patientId,
-    consent_token: token,
-    consent_text: consentText,
-  });
-  if (insertError) return new Response(`Failed to record consent request: ${insertError.message}`, { status: 500 });
-
   // Points at the GitHub Pages page, not this Edge Function's own URL —
   // see sms-consent-confirm's own comment for why (Supabase won't serve
   // real HTML from *.supabase.co).
   const link = `https://grgor123.github.io/dental-chart/sms-consent.html?token=${token}`;
   const message = `Zobozdravstvo Goslar: za prejemanje SMS opomnikov o terminih potrdite tukaj: ${link}`;
+
+  const consentRow = { patient_id: patientId, consent_token: token, consent_text: consentText };
+  // message_text (migration 030) is the SMS as sent, shown in the patient's
+  // Sporočila tab; without the column yet, the row is written without it.
+  let { error: insertError } = await supabase.from('patient_sms_consents').insert({ ...consentRow, message_text: message });
+  if (insertError && (insertError.code === '42703' || insertError.code === 'PGRST204')) {
+    ({ error: insertError } = await supabase.from('patient_sms_consents').insert(consentRow));
+  }
+  if (insertError) return new Response(`Failed to record consent request: ${insertError.message}`, { status: 500 });
 
   const lertifyRes = await fetch('https://api.lertify.app/v1/sms/messages', {
     method: 'POST',

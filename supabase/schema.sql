@@ -1673,3 +1673,17 @@ $$;
 
 revoke execute on function public.cancel_invoice(uuid) from public, anon;
 grant execute on function public.cancel_invoice(uuid) to authenticated;
+
+
+-- ---- Message text (Sporočila tab) -------------------------------------------------
+-- Baked in from supabase/migrations/030_message_text.sql.
+
+alter table public.email_log add column body_html text;
+alter table public.appointment_reminders add column message_text text;
+alter table public.patient_sms_consents add column message_text text;
+
+
+-- ---- Realtime for the Sporočila tab ------------------------------------------------
+-- Baked in from supabase/migrations/031_realtime_messages.sql.
+
+alter publication supabase_realtime add table public.email_log, public.appointment_reminders, public.patient_sms_consents;

@@ -40,10 +40,18 @@ export interface LogEmailInput {
   providerMessageId?: string | null;
   senderDomain: string;
   errorMessage?: string | null;
+  /** The HTML body as sent (migration 030) — shown in the patient's Sporočila tab. */
+  bodyHtml?: string | null;
+}
+
+// Postgres "undefined column" / PostgREST "column not in schema cache": the
+// insert names a column a not-yet-migrated database doesn't have.
+export function isMissingColumn(error: { code?: string } | null): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204';
 }
 
 export async function logEmail(supabase: SupabaseClient, input: LogEmailInput): Promise<void> {
-  const { error } = await supabase.from('email_log').insert({
+  const row = {
     patient_id: input.patientId ?? null,
     appointment_id: input.appointmentId ?? null,
     // Only sent when set: the column exists from migration 026 on, and the
@@ -56,6 +64,9 @@ export async function logEmail(supabase: SupabaseClient, input: LogEmailInput): 
     provider_message_id: input.providerMessageId ?? null,
     sender_domain: input.senderDomain,
     error_message: input.errorMessage ?? null,
-  });
+  };
+  let { error } = await supabase.from('email_log').insert(input.bodyHtml ? { ...row, body_html: input.bodyHtml } : row);
+  // Deployed before migration 030 ran: keep the audit row, just without the text.
+  if (error && input.bodyHtml && isMissingColumn(error)) ({ error } = await supabase.from('email_log').insert(row));
   if (error) console.error('Failed to write email_log row:', error.message);
 }

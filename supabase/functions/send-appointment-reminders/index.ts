@@ -112,12 +112,20 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    await supabase.from('appointment_reminders').insert({
+    const reminder = {
       appointment_id: appt.id,
       patient_phone: patient.phone,
       confirm_token: token,
       lertify_message_id: lertifyBody?.messages?.[0]?.messageId ?? null,
-    });
+    };
+    // message_text (migration 030) is the SMS as sent, shown in the
+    // patient's Sporočila tab. If the column doesn't exist yet, the row —
+    // which the confirm link needs — is still written, without it.
+    let { error: insertError } = await supabase.from('appointment_reminders').insert({ ...reminder, message_text: message });
+    if (insertError && (insertError.code === '42703' || insertError.code === 'PGRST204')) {
+      ({ error: insertError } = await supabase.from('appointment_reminders').insert(reminder));
+    }
+    if (insertError) console.error(`Failed to record reminder for appointment ${appt.id}:`, insertError.message);
     sent++;
   }
 

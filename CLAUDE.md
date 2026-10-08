@@ -197,6 +197,10 @@ src/
                                 # submitted + any open link, send/review/
                                 # contact-correction actions — see "Health
                                 # questionnaire" below
+    usePatientMessages.ts       # One patient's emails + SMS (email_log,
+                                # appointment_reminders, patient_sms_consents),
+                                # newest first, live via Realtime — see
+                                # "Communication history" below
   lib/
     supabase.ts                # Supabase client
     describeToothRecord.ts     # One tooth_records row -> its bullet-point
@@ -451,13 +455,14 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`029_service_unit.sql` — all confirmed run (016–019 are the
+`031_realtime_messages.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
-"Invoicing" below). `supabase/schema.sql`
+"Invoicing" below; 030–031 the patient's message history, see
+"Communication history" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(029 included), so a brand-new project only ever needs that one file.
+(031 included), so a brand-new project only ever needs that one file.
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -2953,8 +2958,8 @@ a JSX/layout port around code that already worked, not a rewrite.
   7 (the chart + `StatusToolbar` + a "Storitve po zobeh" tab reading real
   per-tooth history via `useToothHistory`) are all real, backed by the same
   hooks/handlers `PatientChart.tsx` already had.
-- **Placeholder frames, deliberately**: Rentgeni/Fotografije/SMS/E-pošta
-  tabs (Frame 3), and
+- **Placeholder frames, deliberately**: Rentgeni/Fotografije tabs (Frame 3
+  — its "Sporočila" tab is real, see "Communication history" below), and
   Podrobnosti termina/appointment+invoice card (Frame 5) all stay clearly
   fabricated placeholder content — per Gregor's explicit choice, since no
   real questionnaire/imaging/messaging/appointments/billing backend exists
@@ -2993,6 +2998,48 @@ a JSX/layout port around code that already worked, not a rewrite.
   chart width cap (`max-[1399px]:max-w-[990px]`) so the chart doesn't
   dominate the page on a 13"-class laptop screen — confirmed live at both
   a 17"-class (~1920px) and 13"-class (~1280px) width.
+
+### Communication history (Sporočila)
+
+**Status: built, deployed and confirmed live by Gregor (2026-10-08)** —
+migrations 030–031 run, nine functions redeployed. Frame 3's mock-up "SMS"
+and "E-pošta" tabs were replaced by one real **"Sporočila"** tab: every
+email and SMS the app sent the patient, newest first, with Vse / E-pošta /
+SMS filter chips (merged into one tab because the agreed design was one
+chronological list).
+
+- **Sources** (`usePatientMessages.ts`): `email_log` (every email —
+  appointment, questionnaire, invoice/credit note — by `patient_id`;
+  invoices for a hand-typed payer have no patient, so they show nowhere),
+  `appointment_reminders` (SMS reminders, via `appointments!inner` since the
+  table has no patient column) and `patient_sms_consents` (the consent SMS).
+  Each entry: E-POŠTA/SMS tag, subject/title, time, recipient (+ email type),
+  outcome coloured by tone (Dostavljeno / Vrnjeno — napačen naslov /
+  Pošiljanje ni uspelo with the error / Ni dostavljeno …), and the patient's
+  reply where there is one ("Pacient je potrdil prihod …", "Soglasje dano").
+- **The message as sent** (migration 030): `email_log.body_html`,
+  `appointment_reminders.message_text`, `patient_sms_consents.message_text`,
+  written by the senders at send time (`logEmail({ bodyHtml })` in
+  `_shared/email/log.ts`, `send-appointment-reminders`,
+  `request-sms-consent`). SMS text shows inline; an email opens in a viewer
+  ("Prikaži e-pošto", a no-script sandboxed iframe). Attachments (invoice
+  PDF, .ics) aren't stored. Older rows say "Besedilo ni shranjeno".
+  Chosen over re-rendering from the current template (Gregor's choice): only
+  a stored copy shows exactly what went out. The senders fall back to
+  writing the row without the text if the column is missing (`42703` /
+  `PGRST204`), so deploy order vs. migration can never lose a log row or the
+  reminder row the confirm link needs; the hook likewise retries without the
+  text columns.
+- **Live** (migration 031 adds the three tables to the
+  `supabase_realtime` publication; RLS still applies): while the tab is
+  open the page subscribes to their changes and reloads (300 ms debounced),
+  so a new send or a delivery report from the SES / Lertify webhooks shows
+  within seconds; it also reloads on returning to the window and right
+  after "Pošlji vprašalnik". Replaced a first 15-second polling version.
+- **Deploy** (done): `send-invoice-email`, `send-health-questionnaire`,
+  `send-appointment-confirmation-email`, `send-appointment-reminder-emails`,
+  `send-appointment-change-email`, `send-post-visit-emails`,
+  `send-recall-emails`, `send-appointment-reminders`, `request-sms-consent`.
 
 ### Chart printout (A4)
 
@@ -3732,11 +3779,8 @@ before starting):
      whether the invoice PDF goes in the same email; a warning when the
      patient has unsubscribed from email so staff hand over printed
      instructions instead.
-   - **Independent of invoicing, can be built earlier**: the Frame 3
-     "E-pošta" tab on the patient record (`PatientChart.tsx`, currently a
-     mock-up) becoming a real communication history for that patient —
-     emails from `email_log` **and** SMS from `appointment_reminders`/
-     `patient_sms_consents`, in one chronological list.
+   - ~~Independent of invoicing: a real communication history on the
+     patient record~~ — **built**, see "Communication history" below.
 2. **Tags** (`tags`/`patient_tags`, manual + automatic) with a **share
    externally** flag per tag — treatment-derived tags (`implantat`,
    `ortodontija`) are clinical and must never reach an external autoresponder.
@@ -4556,8 +4600,8 @@ next:
    screen has a **topics list at the bottom** (pre-ticked from the line
    items' categories, manually tick/untick-able); issuing the invoice emails
    the ticked topics as sections of one email.
-5b. The Frame 3 "E-pošta" tab on the patient record made real: a combined
-   email + SMS history for that patient (independent of invoicing)
+5b. ~~The Frame 3 "E-pošta" tab made real~~ — built, see "Communication
+   history (Sporočila)"
 6. Live confirmation still missing for the new email types: the cancellation
    email from both cancel buttons, a customized reminder send hour, and the
    post-visit and recall cron sends
@@ -4581,7 +4625,10 @@ next:
 
 ---
 
-*Last updated: 2026-10-08 (A4 chart printout built — the last Phase 1
+*Last updated: 2026-10-08 (Communication history built: Frame 3's
+"Sporočila" tab lists every email and SMS sent to the patient, with the
+exact text stored from now on (migration 030) and live updates via Realtime
+(migration 031) — see "Communication history (Sporočila)". Also: A4 chart printout built — the last Phase 1
 deliverable: a printer icon next to the back link prints the chart with a
 patient header, plus the Legenda and tooth notes on page 2, landscape. See
 "Chart printout (A4)". Earlier the same day, invoicing follow-ups: line-table headings repeat

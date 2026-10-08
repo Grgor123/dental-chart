@@ -17,6 +17,7 @@ import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
 import { useHealthQuestionnaire } from '../hooks/useHealthQuestionnaire';
+import { formatMessageTime, usePatientMessages, type MessageChannel, type MessageTone, type PatientMessage } from '../hooks/usePatientMessages';
 import { invoiceState, useInvoiceList } from '../hooks/useInvoices';
 import { formatDate, formatEur } from '../../supabase/functions/_shared/invoice/render';
 import { contactDifferences, HealthBanner, HealthQuestionnaireModal } from '../components/questionnaire/HealthQuestionnaire';
@@ -55,7 +56,7 @@ const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
 ];
 
 // ---------------------------------------------------------------------
-// Frame 3 (Rentgeni/Fotografije/SMS/E-pošta) placeholder data — per
+// Frame 3 (Rentgeni/Fotografije) placeholder data — per
 // Gregor's explicit choice, this stays exactly as fabricated as it was in
 // PatientPageMockup.tsx (no imaging/messaging backend exists — CLAUDE.md's
 // "Out of Scope for Phase 1"). Copied verbatim from that file rather than
@@ -83,12 +84,13 @@ const MOCK_PHOTOS = [
   { date: '3. 1. 2023', opis: 'Most 13–15, po namestitvi' },
 ];
 
-const MOCK_SMS = { date: '12. 10. 2026', text: 'Pozdravljeni, vaš termin je potrjen za 14. 3. 2026 ob 10:30. Lep pozdrav, Ordinacija Monika Goslar.' };
-
-const MOCK_EMAILS = [
-  { date: '12. 10. 2026', subject: 'Potrditev termina 14. 3. 2026', snippet: 'Pozdravljeni, obveščamo vas, da je vaš termin potrjen…' },
-  { date: '2. 1. 2023', subject: 'Napotnica za rentgensko slikanje', snippet: 'V prilogi vam pošiljamo napotnico za OPG posnetek…' },
-];
+// Frame 3's "Sporočila" tab is real (usePatientMessages) — status colors.
+const MESSAGE_TONE_CLASSES: Record<MessageTone, string> = {
+  ok: 'text-[var(--accent,#2e6e62)]',
+  neutral: 'text-[var(--ink-soft,#45524f)]',
+  warn: 'text-[#b26a00]',
+  error: 'text-[var(--danger,#b3261e)]',
+};
 
 // "1982-03-12" -> "12.3.1982" — day.month.year, no leading zeros.
 function formatSlovenianDate(iso: string): string {
@@ -165,7 +167,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // 8-frame layout onto this page's own real, Supabase-backed chart/
 // toolbar/detail-panel logic (unchanged from before this port). Sections
 // with no real backend yet (Frame 1's health banner, Frame 3's Rentgeni/
-// Fotografije/SMS/E-pošta, Frame 5's Podrobnosti termina) stay exactly as
+// Fotografije, Frame 5's Podrobnosti termina) stay exactly as
 // fabricated placeholder content as they were in the mockup — building
 // real appointments/imaging/messaging is out of scope (CLAUDE.md's own
 // "Out of Scope for Phase 1"). Frame 2 (patient info) and Frame 8
@@ -338,7 +340,10 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // PatientPageMockup.tsx, per Gregor's explicit choice to keep this
   // section fabricated (no real imaging/messaging backend).
   const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
-  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sms' | 'eposta'>('rentgeni');
+  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sporocila'>('rentgeni');
+  const [messageFilter, setMessageFilter] = useState<'all' | MessageChannel>('all');
+  const [openEmail, setOpenEmail] = useState<PatientMessage | null>(null);
+  const patientMessages = usePatientMessages(patientId, patientDraft.phone ?? null, infoTab === 'sporocila');
   const [rtgGalleryOpen, setRtgGalleryOpen] = useState(false);
 
   // ---- Frame 5: this patient's invoices — drafts to finish, and issued
@@ -846,14 +851,18 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             [
               ['rentgeni', 'Rentgeni'],
               ['fotografije', 'Fotografije'],
-              ['sms', 'SMS'],
-              ['eposta', 'E-pošta'],
+              ['sporocila', 'Sporočila'],
             ] as const
           ).map(([key, label]) => (
             <button
               key={key}
               type="button"
-              onClick={() => setInfoTab(key)}
+              onClick={() => {
+                setInfoTab(key);
+                // Fresh on every visit to the tab — a questionnaire or
+                // invoice may have been emailed since the page opened.
+                if (key === 'sporocila') patientMessages.reload();
+              }}
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
                 infoTab === key
                   ? 'border-[var(--accent,#2e6e62)] text-[var(--accent,#2e6e62)]'
@@ -902,29 +911,81 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           </div>
         </div>
       )}
-      {infoTab === 'sms' && (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — zadnje SMS sporočilo s pacientom.</p>
-          <div className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
-            <p>{MOCK_SMS.text}</p>
-            <p className="mt-2 text-xs text-[var(--muted,#6f7c79)]">{MOCK_SMS.date}</p>
-          </div>
-        </div>
-      )}
-      {infoTab === 'eposta' && (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-          <p className="flex-none text-xs italic text-[var(--muted,#6f7c79)]">Mockup — kronološka zgodovina e-pošte s pacientom.</p>
-          <ul className="flex flex-col gap-2">
-            {MOCK_EMAILS.map((email, i) => (
-              <li key={i} className="rounded-md bg-[#e7e7e7] p-3 text-sm text-[var(--ink,#1c2624)]">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-semibold">{email.subject}</span>
-                  <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{email.date}</span>
-                </div>
-                <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">{email.snippet}</p>
-              </li>
+      {infoTab === 'sporocila' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="flex flex-none gap-1">
+            {(
+              [
+                ['all', 'Vse'],
+                ['email', 'E-pošta'],
+                ['sms', 'SMS'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setMessageFilter(key)}
+                className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
+                  messageFilter === key
+                    ? 'border-[var(--accent,#2e6e62)] bg-[var(--accent,#2e6e62)] text-white'
+                    : 'border-[var(--line,#ccd6d4)] text-[var(--ink-soft,#45524f)] hover:border-[var(--accent,#2e6e62)]'
+                }`}
+              >
+                {label}
+              </button>
             ))}
-          </ul>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {patientMessages.error ? (
+              <p className="text-sm text-[var(--danger,#b3261e)]">Zgodovine sporočil ni bilo mogoče naložiti: {patientMessages.error}</p>
+            ) : patientMessages.loading ? (
+              <p className="text-sm text-[var(--muted,#6f7c79)]">Nalagam …</p>
+            ) : (
+              (() => {
+                const shown = patientMessages.messages.filter((m) => messageFilter === 'all' || m.channel === messageFilter);
+                if (shown.length === 0) {
+                  return <p className="text-sm text-[var(--muted,#6f7c79)]">Pacientu še ni bilo poslano nobeno sporočilo.</p>;
+                }
+                return (
+                  <ul className="flex flex-col gap-2">
+                    {shown.map((m) => (
+                      <li key={m.id} className="rounded-md bg-[#f1f4f3] p-2.5 text-sm text-[var(--ink,#1c2624)]">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="min-w-0">
+                            <span className="mr-1.5 rounded bg-white px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-[var(--ink-soft,#45524f)]">
+                              {m.channel === 'email' ? 'E-pošta' : 'SMS'}
+                            </span>
+                            <span className="font-semibold">{m.title}</span>
+                          </span>
+                          <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">{formatMessageTime(m.sentAt)}</span>
+                        </div>
+                        <div className="mt-1 flex items-baseline justify-between gap-2 text-xs">
+                          <span className="min-w-0 truncate text-[var(--muted,#6f7c79)]">{m.recipient}</span>
+                          <span className={`flex-none font-semibold ${MESSAGE_TONE_CLASSES[m.tone]}`}>{m.status}</span>
+                        </div>
+                        {m.note && <p className="mt-1 text-xs text-[var(--ink-soft,#45524f)]">{m.note}</p>}
+                        {m.channel === 'sms' && m.text && (
+                          <p className="mt-1.5 whitespace-pre-wrap break-words rounded bg-white p-2 text-xs text-[var(--ink,#1c2624)]">{m.text}</p>
+                        )}
+                        {m.channel === 'email' && m.text && (
+                          <button
+                            type="button"
+                            onClick={() => setOpenEmail(m)}
+                            className="mt-1 text-xs font-semibold text-[var(--accent,#2e6e62)] hover:underline"
+                          >
+                            Prikaži e-pošto
+                          </button>
+                        )}
+                        {!m.text && (
+                          <p className="mt-1 text-[11px] italic text-[var(--muted,#6f7c79)]">Besedilo ni shranjeno (poslano pred začetkom arhiviranja).</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                );
+              })()
+            )}
+          </div>
         </div>
       )}
     </>
@@ -944,6 +1005,35 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         activeSubmenu="storitve"
       />
       <style>{PHONE_COMPACT_CSS}</style>
+      {openEmail?.text && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setOpenEmail(null)}>
+          <div
+            role="dialog"
+            aria-label={openEmail.title}
+            className="flex h-[85vh] w-full max-w-[720px] flex-col rounded-lg bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--line,#ccd6d4)] px-5 py-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-[var(--ink,#1c2624)]">{openEmail.title}</div>
+                <div className="text-xs text-[var(--muted,#6f7c79)]">
+                  {openEmail.recipient} · {formatMessageTime(openEmail.sentAt)} · {openEmail.status}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpenEmail(null)}
+                className="flex-none rounded-full border border-[var(--line,#ccd6d4)] px-3 py-1 text-xs font-semibold text-[var(--ink-soft,#45524f)] hover:border-[var(--accent,#2e6e62)]"
+              >
+                Zapri
+              </button>
+            </div>
+            {/* The email exactly as sent. Sandboxed without scripts; same-origin
+                only so Chrome paints it in-process (see InvoicePreview.tsx). */}
+            <iframe title="Poslana e-pošta" sandbox="allow-same-origin" srcDoc={openEmail.text} className="min-h-0 flex-1 rounded-b-lg border-0" />
+          </div>
+        </div>
+      )}
       {printingChart && (
         <ChartPrintSheet
           practiceName={practiceName}
@@ -1012,7 +1102,12 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             pending={healthQuestionnaire.pending}
             hasContactChanges={contactDifferences(healthQuestionnaire.latestSubmitted, patientDraft).length > 0}
             onOpen={() => setQuestionnaireOpen(true)}
-            onSend={healthQuestionnaire.send}
+            onSend={async () => {
+              const result = await healthQuestionnaire.send();
+              // The questionnaire email is in the log now — show it at once.
+              patientMessages.reload();
+              return result;
+            }}
           />
         </div>
 
