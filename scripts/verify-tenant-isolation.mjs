@@ -276,6 +276,28 @@ async function main() {
     check("account 2 cannot cancel account 1's invoice", !!foreignCancelError, foreignCancelError ? foreignCancelError.message : 'rpc unexpectedly succeeded');
   }
 
+  // 4h. FURS (032_furs_fiscalization.sql) — account 2 can't write a profile or
+  // a premise into account 1's practice, and can't read account 1's premise.
+  if (account1PracticeId) {
+    const { data: me2 } = await client2.auth.getUser();
+    const { error: foreignProfileError } = await client2
+      .from('user_profiles')
+      .insert({ user_id: me2.user?.id, practice_id: account1PracticeId, tax_number: '10713450' });
+    check(
+      "account 2 cannot create a user profile in account 1's practice",
+      !!foreignProfileError,
+      foreignProfileError ? foreignProfileError.message : 'insert unexpectedly succeeded'
+    );
+    const { error: premiseWriteError } = await client2.from('furs_premises').insert({
+      practice_id: account1PracticeId, premise_code: 'PX', cadastral_number: 1, building_number: 1, building_section_number: 1,
+      street: 'x', house_number: '1', community: 'x', city: 'x', postal_code: '1000', validity_date: '2026-01-01',
+      environment: 'test', registered_at: new Date().toISOString(),
+    });
+    check('no browser can write a FURS premise (function only)', !!premiseWriteError, premiseWriteError ? premiseWriteError.message : 'insert unexpectedly succeeded');
+    const { data: leakedPremises } = await client2.from('furs_premises').select('premise_code').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's FURS premise", !leakedPremises || leakedPremises.length === 0, `${leakedPremises?.length ?? 0} row(s) visible`);
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

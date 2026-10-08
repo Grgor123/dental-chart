@@ -85,6 +85,18 @@ export interface InvoiceDetail extends InvoiceSummary {
   patientEmail: string | null;
   /** Every time this invoice was emailed (migration 026), newest first. */
   emailLog: InvoiceEmailLogEntry[];
+  /** FURS davčno potrjevanje (migration 032); null when not sent to FURS. */
+  furs: InvoiceFurs | null;
+}
+
+export interface InvoiceFurs {
+  status: 'pending' | 'confirmed' | 'failed';
+  zoi: string | null;
+  eor: string | null;
+  /** The FURS QR code's 60-digit value. */
+  qr: string | null;
+  error: string | null;
+  confirmedAt: string | null;
 }
 
 export interface InvoiceEmailLogEntry {
@@ -312,6 +324,16 @@ export function useInvoice(invoiceId: string) {
       originalNumber,
       creditNote: credit ? { id: credit.id, number: credit.number } : null,
       patientEmail: patient?.email ?? null,
+      furs: row.furs_status
+        ? {
+            status: row.furs_status as InvoiceFurs['status'],
+            zoi: (row.furs_zoi as string | null) ?? null,
+            eor: (row.furs_eor as string | null) ?? null,
+            qr: (row.furs_qr as string | null) ?? null,
+            error: (row.furs_error as string | null) ?? null,
+            confirmedAt: (row.furs_confirmed_at as string | null) ?? null,
+          }
+        : null,
       emailLog: (emails.data ?? []).map((e) => ({
         to: e.recipient_email as string,
         sentAt: e.sent_at as string,

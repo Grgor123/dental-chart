@@ -110,6 +110,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onNavigateEmail={goEmail}
         onNavigateSettings={goSettings}
         onNavigateInvoiceSettings={() => go({ page: 'settings', section: 'racuni' })}
+        onNavigateProfileSettings={() => go({ page: 'settings', section: 'profil' })}
         onNavigateInvoices={goInvoices}
       />
     );

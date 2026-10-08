@@ -10,7 +10,8 @@
 // lines; then payment data (TRR only: IBAN, reference, UPN QR) on the left
 // and the totals on the right.
 //
-// Phase 2 (FURS) adds ZOI, EOR and its own QR code where the `fiscal` block sits.
+// A cash/card invoice verified by FURS (migration 032) also shows its ZOI, EOR
+// and FURS QR code — the `fiscal` block (doc.fiscal + extras.fursQrSvg).
 import { invoiceTotal, invoiceVat, lineNet, lineTotal, unitNet, vatBreakdown, type CalcLine } from './calc.ts';
 import { formatIban, normalizeIban, paymentReference, type UpnQrInput } from './payment.ts';
 
@@ -79,6 +80,9 @@ export interface InvoiceDocument {
   buyer: InvoiceBuyer;
   lines: InvoiceDocumentLine[];
   note: string | null;
+  /** FURS davčno potrjevanje (migration 032), on a cash/card invoice sent to
+      FURS: ZOI always, EOR once FURS confirmed it. */
+  fiscal?: { zoi: string; eor: string | null } | null;
 }
 
 export type PrintFormat = { format: 'a4' } | { format: 'receipt'; widthMm: 58 | 80 };
@@ -86,6 +90,8 @@ export type PrintFormat = { format: 'a4' } | { format: 'receipt'; widthMm: 58 | 
 export interface RenderExtras {
   /** Inline SVG of the UPN QR code (see upnQrInputFor). */
   upnQrSvg?: string | null;
+  /** Inline SVG of the FURS QR code (the invoice's furs_qr value). */
+  fursQrSvg?: string | null;
   /** Source of the Paged.js polyfill (A4 only). When given, the A4 page is
       laid out as real sheets — repeated header/footer, page numbers — both in
       the on-screen preview and in print (src/lib/pagedScript.ts). */
@@ -487,7 +493,10 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
   .grand td { font-size: 12pt; font-weight: bold; border-top: 1.5px solid #1c2624; padding-top: 1.5mm !important; }
   .notes { margin-top: 8mm; font-size: 8.5pt; break-inside: avoid; }
   .notes p { margin: 1mm 0; }
-  .fiscal { margin-top: 6mm; }
+  .fiscal { margin-top: 6mm; display: flex; justify-content: space-between; align-items: flex-end; gap: 6mm; font-size: 8pt; break-inside: avoid; }
+  .fiscal-text { font-family: 'Courier New', monospace; line-height: 1.5; word-break: break-all; }
+  .fiscal-qr { width: 25mm; }
+  .fiscal-qr svg { width: 25mm; height: 25mm; }
 </style>
 ${extras.previewId ? `<script>${previewReporter(extras.previewId, paged)}</script>` : ''}
 ${paged ? `<script>${pagedConfig}</script><script>${extras.pagedScript!.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
@@ -530,11 +539,29 @@ ${paged ? `<script>${pagedConfig}</script><script>${extras.pagedScript!.replace(
       ? `<div class="qr-row"><div class="qr">${extras.upnQrSvg}<div class="qr-label">UPN QR</div></div></div>`
       : ''
   }
-  <!-- FURS phase 2: ZOI, EOR and the QR code go here, in a .fiscal block. Not
-       rendered while empty: its margin alone could spill onto a blank page. -->
+  ${fiscalBlockA4(doc, extras)}
 </div>
 ${paged ? `<script>${pagedRun}</script>` : ''}
 </body></html>`;
+}
+
+// ---- FURS fiscal data ------------------------------------------------------------
+// ZOI + EOR (and the FURS QR code) on a fiscally verified invoice. Only
+// rendered when there is something to show — an empty block's margin alone
+// could spill onto a blank last page (see the Paged.js notes above).
+
+function fiscalLines(doc: InvoiceDocument): string[] {
+  if (!doc.fiscal) return [];
+  return [`ZOI: ${doc.fiscal.zoi}`, `EOR: ${doc.fiscal.eor ?? 'račun še ni potrjen pri FURS'}`];
+}
+
+function fiscalBlockA4(doc: InvoiceDocument, extras: RenderExtras): string {
+  const lines = fiscalLines(doc);
+  if (!lines.length) return '';
+  return `<div class="fiscal">
+    <div class="fiscal-text">${lines.map((l) => `<div>${esc(l)}</div>`).join('')}</div>
+    ${extras.fursQrSvg ? `<div class="qr fiscal-qr">${extras.fursQrSvg}<div class="qr-label">FURS</div></div>` : ''}
+  </div>`;
 }
 
 // ---- Thermal roll ----------------------------------------------------------------
@@ -582,6 +609,7 @@ function renderReceipt(doc: InvoiceDocument, widthMm: 58 | 80, extras: RenderExt
   .logo img { max-width: ${contentMm}mm; max-height: 18mm; object-fit: contain; filter: grayscale(1); }
   .stamp { font-weight: bold; text-align: center; border: 1.5px solid #000; padding: 1mm; margin: 1mm 0; }
   .qr svg { display: block; width: ${qrMm}mm; height: ${qrMm}mm; margin: 1.5mm auto 0; }
+  .fiscal { word-break: break-all; }
 </style></head>
 <body><div class="page">
   <div class="center">
@@ -617,7 +645,7 @@ function renderReceipt(doc: InvoiceDocument, widthMm: 58 | 80, extras: RenderExt
   }
   ${notes.map((n) => `<p>${esc(n)}</p>`).join('')}
   ${doc.note ? `<p>${esc(doc.note)}</p>` : ''}
-  <div class="fiscal"></div>
+  ${fiscalLines(doc).length ? `<hr>${fiscalLines(doc).map((l) => `<p class="fiscal">${esc(l)}</p>`).join('')}${extras.fursQrSvg ? `<div class="qr">${extras.fursQrSvg}</div>` : ''}` : ''}
   ${issuer.footerNote.trim() ? `<hr><p class="center">${footerHtml(issuer.footerNote)}</p>` : ''}
 </div></body></html>`;
 }

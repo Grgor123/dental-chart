@@ -132,6 +132,10 @@ src/
       InvoiceSettingsSection.tsx # Nastavitve → Podatki za račune: issuer
                                 # details, logo, contacts, print settings —
                                 # see "Invoicing" below
+      FursPremiseSection.tsx   # … → Davčno potrjevanje (FURS): premise
+                                # registration — see "FURS" below
+      UserProfileSection.tsx   # Nastavitve → Moj profil: own name + tax
+                                # number (FURS operator) — see "FURS" below
     invoices/
       InvoiceEmailDialog.tsx   # "Pošlji po e-pošti" popup (recipients,
                                 # subject, message + attachment preview)
@@ -197,6 +201,9 @@ src/
                                 # submitted + any open link, send/review/
                                 # contact-correction actions — see "Health
                                 # questionnaire" below
+    useFurs.ts                  # FURS on the browser side: own profile,
+                                # premise registration, fiscalizeInvoice() —
+                                # see "FURS" below
     usePatientMessages.ts       # One patient's emails + SMS (email_log,
                                 # appointment_reminders, patient_sms_consents),
                                 # newest first, live via Realtime — see
@@ -455,14 +462,14 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`031_realtime_messages.sql` — all confirmed run (016–019 are the
+`032_furs_fiscalization.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Invoicing" below; 030–031 the patient's message history, see
 "Communication history" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(031 included), so a brand-new project only ever needs that one file.
+(032 included; 032 is FURS, see "FURS davčno potrjevanje" below), so a brand-new project only ever needs that one file.
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3962,11 +3969,11 @@ thermal printing, multi-page A4, UPN QR (scanned with a real bank app),
 storno, invoices without a patient, sending by email (PDF attached,
 verified in Gmail) and the editable email templates.
 
-**NOT fiscally verified yet.** Phase 2 is FURS davčno potrjevanje (ZOI/EOR,
-certificate, premise registration, operator tax numbers). Until it exists,
-invoices paid in **cash or by card must not be used for real payments** —
-the draft editor shows a warning. Everything below was built so phase 2
-only *adds* (new columns + a fiscalize Edge Function), never changes.
+**Fiscal verification (phase 2) is built — on the FURS *test* environment**,
+see "FURS davčno potrjevanje" below. Until production is switched on (real
+certificate, real premise registration), cash/card invoices are still not for
+real payments; the draft editor warns while no premise is registered.
+Phase 2 only *added* to everything below (new columns + Edge Functions).
 
 - **Tables** (023): `invoice_settings` (one row per practice — issuer
   details; a separate table because `practices` has no update policy and
@@ -4092,6 +4099,84 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
 
 **Deploy**: `send-invoice-email`, and `email-template-preview` (renders the
 new tabs). No other function depends on invoicing.
+
+### FURS davčno potrjevanje (invoicing phase 2)
+
+**Status: built, deployed and confirmed by Gregor on the FURS TEST
+environment (2026-10-08)** — premise registered, cash invoice confirmed
+(EOR), ZOI/EOR/QR printed, storno credit note confirmed. Migration 032 run.
+**Production is not switched on yet** (see "Going to production" below).
+
+- **Runs entirely in Supabase Edge Functions** — the open risk was whether
+  the runtime can do FURS's mutual TLS; it can (`Deno.createHttpClient` with
+  the certificate + key, echo answered in ~150 ms). FURS's servers chain to
+  the Slovenian state CA, which isn't in the runtime's trust store, so
+  `_shared/furs/caCerts.ts` carries **SI-TRUST Root** (public, fingerprint
+  checked against si-trust.gov.si). Without it: `invalid peer certificate:
+  UnknownIssuer`.
+- **Shared modules** (`supabase/functions/_shared/furs/`): `client.ts`
+  (mTLS client, `FURS_ENV` → test `blagajne-test.fu.gov.si:9002` /
+  production `blagajne.fu.gov.si:9003`), `jws.ts` (RS256 JWS signing — the
+  header is written by hand because the certificate serial exceeds
+  `Number.MAX_SAFE_INTEGER`; RSA-SHA256 helper; Ljubljana-time formatting),
+  `premise.ts` (BusinessPremiseRequest), `invoice.ts` (ZOI = MD5 of the
+  RSA-SHA256 signature of tax number + `dd.MM.yyyy HH:mm:ss` + number +
+  premise + device + total; InvoiceRequest with VAT per rate and 0 % as
+  `ExemptVATTaxableAmount`; `ReferenceInvoice` on a credit note; the
+  60-digit FURS QR value).
+- **Secrets** (`supabase secrets set`, never in the repo):
+  `FURS_CERT_PEM_B64`/`FURS_KEY_PEM_B64` (PEM from the .p12 via
+  `openssl pkcs12 -clcerts -nokeys` / `-nocerts -nodes`, base64 to one
+  line), `FURS_CERT_SUBJECT`/`FURS_CERT_ISSUER` (RFC 2253),
+  `FURS_CERT_SERIAL` (decimal), `FURS_TAX_NUMBER` (the certificate's tax
+  number — FURS requests use it, not `invoice_settings.tax_number`),
+  `FURS_SOFTWARE_SUPPLIER_TAX_NUMBER`, `FURS_ENV` (`test`/`production`).
+  The test certificate ("TESTNO PODJETJE 2291", tax number 10713450) and its
+  converted PEMs live in `~/Documents/furs-test/`, outside the repo.
+- **One certificate for the whole app for now** (Gregor's choice) — fine
+  while only Monika's practice issues fiscal invoices. **Before a second
+  practice does, certificates must become per-practice** (stored securely
+  per practice, e.g. Vault), together with per-practice FURS tax numbers.
+- **Which invoices**: **cash and card only** (bank transfer is exempt by
+  law — Gregor's choice), plus their credit notes; and only once the
+  practice's premise is registered (`furs_premises` row) — before that,
+  nothing is sent and the old "not for real payments" warning shows.
+- **Operator tax number per user** (Gregor's choice): Nastavitve → **Moj
+  profil** (`user_profiles`, own row only, mod-11 check digit validated).
+  Without it a cash/card invoice can't be issued (red notice + link).
+- **Premise**: Nastavitve → Podatki za račune → "Davčno potrjevanje (FURS)"
+  — katastrska občina, stavba, del stavbe, address, valid-from →
+  `furs-register-premise` (user JWT; registers with FURS, then writes
+  `furs_premises` with the service role — no client write policy, so
+  "registered" can't be faked). Re-registering updates it.
+- **Flow**: "Izdaj račun" → `issue_invoice()` → the browser calls
+  `fiscalize-invoice` → the ZOI + QR value are stored **before** sending (so
+  the printout always has them) → FURS's EOR stored → the editor shows
+  "Potrjeno pri FURS · EOR …"; "Izdaj in natisni" waits for it. Storno sends
+  the credit note the same way. FURS refusal (error code) → `failed`, shown
+  in red with "Poskusi znova"; unreachable → `pending`, re-sent by the cron
+  job **every 10 minutes** (`fiscalize-pending-invoices`, service role,
+  `SubsequentSubmit: true` once an attempt failed or > 2 min after issue).
+  Results are written only through `record_invoice_furs()` (service role) —
+  the one way past the issued invoice's immutability (`guard_invoice`).
+- **Printouts**: A4 and roll show ZOI, EOR (or "še ni potrjen") and the
+  FURS QR code (`fursQrSvg`, `src/lib/upnQr.ts`) in the `fiscal` block.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4h
+  (profile/premise spoofing, premise read isolation) — added, not yet run.
+- **Not done**: verifying FURS's own JWS signature on answers (they arrive
+  over the mutually authenticated connection); an invoice list badge for
+  FURS status; closing a premise (`ClosingTag`).
+
+**Going to production** (each step deliberate, not yet done): the real FURS
+certificate (eDavki) converted the same way and set as the secrets above,
+plus the practice's real tax number; `FURS_ENV=production`; the real premise
+data registered again (production needs its own registration); every
+issuing user's real tax number in Moj profil; the software-supplier tax
+number set to the real one; then a first real cash invoice checked for its
+EOR.
+
+**Deploy**: `fiscalize-invoice`, `furs-register-premise` (default JWT
+verification ON — the cron job sends the service-role key).
 
 ---
 
@@ -4219,8 +4304,8 @@ new tabs). No other function depends on invoicing.
 ## Out of Scope for Phase 1
 - eZdravje / ZZZS integration
 - ~~Billing / invoicing~~ — **phase 1 built** (price list, invoices,
-  printing, email — see "Invoicing" above); **FURS fiscal verification is
-  phase 2, not built**. Still to come on top of it: the invoice-driven
+  printing, email — see "Invoicing" above); **FURS fiscal verification
+  (phase 2) built on the test environment**, production not yet switched on. Still to come on top of it: the invoice-driven
   aftercare emails described under "Email templates (E-pošta)" →
   "Planned next", item 1 (a category per service, and a topics list on the
   invoice screen)
@@ -4608,13 +4693,10 @@ next:
 6a. Health questionnaire: the automatic send on confirmation (migration
    022) not yet seen live — the manual round trip is confirmed — see "Health
    questionnaire" above
-6b. **FURS fiscal verification (invoicing phase 2)** — not started:
-   a `fiscalize-invoice` Edge Function signing with the practice's FURS
-   certificate (.p12 in secrets), ZOI + EOR, mutual TLS to FURS (start on
-   the test environment), premise registration, an operator tax number per
-   staff login, ZOI/EOR + FURS QR in the reserved `fiscal` print block, and
-   re-sending invoices issued while FURS was unreachable. Until then cash/
-   card invoices aren't for real payments.
+6b. **FURS fiscal verification** — built and confirmed on the FURS test
+   environment (see "FURS davčno potrjevanje"). Still to do: switching to
+   production (real certificate, premise, tax numbers), and per-practice
+   certificates before a second practice uses it.
 6c. Invoicing follow-up noted, not built: printer assignment via QZ Tray.
    (Repeating line-table headings and a unit per service are built — see
    "Invoicing".)
@@ -4625,7 +4707,12 @@ next:
 
 ---
 
-*Last updated: 2026-10-08 (Communication history built: Frame 3's
+*Last updated: 2026-10-08 (FURS davčno potrjevanje built and confirmed on
+the FURS test environment — mutual TLS from Supabase Edge Functions,
+premise registration, ZOI/EOR for cash/card invoices and credit notes,
+retry cron, ZOI/EOR/QR on printouts, operator tax number per user in "Moj
+profil" — migration 032; see "FURS davčno potrjevanje". Earlier the same
+day: communication history built: Frame 3's
 "Sporočila" tab lists every email and SMS sent to the patient, with the
 exact text stored from now on (migration 030) and live updates via Realtime
 (migration 031) — see "Communication history (Sporočila)". Also: A4 chart printout built — the last Phase 1

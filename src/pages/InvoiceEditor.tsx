@@ -15,7 +15,8 @@ import {
 import { printHtml } from '../lib/printInvoice';
 import { loadPagedScript } from '../lib/pagedScript';
 import { InvoicePreview, type RenderPreview } from '../components/invoices/InvoicePreview';
-import { upnQrSvg } from '../lib/upnQr';
+import { fursQrSvg, upnQrSvg } from '../lib/upnQr';
+import { fiscalizeInvoice, useFurs } from '../hooks/useFurs';
 import { formatIban, paymentReference, upnQrPayload } from '../../supabase/functions/_shared/invoice/payment';
 import { InvoiceEmailDialog } from '../components/invoices/InvoiceEmailDialog';
 import { useEmailTemplates } from '../hooks/useEmailTemplates';
@@ -58,6 +59,8 @@ interface InvoiceEditorProps {
   onNavigateEmail: () => void;
   /** Opens Nastavitve on the "Podatki za račune" tab. */
   onNavigateInvoiceSettings: () => void;
+  /** Opens Nastavitve on the "Moj profil" tab (the user's tax number for FURS). */
+  onNavigateProfileSettings: () => void;
   onNavigateSettings: () => void;
   onNavigateInvoices: () => void;
 }
@@ -92,7 +95,10 @@ function sameDraft(a: { fields: DraftFields; lines: InvoiceLineDraft[] }, b: { f
 export function InvoiceEditor(props: InvoiceEditorProps) {
   const { invoiceId, onBack, backLabel, onOpenInvoice } = props;
   const { practiceName } = usePracticeContext();
-  const { invoice, loading, error, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail } = useInvoice(invoiceId);
+  const { invoice, loading, error, reload, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail } = useInvoice(invoiceId);
+  // FURS davčno potrjevanje: on once the premise is registered (Nastavitve →
+  // Podatki za račune); cash/card invoices then go to FURS right after issuing.
+  const furs = useFurs();
   const [emailOpen, setEmailOpen] = useState(false);
   const { overrides: templateOverrides } = useEmailTemplates();
   const { settings, loading: settingsLoading, reload: reloadSettings } = useInvoiceSettings();
@@ -173,8 +179,12 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
       buyer: isDraft ? fields.payer : invoice.buyer,
       lines: isDraft ? lines : invoice.lines,
       note: (isDraft ? fields.note : invoice.note) || null,
+      fiscal: invoice.furs?.zoi ? { zoi: invoice.furs.zoi, eor: invoice.furs.eor } : null,
     };
   }, [invoice, isDraft, fields, lines, settings, liveIssuer]);
+
+  // The FURS QR code of a fiscally verified invoice (null otherwise).
+  const fursQr = useMemo(() => (invoice?.furs?.qr ? fursQrSvg(invoice.furs.qr) : null), [invoice]);
 
   // UPN QR for an unpaid bank-transfer invoice (null otherwise).
   const qrSvg = useMemo(() => {
@@ -201,17 +211,17 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
 
   // Without a preview id: the attachment preview in the email window.
   const liveHtml = useMemo(
-    () => (doc ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: pagedScript ?? undefined }) : ''),
-    [doc, qrSvg, pagedScript]
+    () => (doc ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: pagedScript ?? undefined }) : ''),
+    [doc, qrSvg, fursQr, pagedScript]
   );
   // The live preview (InvoicePreview: renders each update behind the visible
   // one and swaps it in once its pages are laid out).
   const renderPreview = useCallback<RenderPreview>(
     ({ previewId, paged }) =>
       doc
-        ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: paged ? (pagedScript ?? undefined) : undefined, previewId })
+        ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: paged ? (pagedScript ?? undefined) : undefined, previewId })
         : '',
-    [doc, qrSvg, pagedScript]
+    [doc, qrSvg, fursQr, pagedScript]
   );
 
   async function run(action: () => Promise<{ error?: string }>) {
@@ -255,9 +265,32 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         const saved = await saveDraft(fields, lines);
         if (saved.error) return saved;
       }
-      return issue();
+      const issued = await issue();
+      if (issued.error) return issued;
+      // Straight to FURS. A FURS problem doesn't undo the issue — the invoice
+      // shows its FURS status, and the retry job re-sends a pending one.
+      if (needsFurs(fields.paymentMethod)) {
+        await fiscalizeInvoice(invoiceId);
+        await reload();
+      }
+      return {};
     });
     if (ok && issueAndPrint) setPrintWhenIssued(true);
+  }
+
+  /** Cash and card invoices go to FURS once the premise is registered. */
+  function needsFurs(method: PaymentMethod): boolean {
+    return furs.fursActive && method !== 'transfer';
+  }
+
+  async function handleSendToFurs() {
+    if (!invoice) return;
+    setBusy(true);
+    setActionError(null);
+    const result = await fiscalizeInvoice(invoice.id);
+    await reload();
+    setBusy(false);
+    if (result.error && result.status !== 'pending' && result.status !== 'failed') setActionError(result.error);
   }
 
   // "Izdaj in natisni": once the issued invoice has loaded (number, date …),
@@ -280,6 +313,10 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
       setActionError('Dodajte vsaj eno storitev iz cenika (vrstica »+ Dodaj storitev« v tabeli).');
       return;
     }
+    if (needsFurs(fields.paymentMethod) && !furs.profile.taxNumber) {
+      setActionError('Za račun, plačan z gotovino ali kartico, vpišite svojo davčno številko (Nastavitve → Moj profil).');
+      return;
+    }
     setActionError(null);
     setIssueAndPrint(andPrint);
     setConfirming('issue');
@@ -295,6 +332,8 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     setBusy(true);
     setActionError(null);
     const result = await cancel();
+    // The credit note of a cash/card invoice goes to FURS too.
+    if (result.creditNoteId && invoice && needsFurs(invoice.paymentMethod)) await fiscalizeInvoice(result.creditNoteId);
     setBusy(false);
     if (result.error) setActionError(result.error);
     else if (result.creditNoteId) onOpenInvoice(result.creditNoteId);
@@ -304,11 +343,11 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     if (!doc) return;
     if (format === 'a4') {
       // With Paged.js the document lays out its pages, then prints itself.
-      printHtml(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: pagedScript ?? undefined, autoPrint: true }), {
+      printHtml(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: pagedScript ?? undefined, autoPrint: true }), {
         selfPrinting: !!pagedScript,
       });
     } else {
-      printHtml(renderInvoiceHtml(doc, { format: 'receipt', widthMm: settings.receiptWidthMm }, { upnQrSvg: qrSvg }));
+      printHtml(renderInvoiceHtml(doc, { format: 'receipt', widthMm: settings.receiptWidthMm }, { upnQrSvg: qrSvg, fursQrSvg: fursQr }));
     }
   }
 
@@ -434,11 +473,19 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
             </button>
           </div>
         )}
-        {isDraft && fields.paymentMethod !== 'transfer' && (
+        {isDraft && fields.paymentMethod !== 'transfer' && !furs.loading && !furs.fursActive && (
           <p className="rounded border border-[#EF9F27] bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">
-            Davčno potrjevanje (FURS) še ni vključeno. Računov, plačanih z gotovino ali kartico, zato še ne uporabljajte za
-            resnična plačila.
+            Davčno potrjevanje (FURS) še ni vključeno — poslovni prostor ni prijavljen. Računov, plačanih z gotovino ali
+            kartico, zato še ne uporabljajte za resnična plačila.
           </p>
+        )}
+        {isDraft && needsFurs(fields.paymentMethod) && !furs.loading && !furs.profile.taxNumber && (
+          <div className="flex flex-wrap items-center gap-3 rounded border border-[#e0231c] bg-[#fdecea] px-3 py-2 text-sm text-[#8a1c14]">
+            Za davčno potrjevanje potrebujemo vašo osebno davčno številko.
+            <button type="button" onClick={leave(props.onNavigateProfileSettings)} className="font-semibold underline">
+              Odpri Nastavitve → Moj profil
+            </button>
+          </div>
         )}
 
         <div className="grid gap-6 min-[1200px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -538,6 +585,39 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
                 <dd>{formatDate(invoice.serviceDate)}</dd>
                 <dt className="text-[var(--ink-soft,#45524f)]">Način plačila</dt>
                 <dd>{PAYMENT_METHOD_LABELS[invoice.paymentMethod]}</dd>
+                {(invoice.furs || needsFurs(invoice.paymentMethod)) && (
+                  <>
+                    <dt className="text-[var(--ink-soft,#45524f)]">Davčno potrjevanje</dt>
+                    <dd>
+                      {invoice.furs?.status === 'confirmed' ? (
+                        <span className="text-[var(--accent,#2e6e62)]">
+                          Potrjeno pri FURS · <span className="break-all font-mono text-xs">EOR {invoice.furs.eor}</span>
+                        </span>
+                      ) : (
+                        <span className="flex flex-col items-start gap-1">
+                          <span className={invoice.furs?.status === 'failed' ? 'text-[var(--danger,#b3261e)]' : 'text-[#6b4a00]'}>
+                            {invoice.furs?.status === 'failed'
+                              ? `FURS je zavrnil račun${invoice.furs.error ? `: ${invoice.furs.error}` : '.'}`
+                              : invoice.furs?.status === 'pending'
+                                ? 'Čaka na potrditev FURS — poslano bo samodejno.'
+                                : 'Še ni poslano na FURS.'}
+                          </span>
+                          {invoice.furs?.status === 'pending' && invoice.furs.error && (
+                            <span className="text-xs text-[var(--muted,#6f7c79)]">{invoice.furs.error}</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleSendToFurs}
+                            disabled={busy}
+                            className="text-xs font-semibold text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
+                          >
+                            {invoice.furs?.status === 'failed' ? 'Poskusi znova' : 'Pošlji zdaj'}
+                          </button>
+                        </span>
+                      )}
+                    </dd>
+                  </>
+                )}
                 {invoice.dueDate && invoice.kind === 'invoice' && (
                   <>
                     <dt className="text-[var(--ink-soft,#45524f)]">Rok plačila</dt>
@@ -815,7 +895,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
           previewHtml={liveHtml}
           makePdf={async () => {
             const script = pagedScript ?? (await loadPagedScript());
-            return invoiceHtmlToPdfBase64(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: script }));
+            return invoiceHtmlToPdfBase64(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: script }));
           }}
           onSend={sendByEmail}
           onClose={() => setEmailOpen(false)}

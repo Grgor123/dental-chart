@@ -5,7 +5,16 @@ import QRCode from 'qrcode';
 // correction M, as the UPN QR standard prescribes. Synchronous, so the
 // invoice preview can render it in the same pass as the rest of the page.
 export function upnQrSvg(payload: string): string {
-  const qr = QRCode.create(payload, { errorCorrectionLevel: 'M', version: 15 });
+  return qrSvg(QRCode.create(payload, { errorCorrectionLevel: 'M', version: 15 }));
+}
+
+/** The FURS QR code on a fiscally verified invoice: its 60-digit value
+    (invoices.furs_qr — ZOI, tax number, issue time, check digit). */
+export function fursQrSvg(value: string): string {
+  return qrSvg(QRCode.create(value, { errorCorrectionLevel: 'M' }));
+}
+
+function qrSvg(qr: ReturnType<typeof QRCode.create>): string {
   const { size, data } = qr.modules;
   let path = '';
   for (let y = 0; y < size; y += 1) {

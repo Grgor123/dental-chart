@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { invoiceSettingsComplete, useInvoiceSettings, type InvoiceSettings } from '../../hooks/useInvoiceSettings';
 import { formatIban, normalizeIban } from '../../../supabase/functions/_shared/invoice/payment';
+import { FursPremiseSection } from './FursPremiseSection';
 
 // Nastavitve → Podatki za račune — the issuer details printed on every
 // invoice (supabase/migrations/023_add_invoicing.sql, invoice_settings).
@@ -368,13 +369,15 @@ export function InvoiceSettingsSection() {
         </Field>
         <Field
           label="Oznaka poslovnega prostora in naprave"
-          hint="Del številke računa (npr. P1-B1-14). Nastavi se ob prijavi poslovnega prostora pri FURS (davčno potrjevanje, 2. faza)."
+          hint="Del številke računa (npr. P1-B1-14). Pod to oznako je poslovni prostor prijavljen pri FURS."
         >
           <span className="px-1 py-2 text-sm text-[var(--ink,#1c2624)]">
             {settings.premiseCode} – {settings.deviceCode}
           </span>
         </Field>
       </section>
+
+      <FursPremiseSection premiseCode={settings.premiseCode} />
 
       {status && (
         <p className={`text-xs ${status.kind === 'error' ? 'text-[var(--danger,#b3261e)]' : 'text-[var(--muted,#6f7c79)]'}`}>
