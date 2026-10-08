@@ -90,6 +90,11 @@ export interface RenderExtras {
   pagedScript?: string;
   /** Paged mode only: print as soon as the pages are laid out. */
   autoPrint?: boolean;
+  /** On-screen preview only: the document reports back to the page that
+      embeds it (postMessage {invoicePreview: id, status: 'ready' | 'error'})
+      once its pages are laid out, or when a script error occurs — see
+      src/components/invoices/InvoicePreview.tsx. */
+  previewId?: string;
 }
 
 const NON_VAT_PAYER_NOTE = 'DDV ni obračunan na podlagi 1. odstavka 94. člena ZDDV-1.';
@@ -240,6 +245,21 @@ function paymentDataRows(doc: InvoiceDocument): [string, string][] {
 
 // ---- Entry point --------------------------------------------------------------
 
+/** Preview mode: posts "ready" (pages laid out — or, without Paged.js, the
+    page loaded) and any script error to the embedding page. */
+function previewReporter(previewId: string, paged: boolean): string {
+  return `(function () {
+    var id = ${JSON.stringify(previewId)};
+    function report(status, message) {
+      try { parent.postMessage({ invoicePreview: id, status: status, message: message || '' }, '*'); } catch (e) {}
+    }
+    window.__invoicePreviewReport = report;
+    window.addEventListener('error', function (e) { report('error', String(e.message || e)); });
+    window.addEventListener('unhandledrejection', function (e) { report('error', String((e.reason && e.reason.message) || e.reason)); });
+    ${paged ? '' : "window.addEventListener('load', function () { report('ready'); });"}
+  })();`;
+}
+
 export function renderInvoiceHtml(doc: InvoiceDocument, format: PrintFormat, extras: RenderExtras = {}): string {
   return format.format === 'a4' ? renderA4(doc, extras) : renderReceipt(doc, format.widthMm, extras);
 }
@@ -331,9 +351,26 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
   // the script (e.g. a future server-side render) it falls back to one flowing
   // page with the footer pushed to the bottom.
   const paged = !!extras.pagedScript;
-  const pagedConfig = `window.PagedConfig = {
-    auto: true,
-    after: function (flow) {
+  // Paged.js runs by hand (auto: false) on exactly this invoice's own content
+  // and stylesheet — never on whatever else ends up in the document. Browser
+  // extensions inject styles, links and elements into embedded frames too, and
+  // in auto mode Paged.js picked those up (fetching an extension's stylesheet
+  // fails inside the sandboxed preview), so the layout never finished and the
+  // preview stayed empty. If the layout fails anyway, the invoice is put back
+  // as one flowing page instead of leaving an empty sheet.
+  const pagedConfig = 'window.PagedConfig = { auto: false };';
+  const pagedRun = `(function () {
+    function report(status, message) { if (window.__invoicePreviewReport) window.__invoicePreviewReport(status, message); }
+    var page = document.querySelector('body > .page');
+    var style = document.getElementById('invoice-css');
+    if (!page || !style || !window.Paged) { report('error', 'Paged.js ni na voljo'); return; }
+    var sheet = {};
+    sheet[window.location.href] = style.textContent;
+    var content = document.createElement('template');
+    content.innerHTML = page.outerHTML;
+    style.parentNode.removeChild(style);
+    page.parentNode.removeChild(page);
+    function after(flow) {
       window.__invoicePagesReady = true;
       var total = flow && flow.total ? flow.total : document.querySelectorAll('.pagedjs_page').length;
       if (total <= 1) {
@@ -342,15 +379,27 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
       ${
         extras.autoPrint
           ? 'window.focus(); window.print();'
-          : `var page = document.querySelector('.pagedjs_page');
-      if (page) { document.body.style.zoom = String(Math.min(1, (window.innerWidth - 32) / page.getBoundingClientRect().width)); }`
+          : `var first = document.querySelector('.pagedjs_page');
+      if (first) { document.body.style.zoom = String(Math.min(1, (window.innerWidth - 32) / first.getBoundingClientRect().width)); }
+      report('ready');`
       }
     }
-  };`;
+    function failed(e) {
+      report('error', String((e && e.message) || e));
+      document.body.innerHTML = '';
+      document.body.className = 'flow';
+      document.head.appendChild(style);
+      document.body.appendChild(page);
+      ${extras.autoPrint ? 'window.focus(); window.print();' : ''}
+    }
+    try {
+      new window.Paged.Previewer().preview(content.content, [sheet], document.body).then(after, failed);
+    } catch (e) { failed(e); }
+  })();`;
 
   return `<!doctype html>
 <html lang="sl"><head><meta charset="utf-8"><title>${esc(title(doc))}</title>
-<style>
+<style id="invoice-css">
   /* Top margin holds the repeated header (logo + issuer, ≤ 30 mm, starting
      15 mm from the paper edge); the bottom margin holds the footer, which
      ends 2 cm above the lower paper edge, and the page number. */
@@ -414,6 +463,7 @@ function renderA4(doc: InvoiceDocument, extras: RenderExtras): string {
   .notes p { margin: 1mm 0; }
   .fiscal { margin-top: 6mm; }
 </style>
+${extras.previewId ? `<script>${previewReporter(extras.previewId, paged)}</script>` : ''}
 ${paged ? `<script>${pagedConfig}</script><script>${extras.pagedScript!.replace(/<\/script/gi, '<\\/script')}</script>` : ''}
 </head>
 <body class="${paged ? 'paged' : 'flow'}"><div class="page">
@@ -455,7 +505,9 @@ ${paged ? `<script>${pagedConfig}</script><script>${extras.pagedScript!.replace(
       : ''
   }
   <div class="fiscal"></div>
-</div></body></html>`;
+</div>
+${paged ? `<script>${pagedRun}</script>` : ''}
+</body></html>`;
 }
 
 // ---- Thermal roll ----------------------------------------------------------------

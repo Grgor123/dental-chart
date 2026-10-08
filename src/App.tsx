@@ -72,6 +72,10 @@ function App() {
 function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   const { loading, error } = usePracticeContext();
   const [route, setRoute] = useState<Route>({ page: 'list' });
+  // Bumped by every menu navigation and used as the page's key, so clicking
+  // the section you're already in starts it afresh (cleared search, today's
+  // date, first tab ...) instead of doing nothing.
+  const [navCount, setNavCount] = useState(0);
 
   if (loading) return null;
   if (error) return <p className="p-6 text-sm text-[var(--danger,#b3261e)]">{error}</p>;
@@ -79,11 +83,15 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   function selectPatient(patient: PatientListItem, patientLabel: string) {
     setRoute({ page: 'chart', patientId: patient.patientId, patientLabel, patient });
   }
-  const goList = () => setRoute({ page: 'list' });
-  const goCalendar = () => setRoute({ page: 'calendar' });
-  const goEmail = () => setRoute({ page: 'email' });
-  const goSettings = () => setRoute({ page: 'settings' });
-  const goInvoices = () => setRoute({ page: 'invoices' });
+  function go(next: Route) {
+    setRoute(next);
+    setNavCount((n) => n + 1);
+  }
+  const goList = () => go({ page: 'list' });
+  const goCalendar = () => go({ page: 'calendar' });
+  const goEmail = () => go({ page: 'email' });
+  const goSettings = () => go({ page: 'settings' });
+  const goInvoices = () => go({ page: 'invoices' });
 
   if (route.page === 'invoice') {
     const { returnTo } = route;
@@ -93,6 +101,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         invoiceId={route.invoiceId}
         onBack={() => setRoute(returnTo)}
         backLabel={returnTo.page === 'chart' ? `Nazaj na pacienta ${returnTo.patientLabel}` : 'Nazaj na seznam računov'}
+        onBackToInvoices={returnTo.page === 'chart' ? goInvoices : undefined}
         onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo })}
         onSignOut={onSignOut}
         onNavigateHome={goList}
@@ -100,7 +109,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onNavigateCalendar={goCalendar}
         onNavigateEmail={goEmail}
         onNavigateSettings={goSettings}
-        onNavigateInvoiceSettings={() => setRoute({ page: 'settings', section: 'racuni' })}
+        onNavigateInvoiceSettings={() => go({ page: 'settings', section: 'racuni' })}
         onNavigateInvoices={goInvoices}
       />
     );
@@ -109,12 +118,14 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'invoices') {
     return (
       <Invoices
+        key={navCount}
         onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo: { page: 'invoices' } })}
         onBack={goList}
         onSignOut={onSignOut}
         onNavigateCalendar={goCalendar}
         onNavigateEmail={goEmail}
         onNavigateSettings={goSettings}
+        onNavigateInvoices={goInvoices}
       />
     );
   }
@@ -122,14 +133,15 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'chart') {
     return (
       <PatientChart
+        key={navCount}
         patientId={route.patientId}
         patientLabel={route.patientLabel}
         patient={route.patient}
-        onBack={() => setRoute({ page: 'list' })}
+        onBack={goList}
         onSignOut={onSignOut}
-        onNavigateCalendar={() => setRoute({ page: 'calendar' })}
-        onNavigateEmail={() => setRoute({ page: 'email' })}
-        onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
         onNavigateInvoices={goInvoices}
         onOpenInvoice={(invoiceId) => setRoute({ page: 'invoice', invoiceId, returnTo: route })}
       />
@@ -139,11 +151,13 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'calendar') {
     return (
       <Calendar
-        onBack={() => setRoute({ page: 'list' })}
+        key={navCount}
+        onBack={goList}
         onSelectPatient={selectPatient}
         onSignOut={onSignOut}
-        onNavigateEmail={() => setRoute({ page: 'email' })}
-        onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
         onNavigateInvoices={goInvoices}
       />
     );
@@ -152,10 +166,12 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'email') {
     return (
       <EmailTemplates
-        onBack={() => setRoute({ page: 'list' })}
+        key={navCount}
+        onBack={goList}
         onSignOut={onSignOut}
-        onNavigateCalendar={() => setRoute({ page: 'calendar' })}
-        onNavigateSettings={() => setRoute({ page: 'settings' })}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
         onNavigateInvoices={goInvoices}
       />
     );
@@ -164,24 +180,27 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
   if (route.page === 'settings') {
     return (
       <Settings
-        key={route.section ?? 'default'}
+        key={`${navCount}-${route.section ?? 'default'}`}
         initialSection={route.section}
         onNavigateInvoices={goInvoices}
-        onBack={() => setRoute({ page: 'list' })}
+        onBack={goList}
         onSignOut={onSignOut}
-        onNavigateCalendar={() => setRoute({ page: 'calendar' })}
-        onNavigateEmail={() => setRoute({ page: 'email' })}
+        onNavigateCalendar={goCalendar}
+        onNavigateEmail={goEmail}
+        onNavigateSettings={goSettings}
       />
     );
   }
 
   return (
     <PatientList
+      key={navCount}
       onSelectPatient={selectPatient}
       onSignOut={onSignOut}
-      onNavigateCalendar={() => setRoute({ page: 'calendar' })}
-      onNavigateEmail={() => setRoute({ page: 'email' })}
-      onNavigateSettings={() => setRoute({ page: 'settings' })}
+      onNavigateCalendar={goCalendar}
+      onNavigateEmail={goEmail}
+      onNavigateSettings={goSettings}
+      onNavigateStoritve={goList}
       onNavigateInvoices={goInvoices}
     />
   );

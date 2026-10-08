@@ -18,6 +18,7 @@ interface InvoicesProps {
   onNavigateCalendar: () => void;
   onNavigateEmail: () => void;
   onNavigateSettings: () => void;
+  onNavigateInvoices: () => void;
 }
 
 const STATE_FILTERS: { key: 'all' | InvoiceState; label: string }[] = [
@@ -35,7 +36,7 @@ function invoiceDay(inv: InvoiceSummary): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings }: InvoicesProps) {
+export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings, onNavigateInvoices }: InvoicesProps) {
   const { practiceName } = usePracticeContext();
   const { invoices, loading, error, createDraft } = useInvoiceList();
   const { patients } = usePatients();
@@ -91,6 +92,7 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
         onNavigateSettings={onNavigateSettings}
+        onNavigateInvoices={onNavigateInvoices}
         activeSubmenu="racuni"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">

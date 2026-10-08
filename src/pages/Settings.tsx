@@ -12,6 +12,8 @@ interface SettingsProps {
   onNavigateCalendar: () => void;
   onNavigateEmail: () => void;
   onNavigateInvoices: () => void;
+  /** Its own menu item: starts this page afresh. */
+  onNavigateSettings: () => void;
   /** Tab to open on (e.g. 'racuni' from the invoice editor's warning). */
   initialSection?: string;
 }
@@ -27,7 +29,7 @@ const SECTIONS = [
 // "Nastavitve" — the practice-wide setup area (the submenu item used to be an
 // inert placeholder). See supabase/migrations/020_add_price_list.sql for the
 // price list this first section manages.
-export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateInvoices, initialSection }: SettingsProps) {
+export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateInvoices, onNavigateSettings, initialSection }: SettingsProps) {
   const { practiceName } = usePracticeContext();
   const [section, setSection] = useState(SECTIONS.some((s) => s.key === initialSection) ? initialSection! : SECTIONS[0].key);
 
@@ -41,6 +43,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
         onNavigateCalendar={onNavigateCalendar}
         onNavigateEmail={onNavigateEmail}
         onNavigateInvoices={onNavigateInvoices}
+        onNavigateSettings={onNavigateSettings}
         activeSubmenu="nastavitve"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">

@@ -19,6 +19,8 @@ interface EmailTemplatesProps {
   onNavigateCalendar: () => void;
   onNavigateSettings: () => void;
   onNavigateInvoices: () => void;
+  /** Its own menu item: starts this page afresh. */
+  onNavigateEmail: () => void;
 }
 
 type EditableField = 'subject' | 'heading' | 'body';
@@ -43,7 +45,7 @@ const NUMBER_CLASS = 'w-16 rounded border border-[var(--line,#ccd6d4)] px-2 py-1
 // calendar attachment and unsubscribe footer are fixed and never editable;
 // see supabase/functions/_shared/email/templates.ts. Everything shown here
 // comes from templateDefs.ts, the same file the Edge Functions render from.
-export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNavigateSettings, onNavigateInvoices }: EmailTemplatesProps) {
+export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNavigateSettings, onNavigateInvoices, onNavigateEmail }: EmailTemplatesProps) {
   const { practiceName } = usePracticeContext();
   const { overrides, loading, error, saveTemplate, resetTemplate, previewTemplate, sendTestEmail } = useEmailTemplates();
   const [selectedKey, setSelectedKey] = useState<TemplateKey>(TEMPLATE_KEYS[0]);
@@ -61,6 +63,7 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
         onNavigateCalendar={onNavigateCalendar}
         onNavigateSettings={onNavigateSettings}
         onNavigateInvoices={onNavigateInvoices}
+        onNavigateEmail={onNavigateEmail}
         activeSubmenu="eposta"
       />
       <div className="mx-auto flex max-w-[1300px] flex-col gap-5 p-6">

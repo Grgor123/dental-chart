@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppNavShell } from '../components/ui/AppNavShell';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { usePracticeContext } from '../contexts/PracticeContext';
@@ -14,6 +14,7 @@ import {
 } from '../hooks/useInvoices';
 import { printHtml } from '../lib/printInvoice';
 import { loadPagedScript } from '../lib/pagedScript';
+import { InvoicePreview, type RenderPreview } from '../components/invoices/InvoicePreview';
 import { upnQrSvg } from '../lib/upnQr';
 import { formatIban, paymentReference, upnQrPayload } from '../../supabase/functions/_shared/invoice/payment';
 import { InvoiceEmailDialog } from '../components/invoices/InvoiceEmailDialog';
@@ -46,6 +47,8 @@ interface InvoiceEditorProps {
   /** Where "back" goes — the patient record or the Računi list. */
   onBack: () => void;
   backLabel: string;
+  /** Opened from a patient record: also offer the Računi list. */
+  onBackToInvoices?: () => void;
   /** Opens another invoice (the credit note after a storno, or its original). */
   onOpenInvoice: (invoiceId: string) => void;
   onSignOut: () => void;
@@ -196,18 +199,20 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     };
   }, []);
 
+  // Without a preview id: the attachment preview in the email window.
   const liveHtml = useMemo(
     () => (doc ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: pagedScript ?? undefined }) : ''),
     [doc, qrSvg, pagedScript]
   );
-  // Laying out pages takes a moment, so the preview follows typing with a
-  // short delay instead of re-paginating on every keystroke.
-  const [previewHtml, setPreviewHtml] = useState('');
-  useEffect(() => {
-    const timer = setTimeout(() => setPreviewHtml(liveHtml), previewHtml ? 400 : 0);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveHtml]);
+  // The live preview (InvoicePreview: renders each update behind the visible
+  // one and swaps it in once its pages are laid out).
+  const renderPreview = useCallback<RenderPreview>(
+    ({ previewId, paged }) =>
+      doc
+        ? renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: paged ? (pagedScript ?? undefined) : undefined, previewId })
+        : '',
+    [doc, qrSvg, pagedScript]
+  );
 
   async function run(action: () => Promise<{ error?: string }>) {
     setBusy(true);
@@ -221,6 +226,27 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
   async function handleSave() {
     await run(() => saveDraft(fields, lines));
   }
+
+  /** Leaving the editor (back link, menu, sign-out) saves unsaved draft
+      changes first; if saving fails, it stays here and shows the error. */
+  function leave(go: () => void) {
+    return async () => {
+      if (dirty && !(await run(() => saveDraft(fields, lines)))) return;
+      go();
+    };
+  }
+
+  // Closing or reloading the tab can't wait for a save — the browser asks
+  // for confirmation instead while the draft has unsaved changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
 
   async function handleIssue() {
     setConfirming(null);
@@ -331,13 +357,13 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
   const nav = (
     <AppNavShell
       userLabel={practiceName ?? undefined}
-      onSignOut={props.onSignOut}
-      onNavigateHome={props.onNavigateHome}
-      onNavigateCalendar={props.onNavigateCalendar}
-      onNavigateStoritve={props.onNavigateStoritve}
-      onNavigateEmail={props.onNavigateEmail}
-      onNavigateSettings={props.onNavigateSettings}
-      onNavigateInvoices={props.onNavigateInvoices}
+      onSignOut={leave(props.onSignOut)}
+      onNavigateHome={leave(props.onNavigateHome)}
+      onNavigateCalendar={leave(props.onNavigateCalendar)}
+      onNavigateStoritve={leave(props.onNavigateStoritve)}
+      onNavigateEmail={leave(props.onNavigateEmail)}
+      onNavigateSettings={leave(props.onNavigateSettings)}
+      onNavigateInvoices={leave(props.onNavigateInvoices)}
       activeSubmenu="racuni"
     />
   );
@@ -370,13 +396,24 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     <>
       {nav}
       <div className="mx-auto flex max-w-[1500px] flex-col gap-4 p-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="w-fit text-sm text-[var(--accent,#2e6e62)] hover:underline"
-        >
-          ← {backLabel}
-        </button>
+        <div className="flex flex-wrap gap-x-6 gap-y-1">
+          {props.onBackToInvoices && (
+            <button
+              type="button"
+              onClick={leave(props.onBackToInvoices)}
+              className="w-fit text-sm text-[var(--accent,#2e6e62)] hover:underline"
+            >
+              ← Nazaj na seznam računov
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={leave(onBack)}
+            className="w-fit text-sm text-[var(--accent,#2e6e62)] hover:underline"
+          >
+            ← {backLabel}
+          </button>
+        </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-[var(--ink,#1c2624)]">
@@ -391,7 +428,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         {isDraft && !settingsOk && (
           <div className="flex flex-wrap items-center gap-3 rounded border border-[#e0231c] bg-[#fdecea] px-3 py-2 text-sm text-[#8a1c14]">
             Pred izdajo računa izpolnite podatke izdajatelja (vsaj naziv in davčno številko).
-            <button type="button" onClick={props.onNavigateInvoiceSettings} className="font-semibold underline">
+            <button type="button" onClick={leave(props.onNavigateInvoiceSettings)} className="font-semibold underline">
               Odpri Nastavitve → Podatki za račune
             </button>
           </div>
@@ -761,12 +798,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
           {/* ---- Right: live A4 preview — the same pages "Natisni A4" prints ---- */}
           <div className="flex flex-col gap-2">
             <span className="text-xs font-semibold text-[var(--ink-soft,#45524f)]">Predogled (A4)</span>
-            <iframe
-              title="Predogled računa"
-              srcDoc={previewHtml}
-              sandbox="allow-scripts"
-              className="h-[900px] w-full rounded-md border border-[var(--line,#ccd6d4)] bg-[#e9eeed]"
-            />
+            <InvoicePreview render={renderPreview} className="h-[900px]" />
           </div>
         </div>
       </div>
@@ -779,7 +811,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
           heading={emailTpl.filled.heading}
           templateLabel={TEMPLATE_DEFS[emailTpl.key].label}
           filename={`${invoice.kind === 'credit_note' ? 'Dobropis' : 'Racun'}-${invoice.number}.pdf`}
-          previewHtml={previewHtml}
+          previewHtml={liveHtml}
           makePdf={async () => {
             const script = pagedScript ?? (await loadPagedScript());
             return invoiceHtmlToPdfBase64(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, pagedScript: script }));

@@ -33,6 +33,8 @@ interface CalendarProps {
   onNavigateEmail: () => void;
   onNavigateSettings: () => void;
   onNavigateInvoices: () => void;
+  /** Its own menu item: starts this page afresh. */
+  onNavigateCalendar: () => void;
 }
 
 type CalendarView = 'day' | 'week' | 'month';
@@ -159,7 +161,7 @@ function WeekColumnHeader({ dateIso, isToday }: { dateIso: string; isToday: bool
 // empty grid slot. Built on top of the same appointments table/RLS pattern
 // as the original day-agenda slice (supabase/migrations/013_add_appointments.sql,
 // 014_add_therapists.sql).
-export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, onNavigateSettings, onNavigateInvoices }: CalendarProps) {
+export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, onNavigateSettings, onNavigateInvoices, onNavigateCalendar }: CalendarProps) {
   const [view, setView] = useState<CalendarView>(loadStoredView);
   const [showWeekends, setShowWeekends] = useState(loadStoredShowWeekends);
   const [dateIso, setDateIso] = useState(todayIso());
@@ -347,6 +349,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
         onNavigateEmail={onNavigateEmail}
         onNavigateSettings={onNavigateSettings}
         onNavigateInvoices={onNavigateInvoices}
+        onNavigateCalendar={onNavigateCalendar}
         activeSubmenu="koledar"
       />
       <div className="mx-auto flex min-h-0 w-full max-w-[1800px] flex-1 flex-col gap-4 overflow-hidden p-6 pb-3">

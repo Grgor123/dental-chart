@@ -120,16 +120,18 @@ export function AppNavShell({
           <button
             key={key}
             type="button"
+            // Every item is clickable, the active one too: it returns to that
+            // section's starting page (e.g. from an invoice back to the list).
             onClick={
-              key === 'koledar' && activeSubmenu !== 'koledar'
+              key === 'koledar'
                 ? onNavigateCalendar
-                : key === 'storitve' && activeSubmenu !== 'storitve'
+                : key === 'storitve'
                   ? onNavigateStoritve
-                  : key === 'eposta' && activeSubmenu !== 'eposta'
+                  : key === 'eposta'
                     ? onNavigateEmail
-                    : key === 'nastavitve' && activeSubmenu !== 'nastavitve'
+                    : key === 'nastavitve'
                       ? onNavigateSettings
-                      : key === 'racuni' && activeSubmenu !== 'racuni'
+                      : key === 'racuni'
                         ? onNavigateInvoices
                         : undefined
             }

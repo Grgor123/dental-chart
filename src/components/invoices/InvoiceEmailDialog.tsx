@@ -234,7 +234,10 @@ export function InvoiceEmailDialog(props: InvoiceEmailDialogProps) {
           <iframe
             title="Predogled priponke"
             srcDoc={props.previewHtml}
-            sandbox="allow-scripts"
+            // No sandbox on purpose: a sandboxed (cross-origin) frame runs in its
+            // own process, and Chrome then sometimes doesn't repaint it after a tab
+            // switch — the preview stayed grey until something forced a redraw. The
+            // document is our own render.ts output with every value escaped.
             className="h-[70vh] w-full rounded-md border border-[var(--line,#ccd6d4)] bg-[#e9eeed]"
           />
         </div>

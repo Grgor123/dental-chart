@@ -3030,15 +3030,15 @@ inert `<AppNavShell />` — nothing here changes that.
   Sporočila/Nastavitve have no real page behind them yet, so they're never
   passed as `activeSubmenu` and stay permanently inert (no `onClick` at
   all).
-- **Both "Koledar" and "Storitve" are clickable from wherever they aren't
-  already the active pill** — `onNavigateCalendar` fires when
-  `activeSubmenu !== 'koledar'`, `onNavigateStoritve` when
-  `activeSubmenu !== 'storitve'`; either prop being omitted just leaves
-  that pill inert. Only `Calendar.tsx` passes `onNavigateStoritve` (wired
-  to its own existing `onBack`, which already returns to the patient list)
-  — `PatientList.tsx`/`PatientChart.tsx` have Storitve as their *active*
-  pill already, so clicking it there would be a pointless self-navigation,
-  same reasoning `Calendar.tsx` itself omits `onNavigateCalendar`.
+- **Every submenu item is clickable, the active one too** (Gregor's request,
+  2026-10-08) — it takes the user to that section's starting page: from an
+  invoice back to the Računi list, from a patient record back to the patient
+  list (flush + close visit, same as `handleBackClick`), and clicking the
+  section you're already in starts it afresh. `App.tsx` bumps a `navCount`
+  on every menu navigation and uses it as the page's `key`, so the page
+  remounts (cleared search, today's date, first tab; the calendar's saved
+  view/weekend preference stays). Sporočila has no page yet, so it stays
+  inert.
 - **"Domov" (`onNavigateHome`) takes the user back to the patient list**
   from wherever they are — `PatientChart.tsx` wires it to the same
   `handleBackClick` its own "← Nazaj na seznam pacientov" link already
@@ -3975,7 +3975,32 @@ only *adds* (new columns + a fiscalize Edge Function), never changes.
 - **Pages**: patient record Frame 5 (drafts, unpaid TRR invoices, "Nov
   račun" — reuses an empty draft), "Računi" submenu page (filters, sum,
   "+ Nov račun" for a patient or a payer typed by hand), Nastavitve →
-  Podatki za račune.
+  Podatki za račune. An invoice opened from a patient shows both "← Nazaj
+  na seznam računov" and "← Nazaj na pacienta …".
+- **Draft saving**: leaving the editor (back links, menu, sign-out) saves
+  unsaved draft changes first; closing/reloading the tab asks to confirm.
+- **Preview blank-sheet bug (fixed 2026-10-08)** — three separate causes,
+  all confirmed on Gregor's own Chrome:
+  1. *Browser extensions* inject stylesheets/elements into every frame;
+     Paged.js in auto mode picked them up, failed fetching the extension's
+     stylesheet and never finished (reproduced with a simulated extension).
+     `render.ts` now runs Paged.js by hand (`auto: false`) on only the
+     invoice's own `.page` and `#invoice-css`, and falls back to one flowing
+     page if layout fails — also for print/PDF.
+  2. *A sandboxed (cross-origin) preview iframe* runs out of process and
+     Chrome sometimes didn't repaint it after a tab switch (grey until a
+     screenshot forced a redraw). The preview iframes have **no sandbox**
+     now — the document is our own escaped `render.ts` output.
+  3. *Every tab return remounted the whole app*: Supabase hands out a new
+     session object on token refresh, and `usePractice` reloaded on it
+     (`SignedInApp` renders nothing while loading) — which also **dropped
+     unsaved edits** anywhere in the app. It's now keyed on the user id.
+     `useInvoiceSettings` also keeps the same object when a focus reload
+     finds nothing changed.
+  `InvoicePreview.tsx` double-buffers the preview (renders each update in a
+  covered frame, swaps it in on a `postMessage` "ready" from `render.ts`'s
+  `previewId` reporter, watchdog → retry → flowing-page fallback) and
+  debounces edits with a 1.5 s maximum wait.
 
 **Deploy**: `send-invoice-email`, and `email-template-preview` (renders the
 new tabs). No other function depends on invoicing.

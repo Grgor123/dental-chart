@@ -20,8 +20,16 @@ export function usePractice(session: Session | null) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Keyed on the user id, not the session object: Supabase hands out a new
+  // session object whenever it refreshes the token — e.g. every time the tab
+  // regains focus — and reloading here then blanked the whole signed-in app
+  // (SignedInApp renders nothing while loading), remounting the current page
+  // and dropping unsaved edits (an invoice draft, chart changes not yet
+  // autosaved).
+  const userId = session?.user.id ?? null;
+
   useEffect(() => {
-    if (!session) {
+    if (!userId) {
       setPractice(null);
       setLoading(false);
       setError(null);
@@ -35,7 +43,7 @@ export function usePractice(session: Session | null) {
       const { data, error: fetchError } = await supabase
         .from('practice_members')
         .select('practice_id, practices(name)')
-        .eq('user_id', session!.user.id)
+        .eq('user_id', userId)
         .limit(1)
         .maybeSingle();
       if (cancelled) return;
@@ -63,7 +71,7 @@ export function usePractice(session: Session | null) {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [userId]);
 
   return { practice, loading, error };
 }

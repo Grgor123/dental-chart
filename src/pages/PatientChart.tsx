@@ -936,6 +936,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         onNavigateSettings={onNavigateSettings}
         onNavigateInvoices={onNavigateInvoices}
         onNavigateHome={handleBackClick}
+        onNavigateStoritve={handleBackClick}
         activeSubmenu="storitve"
       />
       <style>{PHONE_COMPACT_CSS}</style>

@@ -160,7 +160,11 @@ export function useInvoiceSettings() {
     if (fetchError) {
       setError(fetchError.message);
     } else {
-      setSettings(rowToInvoiceSettings(data));
+      // Reloaded on every window focus (InvoiceEditor) — keep the same object
+      // when nothing changed, so the invoice preview isn't rebuilt each time
+      // the tab is revisited.
+      const next = rowToInvoiceSettings(data);
+      setSettings((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       setError(null);
     }
     setLoading(false);
