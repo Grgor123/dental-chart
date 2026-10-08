@@ -57,6 +57,9 @@ src/
                                 # (also exports ToothSideViewContent, the
                                 # <defs>/<g> content with no wrapping <svg>,
                                 # reused inside PerioGraphRow's shared canvas)
+      ChartPrintSheet.tsx      # A4 landscape printout of the chart
+                                # ("Natisni karto") — see "Chart printout"
+                                # below
       perioStyle.ts            # Shared PD color thresholds + mesial/mid/distal
                                 # x-fractions, used by PerioGraphRow and
                                 # PocketDepthRow so the two stay consistent;
@@ -2991,6 +2994,29 @@ a JSX/layout port around code that already worked, not a rewrite.
   dominate the page on a 13"-class laptop screen — confirmed live at both
   a 17"-class (~1920px) and 13"-class (~1280px) width.
 
+### Chart printout (A4)
+
+**Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
+after "← Nazaj na seznam pacientov" on the Patient Record page — not above
+the chart, per Gregor's explicit request (there's no spare height there;
+anything added above would push the chart off one screen).
+`ChartPrintSheet.tsx` renders the printout and opens the browser's print
+dialog; Gregor chose the contents and orientation:
+
+- **A4 landscape**, two pages. Page 1: header (patient name, datum rojstva,
+  ZZZS card no., internal record no., practice name, print date) and the
+  whole read-only chart (no selection overlay, no empty perio placeholder
+  circles — no handlers are passed), scaled to fit the page box. Page 2:
+  the same header, the Legenda (`StatusLegend`) and "Opombe k zobem" — every
+  tooth with a note, in FDI order.
+- **Mechanism**: rendered only while printing, via a portal into `<body>`
+  outside `#root`; on screen it sits far off-screen (still laid out so the
+  chart can be measured and scaled), and a print-only stylesheet hides
+  `#root` while `body.printing-chart` is set. `@page` landscape lives in
+  that component's own `<style>`, so it never affects other printing. It
+  prints the current on-screen state, unsaved edits included. Cleared on
+  `afterprint`.
+
 ---
 
 ### App Shell — top navigation frame (AppNavShell)
@@ -4143,7 +4169,8 @@ new tabs). No other function depends on invoicing.
       "Zgodovina" tab and a per-patient cross-tooth rollup (Frame 8), both
       reading real Supabase data through one shared formatter — see "Visit
       lifecycle" above
-- [ ] Basic print view (chart only, A4) — not started
+- [x] Basic print view (chart only, A4) — built 2026-10-08, see "Chart
+      printout (A4)" under "Patient Record page"
 
 ## Out of Scope for Phase 1
 - eZdravje / ZZZS integration
@@ -4439,7 +4466,7 @@ next:
   "Email notifications (Amazon SES)" above for the full design.
 
 **Not started:**
-1. Print view (chart only, A4)
+1. ~~Print view (chart only, A4)~~ — built, see "Chart printout (A4)"
 2. Email: the complaint path and a real custom-domain practice haven't
    been exercised yet (see "Email notifications (Amazon SES)" above)
 3. Email-domain settings on the Nastavitve page — the page itself now
@@ -4554,7 +4581,10 @@ next:
 
 ---
 
-*Last updated: 2026-10-08 (Invoicing follow-ups: line-table headings repeat
+*Last updated: 2026-10-08 (A4 chart printout built — the last Phase 1
+deliverable: a printer icon next to the back link prints the chart with a
+patient header, plus the Legenda and tooth notes on page 2, landscape. See
+"Chart printout (A4)". Earlier the same day, invoicing follow-ups: line-table headings repeat
 on every page, a unit (EM) per price-list service — migration 029, page gaps
 in the preview, a blank trailing page removed, and draft saving no longer
 loses lines when a save fails. Earlier the same day: the preview blank-sheet

@@ -9,6 +9,7 @@ import { ToothDetailPanel } from '../components/ui/ToothDetailPanel';
 import { StatusToolbar } from '../components/ui/StatusToolbar';
 import { AppNavShell } from '../components/ui/AppNavShell';
 import { usePracticeContext } from '../contexts/PracticeContext';
+import { ChartPrintSheet } from '../components/chart/ChartPrintSheet';
 import { useOpenVisit } from '../hooks/useOpenVisit';
 import { useVisit } from '../hooks/useVisit';
 import { useToothHistory } from '../hooks/useToothHistory';
@@ -188,6 +189,9 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
+  // "Natisni karto": while true, ChartPrintSheet renders the A4 printout and
+  // opens the print dialog; it clears this once the dialog closes.
+  const [printingChart, setPrintingChart] = useState(false);
   const {
     surfacesByFdi,
     setSurfacesByFdi,
@@ -940,6 +944,30 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         activeSubmenu="storitve"
       />
       <style>{PHONE_COMPACT_CSS}</style>
+      {printingChart && (
+        <ChartPrintSheet
+          practiceName={practiceName}
+          patient={{
+            name: `${patientDraft.firstName} ${patientDraft.lastName}`.trim(),
+            dob: patientDraft.dob,
+            healthCardNumber: patientDraft.healthCardNumber,
+            internalRecordNumber: patientDraft.internalRecordNumber,
+          }}
+          chart={{
+            surfacesByFdi,
+            pocketsBuccal: pocketsBuccalByFdi,
+            pocketsLingual: pocketsLingualByFdi,
+            gumMargin: gumMarginByFdi,
+            bleedingBuccal: bleedingBuccalByFdi,
+            bleedingLingual: bleedingLingualByFdi,
+            postByFdi,
+            endoByFdi,
+            bridgeGroupByFdi,
+          }}
+          notesByFdi={notesByFdi}
+          onDone={() => setPrintingChart(false)}
+        />
+      )}
       <div className="flex w-full flex-col gap-1.5 pb-4 pt-1.5">
         {/* ---- Frame 1: health banner + Vprašalnik — real, from the
             patient's latest submitted health questionnaire (see
@@ -959,6 +987,20 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             className="flex-none text-sm text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
           >
             ← Nazaj na seznam pacientov
+          </button>
+          <button
+            type="button"
+            onClick={() => setPrintingChart(true)}
+            disabled={printingChart}
+            title="Natisni karto (A4)"
+            aria-label="Natisni karto"
+            className="flex-none rounded p-1 text-[var(--ink-soft,#45524f)] hover:bg-[#eef3f2] hover:text-[var(--accent,#2e6e62)] disabled:opacity-50"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M7 9V3h10v6" />
+              <rect x="3" y="9" width="18" height="8" rx="2" />
+              <path d="M7 14h10v7H7z" />
+            </svg>
           </button>
           <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">
             {saveStatus === 'saving' && 'Shranjujem …'}
