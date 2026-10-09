@@ -1,6 +1,18 @@
 import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
-import { usePriceList, type Service, type ServiceCategory, type ServiceFields } from '../../hooks/usePriceList';
+import { servicesWord, usePriceList, type Service, type ServiceCategory, type ServiceFields } from '../../hooks/usePriceList';
+import { useZzzsCatalogue, useZzzsSetting, type ZzzsEntry } from '../../hooks/useZzzs';
+import {
+  CHART_LINK_CHOICES,
+  chartLinkLabel,
+  chartLinkValue,
+  effectiveChartLink,
+  parseChartLinkValue,
+  type ChartLinkChoice,
+  type EffectiveChartLink,
+} from '../../lib/chartBilling';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { ZzzsPickerDialog } from './ZzzsPickerDialog';
+import { PriceListImportDialog } from './PriceListImportDialog';
 import { DEFAULT_UNIT } from '../../../supabase/functions/_shared/invoice/render';
 
 // Nastavitve → Cenik — a single editable table, spreadsheet-style: every
@@ -14,6 +26,12 @@ import { DEFAULT_UNIT } from '../../../supabase/functions/_shared/invoice/render
 // starts with a starter set) are managed in a slim strip above the table,
 // not a filtering sidebar — there used to be one, removed per Gregor's
 // explicit request ("why are these categories needed at the left side").
+//
+// ZZZS šifrant (migration 033): the "Uporabljaj šifrant ZZZS" switch (off by
+// default) adds a ZZZS column and "+ Iz šifranta ZZZS"; "Uvozi cenik" loads a
+// practice's own list from CSV/Excel either way. The "Iz karte" column sets
+// which chart mark a service is billed for (see lib/chartBilling.ts) — with
+// the switch on, services with a known ZZZS code are linked automatically.
 
 const VAT_PRESETS = [0, 5, 9.5, 22];
 
@@ -50,10 +68,23 @@ export function PriceListSection() {
     createService,
     updateService,
     setServiceActive,
+    links,
+    setServiceLink,
+    addZzzsServices,
+    importServices,
   } = usePriceList();
+  const zzzs = useZzzsSetting();
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [categoryMessage, setCategoryMessage] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<'zzzs' | 'import' | null>(null);
+  const [zzzsMessage, setZzzsMessage] = useState<string | null>(null);
+  // The catalogue is needed for the ZZZS column/picker, and to check ZZZS
+  // codes in an imported file.
+  const catalogue = useZzzsCatalogue(zzzs.enabled || dialog === 'import');
+  const zzzsOn = zzzs.enabled;
+  const usedZzzsCodes = useMemo(() => new Set(services.map((s) => s.zzzsCode).filter((c): c is string => !!c)), [services]);
+  const needsPrice = services.filter((s) => s.isActive && s.zzzsCode && s.priceEur === 0).length;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -64,11 +95,43 @@ export function PriceListSection() {
     });
   }, [services, query, showArchived]);
 
-  if (loading) return <p className="text-sm text-[var(--ink-soft,#45524f)]">Nalaganje …</p>;
+  if (loading || zzzs.loading) return <p className="text-sm text-[var(--ink-soft,#45524f)]">Nalaganje …</p>;
   if (error) return <p className="text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {error}</p>;
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <label className="flex w-fit cursor-pointer items-center gap-3 text-sm font-medium text-[var(--ink,#1c2624)]">
+          <input
+            type="checkbox"
+            role="switch"
+            className="peer sr-only"
+            checked={zzzsOn}
+            onChange={async (e) => {
+              const result = await zzzs.setZzzsEnabled(e.target.checked);
+              setZzzsMessage(result.error ?? null);
+            }}
+          />
+          <span
+            aria-hidden
+            className={`relative h-5 w-9 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--accent,#2e6e62)] ${
+              zzzsOn ? 'bg-[var(--accent,#2e6e62)]' : 'bg-[#c8d1d9]'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-[left] ${zzzsOn ? 'left-[18px]' : 'left-0.5'}`}
+            />
+          </span>
+          Uporabljaj šifrant ZZZS
+        </label>
+        <p className="text-xs text-[var(--muted,#6f7c79)]">
+          {zzzsOn
+            ? 'Storitve lahko dodajate iz uradnega šifranta zobozdravstvenih storitev ZZZS; storitve z znano šifro se samodejno povežejo z zobno karto. Lastne storitve ostanejo mogoče.'
+            : 'Cenik uporablja vaše lastne šifre. Vklopite, če želite storitve dodajati iz uradnega šifranta ZZZS — izklop ničesar ne izbriše.'}
+        </p>
+        {(zzzsMessage || zzzs.error) && <p className="text-xs text-[var(--danger,#b3261e)]">{zzzsMessage ?? zzzs.error}</p>}
+      </div>
+
       <CategoryStrip
         categories={categories}
         message={categoryMessage}
@@ -92,18 +155,43 @@ export function PriceListSection() {
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           Prikaži arhivirane
         </label>
+        {zzzsOn && (
+          <button
+            type="button"
+            onClick={() => setDialog('zzzs')}
+            className="rounded bg-[var(--accent,#2e6e62)] px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+          >
+            + Iz šifranta ZZZS
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setDialog('import')}
+          className="rounded border border-[var(--accent,#2e6e62)] px-3 py-2 text-sm font-medium text-[var(--accent,#2e6e62)] hover:bg-[#eaf4f1]"
+        >
+          Uvozi cenik
+        </button>
       </div>
+      {needsPrice > 0 && (
+        <p className="rounded border border-[#EF9F27] bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">
+          {needsPrice} {servicesWord(needsPrice)} iz šifranta ZZZS še brez cene — vpišite jo v označenih vrsticah.
+        </p>
+      )}
 
       <div className="overflow-x-auto rounded border border-[var(--line,#ccd6d4)]">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#f7faf9] text-xs uppercase text-[var(--ink-soft,#45524f)]">
             <tr>
               <th className="px-2 py-2 font-semibold">Šifra</th>
+              {zzzsOn && <th className="px-2 py-2 font-semibold">ZZZS</th>}
               <th className="px-2 py-2 font-semibold">Naziv</th>
               <th className="px-2 py-2 font-semibold">Kategorija</th>
               <th className="px-2 py-2 text-right font-semibold">Cena</th>
               <th className="px-2 py-2 font-semibold" title="Enota mere na računu">EM</th>
               <th className="px-2 py-2 font-semibold">DDV</th>
+              <th className="px-2 py-2 font-semibold" title="Katera oznaka na zobni karti doda to storitev na račun">
+                Iz karte
+              </th>
               <th className="px-2 py-2 font-semibold"></th>
             </tr>
           </thead>
@@ -113,21 +201,46 @@ export function PriceListSection() {
                 key={s.id}
                 service={s}
                 categories={categories}
+                zzzsOn={zzzsOn}
+                zzzsEntries={catalogue.entries}
+                link={effectiveChartLink(s.id, s.zzzsCode, links, zzzsOn)}
                 onSave={(fields) => updateService(s.id, fields)}
                 onSetActive={(active) => setServiceActive(s.id, active)}
+                onSetLink={(choice) => setServiceLink(s.id, choice, zzzsOn)}
               />
             ))}
             {visible.length === 0 && services.length > 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-center text-[var(--muted,#6f7c79)]">
+                <td colSpan={zzzsOn ? 9 : 8} className="px-3 py-4 text-center text-[var(--muted,#6f7c79)]">
                   Ni storitev za ta iskalni niz.
                 </td>
               </tr>
             )}
-            <NewServiceRow categories={categories} onCreate={createService} />
+            <NewServiceRow categories={categories} zzzsOn={zzzsOn} onCreate={createService} />
           </tbody>
         </table>
       </div>
+
+      {dialog === 'zzzs' && (
+        <ZzzsPickerDialog
+          entries={catalogue.entries}
+          loading={catalogue.loading}
+          error={catalogue.error}
+          usedCodes={usedZzzsCodes}
+          categories={categories}
+          onAdd={addZzzsServices}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'import' && (
+        <PriceListImportDialog
+          services={services}
+          zzzsEntries={catalogue.entries}
+          zzzsLoading={catalogue.loading}
+          onImport={importServices}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 }
@@ -239,8 +352,12 @@ function CategoryStrip({ categories, message, onCreate, onRename, onDelete }: Ca
 interface ServiceRowProps {
   service: Service;
   categories: ServiceCategory[];
+  zzzsOn: boolean;
+  zzzsEntries: Map<string, ZzzsEntry>;
+  link: EffectiveChartLink | null;
   onSave: (fields: ServiceFields) => Promise<{ error?: string }>;
   onSetActive: (active: boolean) => Promise<{ error?: string }>;
+  onSetLink: (choice: ChartLinkChoice | null) => Promise<{ error?: string }>;
 }
 
 // Every field commits independently on blur (text) or immediately on change
@@ -249,9 +366,10 @@ interface ServiceRowProps {
 // service and never re-synced from props — after a successful save the
 // service prop settles back to exactly this state anyway, and re-syncing
 // would fight whatever the person is mid-typing in another field.
-function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProps) {
+function ServiceRow({ service, categories, zzzsOn, zzzsEntries, link, onSave, onSetActive, onSetLink }: ServiceRowProps) {
   const [name, setName] = useState(service.name);
   const [code, setCode] = useState(service.code ?? '');
+  const [zzzsCode, setZzzsCode] = useState(service.zzzsCode ?? '');
   const [categoryId, setCategoryId] = useState(service.categoryId ?? '');
   const [priceStr, setPriceStr] = useState(priceText(service.priceEur));
   const [vatRate, setVatRate] = useState(service.vatRate);
@@ -267,6 +385,7 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
     priceEur: service.priceEur,
     vatRate: service.vatRate,
     unit: service.unit,
+    zzzsCode: service.zzzsCode ?? '',
   });
 
   const vatOptions = VAT_PRESETS.includes(vatRate) ? VAT_PRESETS : [...VAT_PRESETS, vatRate].sort((a, b) => a - b);
@@ -279,7 +398,8 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
       fields.categoryId === saved.current.categoryId &&
       fields.priceEur === saved.current.priceEur &&
       fields.vatRate === saved.current.vatRate &&
-      fields.unit === saved.current.unit;
+      fields.unit === saved.current.unit &&
+      fields.zzzsCode === saved.current.zzzsCode;
     if (unchanged) return;
     setBusy(true);
     const result = await onSave(fields);
@@ -320,12 +440,38 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
     commit({ unit: unit.trim() });
   }
 
+  function handleZzzsBlur() {
+    const next = zzzsCode.trim();
+    // Only a code from the catalogue (checked once it's loaded).
+    if (next && zzzsEntries.size > 0 && !zzzsEntries.has(next)) {
+      setError(`Šifre ${next} ni v šifrantu ZZZS.`);
+      setZzzsCode(saved.current.zzzsCode);
+      return;
+    }
+    setZzzsCode(next);
+    commit({ zzzsCode: next });
+  }
+
+  async function handleLinkChange(value: string) {
+    setBusy(true);
+    const result = await onSetLink(parseChartLinkValue(value));
+    setBusy(false);
+    setError(result.error ?? null);
+  }
+
   function blurOnEnter(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') e.currentTarget.blur();
   }
 
+  // A service added from the ZZZS catalogue starts at 0 € until priced.
+  const needsPrice = service.isActive && !!service.zzzsCode && service.priceEur === 0;
+  const zzzsEntry = service.zzzsCode ? zzzsEntries.get(service.zzzsCode) : undefined;
+  const zzzsWithdrawn = !!service.zzzsCode && zzzsEntries.size > 0 && !zzzsEntry;
+
   return (
-    <tr className={`border-t border-[var(--line,#ccd6d4)] ${service.isActive ? '' : 'opacity-60'}`}>
+    <tr
+      className={`border-t border-[var(--line,#ccd6d4)] ${service.isActive ? '' : 'opacity-60'} ${needsPrice ? 'bg-[#fff6e5]' : ''}`}
+    >
       <td className="p-0.5">
         <input
           value={code}
@@ -335,6 +481,25 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
           className={INPUT_CLASS}
         />
       </td>
+      {zzzsOn && (
+        <td className="p-0.5">
+          <span className="flex items-center gap-1">
+            <input
+              value={zzzsCode}
+              onChange={(e) => setZzzsCode(e.target.value)}
+              onBlur={handleZzzsBlur}
+              onKeyDown={blurOnEnter}
+              title={zzzsEntry ? `ZZZS: ${zzzsEntry.shortName}` : 'Šifra iz šifranta ZZZS (neobvezno)'}
+              className={INPUT_CLASS + ' w-20 font-mono text-xs'}
+            />
+            {zzzsWithdrawn && (
+              <span className="text-xs text-[#b36b00]" title="Šifra ni več veljavna v trenutnem šifrantu ZZZS.">
+                ⚠
+              </span>
+            )}
+          </span>
+        </td>
+      )}
       <td className="p-0.5">
         <input
           value={name}
@@ -368,7 +533,8 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
           onBlur={handlePriceBlur}
           onKeyDown={blurOnEnter}
           inputMode="decimal"
-          className={INPUT_CLASS + ' text-right'}
+          title={needsPrice ? 'Vnesite ceno storitve.' : undefined}
+          className={INPUT_CLASS + ' text-right' + (needsPrice ? ' border-[#EF9F27] font-semibold' : '')}
         />
       </td>
       <td className="p-0.5">
@@ -394,6 +560,21 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
           {vatOptions.map((rate) => (
             <option key={rate} value={rate}>
               {formatVat(rate)}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td className="p-0.5">
+        <select
+          value={chartLinkValue(link)}
+          onChange={(e) => handleLinkChange(e.target.value)}
+          title={link?.automatic ? 'Povezano samodejno iz šifre ZZZS — lahko spremenite.' : undefined}
+          className={INPUT_CLASS + (link ? (link.automatic ? ' italic' : '') : ' text-[var(--muted,#6f7c79)]')}
+        >
+          <option value="">—</option>
+          {CHART_LINK_CHOICES.map((c) => (
+            <option key={chartLinkValue(c)} value={chartLinkValue(c)}>
+              {chartLinkLabel(c)}
             </option>
           ))}
         </select>
@@ -427,13 +608,14 @@ function ServiceRow({ service, categories, onSave, onSetActive }: ServiceRowProp
 
 interface NewServiceRowProps {
   categories: ServiceCategory[];
+  zzzsOn: boolean;
   onCreate: (fields: ServiceFields) => Promise<{ error?: string }>;
 }
 
 // The permanent last row — a "+" marker in the first cell, blank fields
 // otherwise. Filling in a name and a valid price and leaving the row
 // creates the service; the row then clears itself for the next one.
-function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
+function NewServiceRow({ categories, zzzsOn, onCreate }: NewServiceRowProps) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -463,7 +645,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
       return;
     }
     setBusy(true);
-    const result = await onCreate({ name, code, categoryId: categoryId || null, description: '', priceEur: price, vatRate, unit });
+    const result = await onCreate({ name, code, categoryId: categoryId || null, description: '', priceEur: price, vatRate, unit, zzzsCode: '' });
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -491,6 +673,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
           }
         />
       </td>
+      {zzzsOn && <td className="p-0.5" />}
       <td className="p-0.5">
         <input
           value={name}
@@ -538,6 +721,7 @@ function NewServiceRow({ categories, onCreate }: NewServiceRowProps) {
           ))}
         </select>
       </td>
+      <td className="p-0.5" />
       <td className="whitespace-nowrap p-0.5 pr-2 text-right">
         {busy && <span className="text-xs text-[var(--muted,#6f7c79)]">Dodajam …</span>}
         {error && <span className="text-xs text-[var(--danger,#b3261e)]">{error}</span>}

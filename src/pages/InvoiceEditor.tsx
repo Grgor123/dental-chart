@@ -20,6 +20,10 @@ import { fiscalizeInvoice, useFurs } from '../hooks/useFurs';
 import { formatIban, paymentReference, upnQrPayload } from '../../supabase/functions/_shared/invoice/payment';
 import { InvoiceEmailDialog } from '../components/invoices/InvoiceEmailDialog';
 import { useEmailTemplates } from '../hooks/useEmailTemplates';
+import { useZzzsSetting } from '../hooks/useZzzs';
+import { useChartBilling } from '../hooks/useChartBilling';
+import { ChartBillingDialog, type ChartBillingPick } from '../components/invoices/ChartBillingDialog';
+import { effectiveChartLink, workItemKey } from '../lib/chartBilling';
 import { fillTemplateText } from '../../supabase/functions/_shared/email/templates';
 import { TEMPLATE_DEFS, type TemplateKey, type TemplateVars } from '../../supabase/functions/_shared/email/templateDefs';
 import { invoiceHtmlToPdfBase64 } from '../lib/invoicePdf';
@@ -111,7 +115,17 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [reloadSettings]);
-  const { services } = usePriceList();
+  const { services, links, setServiceLink } = usePriceList();
+  // "Dodaj iz karte" (migration 033): chart work → performed services → lines.
+  const zzzsSetting = useZzzsSetting();
+  const [chartOpen, setChartOpen] = useState(false);
+  const chart = useChartBilling(invoice?.patientId ?? null, chartOpen);
+  // Perio is billed by extent (how many teeth), so its price is checked by hand.
+  const perioServiceIds = useMemo(
+    () =>
+      new Set(services.filter((s) => effectiveChartLink(s.id, s.zzzsCode, links, zzzsSetting.enabled)?.trigger === 'perio').map((s) => s.id)),
+    [services, links, zzzsSetting.enabled]
+  );
 
   const [fields, setFields] = useState<DraftFields>({ serviceDate: todayIso(), paymentMethod: 'cash', note: '', payer: EMPTY_PAYER });
   const [lines, setLines] = useState<InvoiceLineDraft[]>([]);
@@ -371,6 +385,39 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         discountPercent: 0,
       },
     ]);
+  }
+
+  async function addFromChart(picks: ChartBillingPick[]): Promise<{ error?: string }> {
+    const result = await chart.recordWork(
+      picks.map((p) => ({ item: p.item, serviceId: p.service.id, performedOn: p.performedOn }))
+    );
+    if (result.error || !result.ids) return { error: result.error ?? 'Shranjevanje ni uspelo.' };
+    const ids = result.ids;
+    // Picks made from the whole price list, saved as the Cenik link.
+    const saved = new Set<string>();
+    for (const p of picks) {
+      if (!p.saveLink || saved.has(p.service.id)) continue;
+      saved.add(p.service.id);
+      const linkResult = await setServiceLink(p.service.id, { trigger: p.item.trigger, variant: p.item.variant }, zzzsSetting.enabled);
+      if (linkResult.error) return { error: `Povezave v ceniku ni bilo mogoče shraniti: ${linkResult.error}` };
+    }
+    setLines((prev) => [
+      ...prev,
+      ...picks.map((p) => ({
+        key: newLineKey(),
+        serviceId: p.service.id,
+        code: p.service.code,
+        name: p.service.name,
+        unit: p.service.unit,
+        vatRate: p.service.vatRate,
+        toothFdi: p.item.fdi,
+        quantity: 1,
+        unitPriceEur: p.service.priceEur,
+        discountPercent: 0,
+        performedServiceId: ids.get(workItemKey(p.item)) ?? null,
+      })),
+    ]);
+    return {};
   }
 
   // The email's text comes from the practice's "Račun" / "Dobropis" template
@@ -685,7 +732,12 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
                   isDraft ? (
                     <tr key={line.key} className="border-t border-[var(--line,#ccd6d4)]">
                       <td className="px-1.5 py-1 text-[var(--muted,#6f7c79)]">{line.code}</td>
-                      <td className="px-1.5 py-1">{line.name}</td>
+                      <td className="px-1.5 py-1">
+                        {line.name}
+                        {line.serviceId && perioServiceIds.has(line.serviceId) && (
+                          <span className="block text-xs text-[#6b4a00]">Cena je odvisna od obsega zdravljenja — preverite jo.</span>
+                        )}
+                      </td>
                       <td className="p-0.5">
                         <input
                           value={line.toothFdi ?? ''}
@@ -755,7 +807,21 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
                 {isDraft && (
                   <tr className="border-t border-[var(--line,#ccd6d4)]">
                     <td colSpan={9} className="p-0.5">
-                      <ServicePicker services={services} onPick={addService} />
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <ServicePicker services={services} onPick={addService} />
+                        </div>
+                        {invoice.patientId && (
+                          <button
+                            type="button"
+                            onClick={() => setChartOpen(true)}
+                            title="Dodaj storitve, ki so bile opravljene na zobni karti"
+                            className="whitespace-nowrap rounded border border-[var(--accent,#2e6e62)] px-3 py-1.5 text-sm font-medium text-[var(--accent,#2e6e62)] hover:bg-[#eaf4f1]"
+                          >
+                            Dodaj iz karte
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -884,6 +950,22 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         </div>
       </div>
 
+      {chartOpen && invoice && (
+        <ChartBillingDialog
+          // Remount once loaded, so the ticks start from the loaded data.
+          key={chart.loading ? 'loading' : 'ready'}
+          invoiceId={invoice.id}
+          visits={chart.visits}
+          loading={chart.loading}
+          error={chart.error}
+          services={services}
+          links={links}
+          zzzsOn={zzzsSetting.enabled}
+          onThisInvoice={new Set(lines.map((l) => l.performedServiceId).filter((id): id is string => !!id))}
+          onAdd={addFromChart}
+          onClose={() => setChartOpen(false)}
+        />
+      )}
       {emailOpen && !isDraft && emailTpl && (
         <InvoiceEmailDialog
           initialRecipients={invoice.patientEmail ? [invoice.patientEmail.toLowerCase()] : []}

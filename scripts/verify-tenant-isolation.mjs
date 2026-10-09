@@ -298,6 +298,44 @@ async function main() {
     check("account 2 cannot read account 1's FURS premise", !leakedPremises || leakedPremises.length === 0, `${leakedPremises?.length ?? 0} row(s) visible`);
   }
 
+  // 4i. ZZZS + chart billing (033_zzzs_and_chart_billing.sql) — the ZZZS
+  // catalogue is read-only for every login; account 2 can't link a chart mark
+  // to account 1's service, can't record a performed service for account 1's
+  // patient, and can't read account 1's links or performed services.
+  const { error: zzzsWriteError } = await client2.from('zzzs_services').insert({
+    list_code: '15.119', list_name: 'x', code: '99999', short_name: 'Spoofed', valid_from: '2026-01-01', edition_year: 2026, edition_no: 1,
+  });
+  check('no browser can write the ZZZS catalogue (loader only)', !!zzzsWriteError, zzzsWriteError ? zzzsWriteError.message : 'insert unexpectedly succeeded');
+  const { data: account1Service } = await client1.from('services').select('id').limit(1).maybeSingle();
+  if (account1PracticeId && account1Service) {
+    const { error: foreignLinkError } = await client2
+      .from('service_chart_links')
+      .insert({ practice_id: account1PracticeId, trigger_key: 'extraction', service_id: account1Service.id });
+    check(
+      "account 2 cannot link a chart mark under account 1's practice_id",
+      !!foreignLinkError,
+      foreignLinkError ? foreignLinkError.message : 'insert unexpectedly succeeded'
+    );
+    const { data: leakedLinks } = await client2.from('service_chart_links').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's chart links", !leakedLinks || leakedLinks.length === 0, `${leakedLinks?.length ?? 0} row(s) visible`);
+  }
+  if (foreignPatientId) {
+    const { data: account1Visit } = await client1.from('visits').select('id').eq('patient_id', foreignPatientId).limit(1).maybeSingle();
+    if (account1Visit) {
+      const { error: foreignPerformedError } = await client2.from('performed_services').insert({
+        patient_id: foreignPatientId, visit_id: account1Visit.id, tooth_fdi: '36', trigger_key: 'extraction',
+        performed_on: new Date().toISOString().slice(0, 10),
+      });
+      check(
+        "account 2 cannot record a performed service for account 1's patient",
+        !!foreignPerformedError,
+        foreignPerformedError ? foreignPerformedError.message : 'insert unexpectedly succeeded'
+      );
+    }
+    const { data: leakedPerformed } = await client2.from('performed_services').select('id').eq('patient_id', foreignPatientId);
+    check("account 2 cannot read account 1's performed services", !leakedPerformed || leakedPerformed.length === 0, `${leakedPerformed?.length ?? 0} row(s) visible`);
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

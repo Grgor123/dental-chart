@@ -62,6 +62,8 @@ export interface InvoiceLineDraft {
   quantity: number;
   unitPriceEur: number;
   discountPercent: number;
+  /** The performed service this line bills (migration 033, "Dodaj iz karte"). */
+  performedServiceId?: string | null;
 }
 
 export interface InvoiceDetail extends InvoiceSummary {
@@ -309,6 +311,7 @@ export function useInvoice(invoiceId: string) {
         quantity: Number(l.quantity),
         unitPriceEur: Number(l.unit_price_eur),
         discountPercent: Number(l.discount_percent),
+        performedServiceId: (l.performed_service_id as string | null) ?? null,
       }));
     const credit = (creditNotes.data ?? [])[0] as { id: string; number: string | null } | undefined;
     setInvoice({
@@ -393,6 +396,7 @@ export function useInvoice(invoiceId: string) {
             quantity: l.quantity,
             unit_price_eur: l.unitPriceEur,
             discount_percent: l.discountPercent,
+            performed_service_id: l.performedServiceId ?? null,
           }))
         );
         if (insertError) return { error: friendlyError(insertError.message) };

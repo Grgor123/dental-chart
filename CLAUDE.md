@@ -136,9 +136,14 @@ src/
                                 # registration — see "FURS" below
       UserProfileSection.tsx   # Nastavitve → Moj profil: own name + tax
                                 # number (FURS operator) — see "FURS" below
+      ZzzsPickerDialog.tsx     # Cenik → "+ Iz šifranta ZZZS" — see "ZZZS
+                                # šifrant" below
+      PriceListImportDialog.tsx # Cenik → "Uvozi cenik" (CSV/.xlsx, preview)
     invoices/
       InvoiceEmailDialog.tsx   # "Pošlji po e-pošti" popup (recipients,
                                 # subject, message + attachment preview)
+      ChartBillingDialog.tsx   # Invoice draft → "Dodaj iz karte" — see
+                                # "ZZZS šifrant" below
   data/
     toothProfiles.ts           # Per-FDI silhouette/detail paths + on-screen
                                 # sizing (real mm, not photo pixels — see
@@ -201,6 +206,10 @@ src/
                                 # submitted + any open link, send/review/
                                 # contact-correction actions — see "Health
                                 # questionnaire" below
+    useZzzs.ts                  # "Uporabljaj šifrant ZZZS" switch + the
+                                # shared ZZZS catalogue
+    useChartBilling.ts          # Chart work per visit → performed_services,
+                                # billed state — see "ZZZS šifrant" below
     useFurs.ts                  # FURS on the browser side: own profile,
                                 # premise registration, fiscalizeInvoice() —
                                 # see "FURS" below
@@ -228,6 +237,11 @@ src/
     invoicePdf.ts               # Invoice → PDF in the browser (html2canvas +
                                 # jsPDF) for emailing
     upnQr.ts                    # UPN QR payload → inline SVG (qrcode)
+    chartBilling.ts             # Billable chart marks, ZZZS code → mark
+                                # auto-links, detectChartWork() (what changed
+                                # in a visit) — see "ZZZS šifrant" below
+    spreadsheet.ts              # CSV + .xlsx reader (no library), price-list
+                                # CSV template
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -462,14 +476,15 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`032_furs_fiscalization.sql` — all confirmed run (016–019 are the
+`033_zzzs_and_chart_billing.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Invoicing" below; 030–031 the patient's message history, see
-"Communication history" below). `supabase/schema.sql`
+"Communication history" below; 032 FURS; 033 the ZZZS šifrant and
+chart → invoice, see "ZZZS šifrant" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(032 included; 032 is FURS, see "FURS davčno potrjevanje" below), so a brand-new project only ever needs that one file.
+(033 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3333,10 +3348,8 @@ fed from one another in any way; don't conflate them.
   (per its own comments) with `appointments`/`therapists` cross-account
   checks symmetric to the existing `patients`/`visits`/`tooth_records`
   ones — a second account can't spoof its `practice_id` onto either table
-  and can't see the first account's rows. Not re-run and reconfirmed as
-  part of this specific pass (this file only documents what's been
-  directly verified — don't assume a fresh pass count without actually
-  running it).
+  and can't see the first account's rows. Confirmed in the full run of
+  2026-10-09 (33/33 checks passed, every section through 4i).
 
 ---
 
@@ -3948,7 +3961,7 @@ Slovenia's form) as an online form a patient fills in before their visit.
   project) covers only appointment communication, not marketing — checked.
   Nothing sends marketing yet.
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4f
-  (spoof insert + read isolation) — added, not yet re-run.
+  (spoof insert + read isolation) — passed in the 2026-10-09 run (33/33).
 
 **Deploy**: `health-questionnaire --no-verify-jwt`,
 `send-health-questionnaire`, `send-appointment-confirmation-email`,
@@ -4162,7 +4175,7 @@ environment (2026-10-08)** — premise registered, cash invoice confirmed
 - **Printouts**: A4 and roll show ZOI, EOR (or "še ni potrjen") and the
   FURS QR code (`fursQrSvg`, `src/lib/upnQr.ts`) in the `fiscal` block.
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4h
-  (profile/premise spoofing, premise read isolation) — added, not yet run.
+  (profile/premise spoofing, premise read isolation) — passed in the 2026-10-09 run (33/33).
 - **Not done**: verifying FURS's own JWS signature on answers (they arrive
   over the mutually authenticated connection); an invoice list badge for
   FURS status; closing a premise (`ClosingTag`).
@@ -4177,6 +4190,91 @@ EOR.
 
 **Deploy**: `fiscalize-invoice`, `furs-register-premise` (default JWT
 verification ON — the cron job sends the service-role key).
+
+### ZZZS šifrant, price-list import and chart → invoice ("Dodaj iz karte")
+
+**Status: built and confirmed by Gregor on localhost (2026-10-09)** —
+migration 033 run, ZZZS edition 18/2026 loaded. Built for **private
+practices first** (they pay for the software themselves, so they're the
+demanding customers); concession practices (ZZZS contract) are a real later
+market, so the data model leaves room for ZZZS billing without rework —
+nothing here bills ZZZS.
+
+- **ZZZS catalogue** (`zzzs_services`, `zzzs_editions`): shared by every
+  practice, read-only to the app (select policy only). The official dental
+  lists 15.39, 15.108, 15.108a, 15.112–15.116, 15.119–15.122, 15.133, 15.138
+  — 1,424 rows, 441 distinct codes (a code is in several lists), with short/
+  long name, unit and points (points matter only for a future concession
+  module). Rows are never deleted: a dropped or changed code gets `valid_to`
+  (+ a new row when changed).
+- **Loading it: `scripts/sync-zzzs.mjs`, run by hand** (Gregor's choice;
+  a weekly GitHub Action was offered and deferred — it would put the
+  service-role key into GitHub secrets). Not an Edge Function: ZZZS publishes
+  every code list as one ~60 MB XML (4 MB zip), too much CPU for a function.
+  The script reads the editions list (`partner.zzzs.si/sifranti/?ajax=1&act=get-search-sifranti`),
+  downloads the newest edition's ZIP, keeps the dental lists (XML lists `15`
+  services, `S1` list names, `S3` membership, `T2` points, `42` units) and
+  skips an edition already loaded. Usage: set `$env:SUPABASE_SERVICE_ROLE_KEY`
+  in the terminal (never in chat), `node scripts/sync-zzzs.mjs`
+  (`--dry-run` needs no key, `--force` re-runs). ~2 MB of database.
+- **Nastavitve → Cenik**:
+  - **"Uporabljaj šifrant ZZZS"** switch (`invoice_settings.use_zzzs_sifrant`,
+    **off by default**, Gregor's choice). On: a ZZZS column (code per
+    service, checked against the catalogue, ⚠ when withdrawn) and
+    **"+ Iz šifranta ZZZS"** (search, list filter, multi-select, category).
+    Added services get the ZZZS code as their own šifra (unless taken), unit
+    "kos" (ZZZS's unit is "TOČKA", meaningless on an invoice) and **0 €** —
+    the row is highlighted amber, with a count above the table, until priced.
+    Off: tools hidden, codes kept.
+  - **"Uvozi cenik"** (either way): CSV (`;`/`,`/tab, UTF-8 ± BOM) or `.xlsx`
+    (own small reader — ZIP + `DecompressionStream`; the npm SheetJS package
+    is outdated with known vulnerabilities). Template download (semicolons,
+    BOM): `sifra; naziv; cena; ddv; em; kategorija; zzzs_sifra`. Preview
+    (new / update / error per row) before saving; matched by šifra, else by
+    name; missing categories created; archived matches restored; errors
+    skipped; **nothing deleted**.
+  - **"Iz karte"** column: which chart mark a service is billed for
+    (`service_chart_links`). With the switch on, a service whose ZZZS code
+    is in `ZZZS_AUTO` (`lib/chartBilling.ts` — fillings 52320–52327 by
+    surface count, extractions, root canals, crowns, overlay, sealant,
+    pontics, posts, prostheses, perio) is linked automatically (shown in
+    italics); a hand-set link overrides it, and setting "—" stores an
+    `excluded` row so the auto link isn't re-derived. Implants have no ZZZS
+    code — linked by hand.
+- **Invoice draft → "Dodaj iz karte"** (patient invoices only):
+  - `detectChartWork()` compares each visit's `tooth_records` row with the
+    tooth's latest row from an earlier visit — only **changes** count: surfaces
+    newly `caries_treated` (filling, variant 1 / 2 / 3+ surfaces), whole-tooth
+    `extracted`/`crown`/`overlay`/`sealant`/`bridge_pontic`/`prosthesis`/
+    `implant`, endo → `done`, post added, and one whole-mouth **perio** item
+    per visit with new pocket/gum values (count of teeth measured). Grey
+    "existing" statuses never appear. Visits: the open one + closed ones
+    from the last 60 days.
+  - **Pre-ticked** when certain: fillings, a planned stage turned done, or a
+    change on a tooth already charted in an earlier visit. A status on a
+    tooth's **first** record may just be its history being charted — shown
+    unticked with "Morda le vpis obstoječega stanja — preverite".
+  - Service per item: only the services linked to that mark; a filling
+    resolves by its surface count; one linked service is preselected; several
+    → a pick, never a silent default. **No linked service → the whole price
+    list**, plus "Poveži v ceniku" (ticked) which saves the pick as the link
+    — added after Gregor found the first version unusable with an unlinked
+    Cenik.
+  - Confirming writes `performed_services` (one per visit + tooth + mark;
+    `payer` always `'patient'` — `'zzzs'` reserved) and adds lines with the
+    tooth, the Cenik price and `invoice_lines.performed_service_id`. An item
+    on a non-cancelled invoice shows "že zaračunano (number)", on this draft
+    "že na tem računu"; storno frees it (`cancel_invoice()` copies the link
+    to the credit note, credit notes don't count). Perio lines show "Cena je
+    odvisna od obsega zdravljenja — preverite jo."
+- **Reserved for concession practices** (not read anywhere yet):
+  `invoice_settings.zzzs_contract`, `performed_services.payer = 'zzzs'`,
+  `zzzs_services.points`. Still to build for them: the monthly electronic
+  statement to ZZZS, the insurance check (health card / "on-line" service),
+  MKB-10 diagnoses, ZZZS billing rules, contract volume.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4i
+  (catalogue not writable; links/performed services not spoofable or
+  readable across practices) — passed in the 2026-10-09 run (33/33).
 
 ---
 
@@ -4633,6 +4731,11 @@ next:
    — the folder-tab-onto-a-card look, extracted so both pages stay pixel
    identical.
 
+   **Chart → invoice: built 2026-10-09 — see "ZZZS šifrant, price-list import
+   and chart → invoice". The design notes below are the original record; where
+   they differ, that section wins** (e.g. root-canal count and extraction type
+   are picked from the linked services; `procedure_service_links` became
+   `service_chart_links` + `performed_services`). Original note:
    **Chart → invoice design, recorded 2026-09-25, not built** (this needs
    invoicing to exist before any of it can be built, so nothing here is
    scheduled yet — it's notes for whoever builds invoicing next). The user
@@ -4707,7 +4810,13 @@ next:
 
 ---
 
-*Last updated: 2026-10-08 (FURS davčno potrjevanje built and confirmed on
+*Last updated: 2026-10-09 (ZZZS šifrant + chart → invoice built and
+confirmed on localhost — migration 033, ZZZS catalogue loaded by
+`scripts/sync-zzzs.mjs`, Cenik switch / "+ Iz šifranta ZZZS" / CSV-Excel
+import / "Iz karte" links, invoice "Dodaj iz karte" with performed services;
+see "ZZZS šifrant, price-list import and chart → invoice".)*
+
+*Previous entry: 2026-10-08 (FURS davčno potrjevanje built and confirmed on
 the FURS test environment — mutual TLS from Supabase Edge Functions,
 premise registration, ZOI/EOR for cash/card invoices and credit notes,
 retry cron, ZOI/EOR/QR on printouts, operator tax number per user in "Moj
