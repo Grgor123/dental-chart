@@ -4,12 +4,19 @@ import { usePracticeContext } from '../contexts/PracticeContext';
 import { usePatients } from '../hooks/usePatients';
 import { INVOICE_STATE_META, invoiceState, useInvoiceList, type InvoiceState, type InvoiceSummary } from '../hooks/useInvoices';
 import { PAYMENT_METHOD_LABELS, formatDate, formatDateTime, formatEur } from '../../supabase/functions/_shared/invoice/render';
+import { useUnbilledWork } from '../hooks/useChartBilling';
+import { chartLinkLabel } from '../lib/chartBilling';
 
 // "Računi" — every invoice of the practice (supabase/migrations/
 // 023_add_invoicing.sql): filter by date and state, search by patient or
 // number, the sum of what's shown, and a click opens it in InvoiceEditor.
 // "Nov račun" starts a draft here too: for a patient picked from the list, or
 // for a payer who isn't a patient (typed in on the draft — migration 025).
+// "Nepotrjeni pri FURS" lists cash/card invoices FURS hasn't confirmed yet
+// (they also carry an amber/red pill — confirmed ones carry none, Gregor's
+// choice). "Neobračunano" swaps the table for chart work from recent visits
+// that isn't on any invoice yet (useUnbilledWork — the same detection as the
+// invoice's "Dodaj iz karte").
 
 interface InvoicesProps {
   onOpenInvoice: (invoiceId: string) => void;
@@ -21,14 +28,23 @@ interface InvoicesProps {
   onNavigateInvoices: () => void;
 }
 
-const STATE_FILTERS: { key: 'all' | InvoiceState; label: string }[] = [
+type FilterKey = 'all' | InvoiceState | 'furs' | 'unbilled';
+
+const STATE_FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'Vsi' },
   { key: 'unpaid', label: 'Neplačani' },
   { key: 'paid', label: 'Plačani' },
   { key: 'draft', label: 'Osnutki' },
   { key: 'cancelled', label: 'Stornirani' },
   { key: 'credit_note', label: 'Dobropisi' },
+  { key: 'furs', label: 'Nepotrjeni pri FURS' },
+  { key: 'unbilled', label: 'Neobračunano' },
 ];
+
+function formatVisitDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${Number(d)}. ${Number(m)}. ${y}`;
+}
 
 /** The date an invoice "belongs to": issue date, or creation date for a draft (local YYYY-MM-DD). */
 function invoiceDay(inv: InvoiceSummary): string {
@@ -52,6 +68,17 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
       .slice(0, 8);
   }, [patients, patientQuery]);
 
+  // "Zaračunaj" in Neobračunano: the patient's open draft if there is one
+  // (the work is usually meant for it), otherwise a new one.
+  async function billPatient(patientId: string) {
+    const draft = invoices.find((inv) => inv.patientId === patientId && inv.status === 'draft' && inv.kind === 'invoice');
+    if (draft) {
+      onOpenInvoice(draft.id);
+      return;
+    }
+    await startInvoice(patientId);
+  }
+
   async function startInvoice(patientId: string | null) {
     setNewError(null);
     const result = await createDraft(patientId, null);
@@ -61,7 +88,9 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
     }
     onOpenInvoice(result.id);
   }
-  const [stateFilter, setStateFilter] = useState<'all' | InvoiceState>('all');
+  const [stateFilter, setStateFilter] = useState<FilterKey>('all');
+  const unbilled = useUnbilledWork(stateFilter === 'unbilled');
+  const patientNameById = useMemo(() => new Map(patients.map((p) => [p.patientId, `${p.firstName} ${p.lastName}`])), [patients]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [query, setQuery] = useState('');
@@ -69,7 +98,9 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return invoices.filter((inv) => {
-      if (stateFilter !== 'all' && invoiceState(inv) !== stateFilter) return false;
+      if (stateFilter === 'furs') {
+        if (inv.fursStatus !== 'pending' && inv.fursStatus !== 'failed') return false;
+      } else if (stateFilter !== 'all' && stateFilter !== 'unbilled' && invoiceState(inv) !== stateFilter) return false;
       const day = invoiceDay(inv);
       if (from && day < from) return false;
       if (to && day > to) return false;
@@ -80,6 +111,16 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
 
   // Drafts aren't invoices yet, so they never count towards the sum; credit
   // notes are negative, so a cancelled invoice and its storno net to zero.
+  const shownUnbilled = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return unbilled.visits.filter((v) => {
+      if (from && v.visitDate < from) return false;
+      if (to && v.visitDate > to) return false;
+      if (q && !(patientNameById.get(v.patientId) ?? '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [unbilled.visits, from, to, query, patientNameById]);
+
   const issuedSum = shown.filter((inv) => inv.status === 'issued').reduce((sum, inv) => sum + inv.totalEur, 0);
 
   return (
@@ -185,6 +226,66 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
           />
         </div>
 
+        {stateFilter === 'unbilled' ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-[var(--muted,#6f7c79)]">
+              Storitve, ki so bile na zobni karti v zadnjih 60 dneh nedvomno opravljene in še niso na nobenem računu (tudi ne na osnutku).
+              Postavke, ki so morda le vpis obstoječega stanja, tu niso naštete — preverite jih z »Dodaj iz karte« na računu.
+            </p>
+            <div className="overflow-x-auto rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)]">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-[var(--ink-soft,#45524f)]">
+                    <th className="px-3 py-2 font-semibold">Pacient</th>
+                    <th className="px-3 py-2 font-semibold">Obisk</th>
+                    <th className="px-3 py-2 font-semibold">Opravljeno</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {unbilled.loading && (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-4 text-[var(--ink-soft,#45524f)]">Nalaganje…</td>
+                    </tr>
+                  )}
+                  {unbilled.error && (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-4 text-[var(--danger,#b3261e)]">{unbilled.error}</td>
+                    </tr>
+                  )}
+                  {!unbilled.loading && !unbilled.error && shownUnbilled.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-4 italic text-[var(--muted,#6f7c79)]">Vse opravljeno je zaračunano.</td>
+                    </tr>
+                  )}
+                  {!unbilled.loading &&
+                    shownUnbilled.map((v) => (
+                      <tr key={v.visitId} className="border-t border-[var(--line,#ccd6d4)]">
+                        <td className="px-3 py-2 font-medium">{patientNameById.get(v.patientId) ?? '—'}</td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          {formatVisitDate(v.visitDate)}
+                          {!v.visitClosed && <span className="text-xs text-[var(--muted,#6f7c79)]"> (odprt)</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {v.items.map((item) => `${item.fdi ? `${item.fdi} ` : ''}${chartLinkLabel(item)}`).join(' · ')}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => billPatient(v.patientId)}
+                            className="whitespace-nowrap rounded border border-[var(--accent,#2e6e62)] px-3 py-1 text-sm font-medium text-[var(--accent,#2e6e62)] hover:bg-[#eaf4f1]"
+                          >
+                            Zaračunaj
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            {newError && <span className="text-xs text-[var(--danger,#b3261e)]">{newError}</span>}
+          </div>
+        ) : (
         <div className="overflow-x-auto rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)]">
           <table className="w-full text-sm">
             <thead>
@@ -230,6 +331,16 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
                       <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${INVOICE_STATE_META[state].className}`}>
                         {INVOICE_STATE_META[state].label}
                       </span>
+                      {inv.fursStatus === 'pending' && (
+                        <span className="ml-1.5 rounded-full bg-[#fff6e5] px-2 py-0.5 text-xs font-semibold text-[#6b4a00]" title="Čaka na potrditev FURS — pošlje se samodejno.">
+                          FURS čaka
+                        </span>
+                      )}
+                      {inv.fursStatus === 'failed' && (
+                        <span className="ml-1.5 rounded-full bg-[#fdecea] px-2 py-0.5 text-xs font-semibold text-[#b3261e]" title="FURS je račun zavrnil — odprite ga za podrobnosti.">
+                          FURS napaka
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -248,6 +359,7 @@ export function Invoices({ onOpenInvoice, onBack, onSignOut, onNavigateCalendar,
             )}
           </table>
         </div>
+        )}
       </div>
     </>
   );

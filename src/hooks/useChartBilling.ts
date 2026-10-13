@@ -37,6 +37,92 @@ export interface WorkToRecord {
 
 type Row = Record<string, unknown>;
 
+/** Chart work of several patients (recent visits only — see LOOKBACK_DAYS),
+ *  each item with its performed_services row and billed state. Shared by
+ *  "Dodaj iz karte" (one patient) and the Računi page's "Neobračunano"
+ *  overview (every patient with a recent visit), so the two can't disagree. */
+export async function loadChartWork(patientIds: string[]): Promise<{ error?: string; byPatient?: Map<string, ChartBillingVisit[]> }> {
+  const byPatient = new Map<string, ChartBillingVisit[]>();
+  if (patientIds.length === 0) return { byPatient };
+  const [recordsResult, performedResult] = await Promise.all([
+    supabase
+      .from('tooth_records')
+      .select('tooth_id, surfaces, endo, post, pockets_buccal, pockets_lingual, gum_margin_buccal, visit_id, visits!inner(patient_id, date, created_at, closed_at)')
+      .in('visits.patient_id', patientIds),
+    supabase.from('performed_services').select('id, patient_id, visit_id, tooth_fdi, trigger_key, service_id').in('patient_id', patientIds),
+  ]);
+  const failure = recordsResult.error ?? performedResult.error;
+  if (failure) return { error: failure.message };
+
+  const rowsByPatient = new Map<string, ChartRecordRow[]>();
+  for (const r of (recordsResult.data ?? []) as Row[]) {
+    const visit = r.visits as { patient_id: string; date: string; created_at: string; closed_at: string | null };
+    const row: ChartRecordRow = {
+      visitId: r.visit_id as string,
+      visitDate: visit.date,
+      visitCreatedAt: visit.created_at,
+      visitClosed: !!visit.closed_at,
+      fdi: r.tooth_id as string,
+      surfaces: (r.surfaces as ChartRecordRow['surfaces'] | null) ?? {},
+      endo: (r.endo as ChartRecordRow['endo']) ?? null,
+      post: !!r.post,
+      pocketsBuccal: (r.pockets_buccal as (number | null)[] | null) ?? null,
+      pocketsLingual: (r.pockets_lingual as (number | null)[] | null) ?? null,
+      gumMargin: (r.gum_margin_buccal as (number | null)[] | null) ?? null,
+    };
+    rowsByPatient.set(visit.patient_id, [...(rowsByPatient.get(visit.patient_id) ?? []), row]);
+  }
+
+  const performed = (performedResult.data ?? []) as Row[];
+  const ids = performed.map((p) => p.id as string);
+  const billed = new Map<string, { invoiceId: string; number: string | null }>();
+  if (ids.length > 0) {
+    const { data: lines, error: linesError } = await supabase
+      .from('invoice_lines')
+      .select('performed_service_id, invoices!inner(id, number, kind, cancelled_at)')
+      .in('performed_service_id', ids)
+      .eq('invoices.kind', 'invoice')
+      .is('invoices.cancelled_at', null);
+    if (linesError) return { error: linesError.message };
+    for (const l of (lines ?? []) as Row[]) {
+      const inv = l.invoices as { id: string; number: string | null };
+      billed.set(l.performed_service_id as string, { invoiceId: inv.id, number: inv.number });
+    }
+  }
+  const performedByKey = new Map<string, PerformedServiceRef>(
+    performed.map((p) => [
+      workItemKey({ visitId: p.visit_id as string, fdi: (p.tooth_fdi as string | null) ?? null, trigger: p.trigger_key as ChartTrigger }),
+      { id: p.id as string, serviceId: (p.service_id as string | null) ?? null, billedOn: billed.get(p.id as string) ?? null },
+    ])
+  );
+
+  const cutoffIso = lookbackCutoffIso();
+  for (const [patientId, rows] of rowsByPatient) {
+    byPatient.set(
+      patientId,
+      detectChartWork(rows)
+        .filter((v) => !v.visitClosed || v.visitDate >= cutoffIso)
+        .map((v) => ({
+          ...v,
+          performed: new Map(
+            v.items.flatMap((item) => {
+              const ref = performedByKey.get(workItemKey(item));
+              return ref ? [[workItemKey(item), ref] as const] : [];
+            })
+          ),
+        }))
+    );
+  }
+  return { byPatient };
+}
+
+/** First day (ISO) a closed visit may have to still be offered for billing. */
+export function lookbackCutoffIso(): string {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
+  return cutoff.toLocaleDateString('sv-SE');
+}
+
 export function useChartBilling(patientId: string | null, enabled: boolean) {
   const [visits, setVisits] = useState<ChartBillingVisit[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,79 +131,13 @@ export function useChartBilling(patientId: string | null, enabled: boolean) {
   const reload = useCallback(async () => {
     if (!patientId) return;
     setLoading(true);
-    const [recordsResult, performedResult] = await Promise.all([
-      supabase
-        .from('tooth_records')
-        .select('tooth_id, surfaces, endo, post, pockets_buccal, pockets_lingual, gum_margin_buccal, visit_id, visits!inner(patient_id, date, created_at, closed_at)')
-        .eq('visits.patient_id', patientId),
-      supabase.from('performed_services').select('id, visit_id, tooth_fdi, trigger_key, service_id').eq('patient_id', patientId),
-    ]);
-    const failure = recordsResult.error ?? performedResult.error;
-    if (failure) {
-      setError(failure.message);
+    const result = await loadChartWork([patientId]);
+    if (result.error) {
+      setError(result.error);
       setLoading(false);
       return;
     }
-
-    const rows: ChartRecordRow[] = (recordsResult.data ?? []).map((r: Row) => {
-      const visit = r.visits as { date: string; created_at: string; closed_at: string | null };
-      return {
-        visitId: r.visit_id as string,
-        visitDate: visit.date,
-        visitCreatedAt: visit.created_at,
-        visitClosed: !!visit.closed_at,
-        fdi: r.tooth_id as string,
-        surfaces: (r.surfaces as ChartRecordRow['surfaces'] | null) ?? {},
-        endo: (r.endo as ChartRecordRow['endo']) ?? null,
-        post: !!r.post,
-        pocketsBuccal: (r.pockets_buccal as (number | null)[] | null) ?? null,
-        pocketsLingual: (r.pockets_lingual as (number | null)[] | null) ?? null,
-        gumMargin: (r.gum_margin_buccal as (number | null)[] | null) ?? null,
-      };
-    });
-
-    const performed = (performedResult.data ?? []) as Row[];
-    const ids = performed.map((p) => p.id as string);
-    const billed = new Map<string, { invoiceId: string; number: string | null }>();
-    if (ids.length > 0) {
-      const { data: lines, error: linesError } = await supabase
-        .from('invoice_lines')
-        .select('performed_service_id, invoices!inner(id, number, kind, cancelled_at)')
-        .in('performed_service_id', ids)
-        .eq('invoices.kind', 'invoice')
-        .is('invoices.cancelled_at', null);
-      if (linesError) {
-        setError(linesError.message);
-        setLoading(false);
-        return;
-      }
-      for (const l of (lines ?? []) as Row[]) {
-        const inv = l.invoices as { id: string; number: string | null };
-        billed.set(l.performed_service_id as string, { invoiceId: inv.id, number: inv.number });
-      }
-    }
-    const performedByKey = new Map<string, PerformedServiceRef>(
-      performed.map((p) => [
-        workItemKey({ visitId: p.visit_id as string, fdi: (p.tooth_fdi as string | null) ?? null, trigger: p.trigger_key as ChartTrigger }),
-        { id: p.id as string, serviceId: (p.service_id as string | null) ?? null, billedOn: billed.get(p.id as string) ?? null },
-      ])
-    );
-
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
-    const cutoffIso = cutoff.toLocaleDateString('sv-SE');
-    const result = detectChartWork(rows)
-      .filter((v) => !v.visitClosed || v.visitDate >= cutoffIso)
-      .map((v) => ({
-        ...v,
-        performed: new Map(
-          v.items.flatMap((item) => {
-            const ref = performedByKey.get(workItemKey(item));
-            return ref ? [[workItemKey(item), ref] as const] : [];
-          })
-        ),
-      }));
-    setVisits(result);
+    setVisits(result.byPatient?.get(patientId) ?? []);
     setError(null);
     setLoading(false);
   }, [patientId]);
@@ -175,4 +195,59 @@ export function useChartBilling(patientId: string | null, enabled: boolean) {
   );
 
   return { visits, loading, error, reload, recordWork };
+}
+
+export interface UnbilledVisit {
+  patientId: string;
+  visitId: string;
+  visitDate: string;
+  visitClosed: boolean;
+  /** Clearly done (pre-ticked in "Dodaj iz karte") and not on any invoice. */
+  items: ChartWorkItem[];
+}
+
+/** Računi → "Neobračunano": every patient's recent chart work that is clearly
+ *  done and not on any invoice (draft or issued) yet, newest visit first. */
+export function useUnbilledWork(enabled: boolean) {
+  const [visits, setVisits] = useState<UnbilledVisit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    // Patients with a visit inside the look-back window, or one still open.
+    const { data: recent, error: visitsError } = await supabase
+      .from('visits')
+      .select('patient_id')
+      .or(`date.gte.${lookbackCutoffIso()},closed_at.is.null`);
+    if (visitsError) {
+      setError(visitsError.message);
+      setLoading(false);
+      return;
+    }
+    const patientIds = [...new Set((recent ?? []).map((v) => v.patient_id as string))];
+    const result = await loadChartWork(patientIds);
+    if (result.error || !result.byPatient) {
+      setError(result.error ?? 'Nalaganje ni uspelo.');
+      setLoading(false);
+      return;
+    }
+    const list: UnbilledVisit[] = [];
+    for (const [patientId, patientVisits] of result.byPatient) {
+      for (const v of patientVisits) {
+        const items = v.items.filter((item) => item.confident && !v.performed.get(workItemKey(item))?.billedOn);
+        if (items.length > 0) list.push({ patientId, visitId: v.visitId, visitDate: v.visitDate, visitClosed: v.visitClosed, items });
+      }
+    }
+    list.sort((a, b) => b.visitDate.localeCompare(a.visitDate));
+    setVisits(list);
+    setError(null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (enabled) reload();
+  }, [enabled, reload]);
+
+  return { visits, loading, error, reload };
 }

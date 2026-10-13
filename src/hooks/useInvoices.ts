@@ -40,6 +40,8 @@ export interface InvoiceSummary {
   cancelledAt: string | null;
   /** Stored total once issued; the sum of the lines while a draft. */
   totalEur: number;
+  /** FURS davčno potrjevanje (migration 032); null = not sent to FURS. */
+  fursStatus: 'pending' | 'confirmed' | 'failed' | null;
 }
 
 export function invoiceState(inv: Pick<InvoiceSummary, 'status' | 'kind' | 'paidAt' | 'cancelledAt'>): InvoiceState {
@@ -196,11 +198,12 @@ function rowToSummary(row: Row): InvoiceSummary {
     paidAt: (row.paid_at as string | null) ?? null,
     cancelledAt: (row.cancelled_at as string | null) ?? null,
     totalEur: row.total_eur != null ? Number(row.total_eur) : linesSum,
+    fursStatus: (row.furs_status as InvoiceSummary['fursStatus'] | null) ?? null,
   };
 }
 
 const SUMMARY_COLUMNS =
-  'id, patient_id, kind, status, number, issued_at, created_at, service_date, due_date, payment_method, paid_at, cancelled_at, total_eur, buyer, patients(first_name, last_name), invoice_lines(line_total_eur)';
+  'id, patient_id, kind, status, number, issued_at, created_at, service_date, due_date, payment_method, paid_at, cancelled_at, total_eur, furs_status, buyer, patients(first_name, last_name), invoice_lines(line_total_eur)';
 
 /** Invoices for one patient (Frame 5) or for the whole practice (Računi). */
 export function useInvoiceList(patientId?: string) {

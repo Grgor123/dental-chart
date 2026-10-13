@@ -4190,9 +4190,16 @@ environment (2026-10-08)** — premise registered, cash invoice confirmed
   FURS QR code (`fursQrSvg`, `src/lib/upnQr.ts`) in the `fiscal` block.
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4h
   (profile/premise spoofing, premise read isolation) — passed in the 2026-10-09 run (33/33).
+- **Računi list** (2026-10-13): an amber "FURS čaka" / red "FURS napaka"
+  pill next to the status of an invoice FURS hasn't confirmed (confirmed ones
+  carry nothing — Gregor's choice), plus a "Nepotrjeni pri FURS" filter.
+- **Seen live (2026-10-13)**: the FURS test server answered HTTP 500
+  (`INTERNAL_SERVER_ERROR` from its gateway) for a few hours; invoices stayed
+  `pending` and the 10-minute retry job confirmed them once it was back —
+  working as designed.
 - **Not done**: verifying FURS's own JWS signature on answers (they arrive
-  over the mutually authenticated connection); an invoice list badge for
-  FURS status; closing a premise (`ClosingTag`).
+  over the mutually authenticated connection); closing a premise
+  (`ClosingTag`).
 
 **Going to production** (each step deliberate, not yet done): the real FURS
 certificate (eDavki) converted the same way and set as the secrets above,
@@ -4281,6 +4288,13 @@ nothing here bills ZZZS.
     "že na tem računu"; storno frees it (`cancel_invoice()` copies the link
     to the credit note, credit notes don't count). Perio lines show "Cena je
     odvisna od obsega zdravljenja — preverite jo."
+- **Računi → "Neobračunano"** (2026-10-13, Gregor's choice: Računi page
+  only): chart work from patients with a visit in the last 60 days (or an
+  open one) that is clearly done (`confident`) and on no invoice yet, drafts
+  included — one row per visit, "Zaračunaj" opens the patient's draft or
+  creates one. Same detection as "Dodaj iz karte": both use
+  `loadChartWork(patientIds)` (`useChartBilling.ts`); `useUnbilledWork()`
+  builds the overview.
 - **Reserved for concession practices** (not read anywhere yet):
   `invoice_settings.zzzs_contract`, `performed_services.payer = 'zzzs'`,
   `zzzs_services.points`. Still to build for them: the monthly electronic
@@ -4883,6 +4897,8 @@ next:
    production (real certificate, premise, tax numbers), and per-practice
    certificates before a second practice uses it.
 6c. Invoicing follow-up noted, not built: printer assignment via QZ Tray.
+   (FURS status pills + "Nepotrjeni pri FURS" and the "Neobračunano" overview
+   on Računi are built — see "FURS" and "ZZZS šifrant … chart → invoice".)
    (Repeating line-table headings and a unit per service are built — see
    "Invoicing".)
 7. Everything past Phase 1: CRM features, appointment
