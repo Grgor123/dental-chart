@@ -139,6 +139,10 @@ src/
       ZzzsPickerDialog.tsx     # Cenik → "+ Iz šifranta ZZZS" — see "ZZZS
                                 # šifrant" below
       PriceListImportDialog.tsx # Cenik → "Uvozi cenik" (CSV/.xlsx, preview)
+    email/
+      AftercareTopicsSection.tsx # E-pošta → "Navodila po posegu": intro +
+                                # topics library in one card — see
+                                # "Aftercare instructions" below
     invoices/
       InvoiceEmailDialog.tsx   # "Pošlji po e-pošti" popup (recipients,
                                 # subject, message + attachment preview)
@@ -208,6 +212,8 @@ src/
                                 # questionnaire" below
     useZzzs.ts                  # "Uporabljaj šifrant ZZZS" switch + the
                                 # shared ZZZS catalogue
+    useAftercareTopics.ts       # Aftercare topics library + topic ↔ category
+                                # links — see "Aftercare instructions" below
     useChartBilling.ts          # Chart work per visit → performed_services,
                                 # billed state — see "ZZZS šifrant" below
     useFurs.ts                  # FURS on the browser side: own profile,
@@ -242,6 +248,7 @@ src/
                                 # in a visit) — see "ZZZS šifrant" below
     spreadsheet.ts              # CSV + .xlsx reader (no library), price-list
                                 # CSV template
+    aftercarePrint.ts           # "Natisni navodila" A4 printout
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -476,15 +483,16 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`033_zzzs_and_chart_billing.sql` — all confirmed run (016–019 are the
+`035_puljenje_category.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Invoicing" below; 030–031 the patient's message history, see
 "Communication history" below; 032 FURS; 033 the ZZZS šifrant and
-chart → invoice, see "ZZZS šifrant" below). `supabase/schema.sql`
+chart → invoice, see "ZZZS šifrant" below; 034–035 aftercare instructions,
+see "Aftercare instructions" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(033 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(035 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3645,7 +3653,9 @@ Until this, the two emails (confirmation, reminder) had hard-coded wording.
 Now **every automatic email is a template a practice can edit**, and there
 are seven automatic ones (the seventh, `health_questionnaire`, was added later — see
 "Health questionnaire" below), plus two sent by hand with an invoice
-(`invoice`, `credit_note` — see "Invoicing" below):
+(`invoice`, `credit_note` — see "Invoicing" below) and the aftercare
+instructions sent on issuing an invoice (`aftercare` — see "Aftercare
+instructions" below; edited in its own one-card tab, not this editor):
 
 | key | trigger | timing (editable per practice) |
 |---|---|---|
@@ -3656,6 +3666,7 @@ are seven automatic ones (the seventh, `health_questionnaire`, was added later �
 | `post_visit` | hourly cron, appointment `completed` and ended long enough ago | hours after the appointment ends (default 1) |
 | `recall` | hourly cron, last completed visit N months ago, no upcoming appointment | months (default 6) + send hour (default 10:00) |
 | `health_questionnaire` | appointment becomes `confirmed` (trigger, migration 022) if no questionnaire in 12 months, or the manual "Pošlji vprašalnik" button | immediate; not editable — carries a fixed "Izpolnite vprašalnik" button (`TemplateDef.actionLabel`) |
+| `aftercare` | on "Izdaj račun" when topics are ticked (on/off switch respected, once per invoice), or "Pošlji znova" by hand | intro text only; the ticked topics follow as sections; `{datum}` = the invoice's service date |
 | `invoice` / `credit_note` | by hand only — "Pošlji po e-pošti" on an issued invoice / credit note (`manualOnly`: no on/off switch) | wording only; no unsubscribe footer (`noUnsubscribeFooter`); invoice placeholders `{placnik}` `{stevilka}` `{racun}` `{znesek}` `{rok_placila}` `{iban}` `{sklic}` |
 
 **Design**
@@ -3762,7 +3773,10 @@ globally, use `npx`), the six functions above, after running migration 019.
 
 **Planned next, agreed but not built** (each shippable on its own, re-confirm
 before starting):
-1. **Aftercare emails ("topics"), driven by the invoice — designed
+1. **Built 2026-10-13 — see "Aftercare instructions (Navodila po posegu)".
+   The design note below is the original record; that section wins where they
+   differ.** Original note:
+   **Aftercare emails ("topics"), driven by the invoice — designed
    2026-09-25, deliberately BLOCKED on building the price list and invoicing
    first (Gregor's explicit decision: "first build invoicing and price list";
    this is the note for later).** Care instructions after a treatment (e.g.
@@ -4276,6 +4290,74 @@ nothing here bills ZZZS.
   (catalogue not writable; links/performed services not spoofable or
   readable across practices) — passed in the 2026-10-09 run (33/33).
 
+### Aftercare instructions (Navodila po posegu)
+
+**Status: built and confirmed by Gregor on localhost (2026-10-13)** —
+migrations 034–035 run, `send-aftercare-email` and `email-template-preview`
+deployed. Implements the 2026-09-25 design ("Email templates (E-pošta)" →
+"Planned next", item 1): instructions are sent **from the app only**, never
+via an external tool, since the treatment is clinical data.
+
+- **Topics library** (`aftercare_topics`, root table; `aftercare_topic_categories`
+  many-to-many with `service_categories`, integrity trigger + 4 RLS policies
+  each): a titled plain text (blank line = paragraph, line break kept,
+  `**bold**`), order, on/off. Every practice starts with five topics whose
+  texts are **drafts written by Claude** (`needs_review = true`, shown as
+  "Osnutek — preglejte"; saving clears it — saving is the review): Po
+  puljenju zoba ← **Puljenje**, Po zalivki ← Restavrativa, Po endodontskem
+  zdravljenju ← Endodontija, Po vstavitvi implantata ← Implantologija,
+  Pravilno ščetkanje zob ← Preventiva + Parodontologija. **Monika must review
+  them before patients get them.**
+- **Puljenje vs Kirurgija** (migration 035, Gregor's correction): an
+  extraction isn't surgery — Kirurgija is for surgical procedures (bone
+  grafting, surgical extraction …). A starter category **Puljenje** (sort 55)
+  was added for every practice and new ones; the extraction topic links to it.
+  Kirurgija has no topic for now.
+- **Editing: E-pošta → "Navodila po posegu"**, ONE card (Gregor's request —
+  no separate intro frame): the left list starts with **"Uvodno besedilo"**
+  (the `aftercare` email template: subject, heading, intro, placeholders
+  `{ime}` `{priimek}` `{datum}` `{ordinacija}`, test send, reset), then the
+  topics and "+ Nova tematika". Middle: the editor (topic: title, text,
+  category chips "Samodejno označi pri kategorijah cenika", included,
+  Shrani / Izbriši). Right: live preview — intro + all included topics, or
+  intro + the selected topic. The on/off switch ("Pošiljanje ob izdaji računa
+  vklopljeno") sits on the card. `email-template-preview` accepts `sections`
+  (capped, escaped by the shared renderer, which now renders titled sections
+  after the body — `RenderContext.sections`).
+- **Invoice draft** (patient invoices only, not credit notes): a
+  "Navodila po posegu" box under the note — checkboxes for the included
+  topics, ticked automatically from the categories of the lines' services
+  until changed by hand (`invoices.aftercare_topic_ids`: null = follow the
+  categories, an array = the hand choice; "Označi samodejno po kategorijah"
+  resets it). One line says what will happen (sent to the address / no
+  address / unsubscribed → print).
+- **"Izdaj račun"** freezes the ticked list onto the invoice, runs FURS, then
+  calls `send-aftercare-email` with `auto: true` (skipped when the template is
+  switched off or already sent). Never undoes the issue; the outcome shows in
+  the box. A service message like the reminders: not sent to a patient who
+  unsubscribed, unsubscribe footer included. Logged in `email_log` as type
+  `aftercare` (invoice + patient), so it shows in the Sporočila tab; the
+  invoice's own "Poslano po e-pošti" list leaves it out.
+- **Issued invoice**: the box (only when it had topics or a send) lists the
+  topics and each send, with **"Pošlji navodila" / "Pošlji znova"** (manual —
+  always sends) and **"Natisni navodila"** (A4: practice header, patient,
+  date, topics — `lib/aftercarePrint.ts`, current topic texts). A delivered
+  email (`status` 'delivered' once SES reports back) counts as sent, both for
+  the button label and the function's once-per-invoice check.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4j
+  (topics/links not spoofable or readable across practices; the seeding
+  function not callable from the browser) — passed in the 2026-10-13 run
+  (37/37). The script's second check now compares ids ("account 2 sees none of
+  account 1's patients") instead of requiring an empty test practice, and it
+  deletes its own test patient/therapist at the end (as account 2, so RLS keeps
+  it inside the throwaway practice) — an earlier run's leftover patient had
+  made the old "sees ZERO patients" check fail without any real leak.
+- **Not done**: reordering topics (sort_order exists, no UI); attaching a PDF
+  leaflet.
+
+**Deploy**: `send-aftercare-email`, `email-template-preview` (default JWT
+verification ON).
+
 ---
 
 ## ZVOP-3 / GDPR Compliance Notes
@@ -4403,10 +4485,10 @@ nothing here bills ZZZS.
 - eZdravje / ZZZS integration
 - ~~Billing / invoicing~~ — **phase 1 built** (price list, invoices,
   printing, email — see "Invoicing" above); **FURS fiscal verification
-  (phase 2) built on the test environment**, production not yet switched on. Still to come on top of it: the invoice-driven
-  aftercare emails described under "Email templates (E-pošta)" →
-  "Planned next", item 1 (a category per service, and a topics list on the
-  invoice screen)
+  (phase 2) built on the test environment**, production not yet switched on.
+  Chart → invoice ("Dodaj iz karte") and the invoice-driven aftercare
+  instructions are built too — see "ZZZS šifrant, price-list import and
+  chart → invoice" and "Aftercare instructions (Navodila po posegu)"
 - ~~Appointment booking~~ — **built**, see "Native scheduling calendar
   (Koledar)" above. A separate, unrelated Google-Calendar-*backed* public
   booking widget also exists at
@@ -4810,7 +4892,15 @@ next:
 
 ---
 
-*Last updated: 2026-10-09 (ZZZS šifrant + chart → invoice built and
+*Last updated: 2026-10-13 (Aftercare instructions built and confirmed on
+localhost — topics library with draft texts for Monika to review, one-card
+editor on E-pošta, ticked from price-list categories on the invoice, emailed
+on issue, resend and A4 printout; new starter category Puljenje — migrations
+034–035; see "Aftercare instructions (Navodila po posegu)". Also seen: the
+FURS test server answered HTTP 500 for a while; the 10-minute retry job
+handled it as designed.)*
+
+*Previous entry: 2026-10-09 (ZZZS šifrant + chart → invoice built and
 confirmed on localhost — migration 033, ZZZS catalogue loaded by
 `scripts/sync-zzzs.mjs`, Cenik switch / "+ Iz šifranta ZZZS" / CSV-Excel
 import / "Iz karte" links, invoice "Dodaj iz karte" with performed services;

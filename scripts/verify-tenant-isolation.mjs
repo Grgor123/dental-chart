@@ -89,7 +89,9 @@ async function main() {
   const { data: account1Membership } = await client1.from('practice_members').select('practice_id').limit(1).maybeSingle();
   const account1PracticeId = account1Membership?.practice_id;
 
-  // 2. Account 2 (fresh throwaway practice) sees NO patients at all.
+  // 2. Account 2 (a throwaway practice) sees none of account 1's patients.
+  // It may see its own (an earlier run that stopped before its cleanup), so
+  // the check compares ids instead of requiring an empty list.
   const client2 = freshClient();
   const { error: signIn2Error } = await client2.auth.signInWithPassword({
     email: ACCOUNT2_EMAIL,
@@ -100,10 +102,12 @@ async function main() {
     process.exit(1);
   }
   const { data: account2Patients, error: account2SelectError } = await client2.from('patients').select('id');
+  const account1Ids = new Set((account1Patients ?? []).map((p) => p.id));
+  const leakedPatients = (account2Patients ?? []).filter((p) => account1Ids.has(p.id)).length;
   check(
-    'account 2 sees ZERO patients (fresh practice)',
-    !account2SelectError && (account2Patients?.length ?? 0) === 0,
-    account2SelectError?.message ?? `${account2Patients?.length ?? 0} patients`
+    "account 2 sees none of account 1's patients",
+    !account2SelectError && leakedPatients === 0,
+    account2SelectError?.message ?? `${leakedPatients} of account 1's patients visible (${account2Patients?.length ?? 0} patients in its own practice)`
   );
 
   // 3. Account 2 cannot fetch a specific patient id belonging to account 1.
@@ -336,6 +340,36 @@ async function main() {
     check("account 2 cannot read account 1's performed services", !leakedPerformed || leakedPerformed.length === 0, `${leakedPerformed?.length ?? 0} row(s) visible`);
   }
 
+  // 4j. Aftercare topics (034_aftercare_topics.sql) — account 2 can't spoof a
+  // topic or a topic↔category link into account 1's practice, can't read
+  // account 1's topics, and can't run the seeding function.
+  if (account1PracticeId) {
+    const { error: foreignTopicError } = await client2
+      .from('aftercare_topics')
+      .insert({ practice_id: account1PracticeId, title: 'Spoofed topic', body: 'x' });
+    check(
+      "account 2 cannot insert an aftercare topic under account 1's practice_id",
+      !!foreignTopicError,
+      foreignTopicError ? foreignTopicError.message : 'insert unexpectedly succeeded'
+    );
+    const { data: leakedTopics } = await client2.from('aftercare_topics').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's aftercare topics", !leakedTopics || leakedTopics.length === 0, `${leakedTopics?.length ?? 0} row(s) visible`);
+    const { data: account1Topic } = await client1.from('aftercare_topics').select('id').limit(1).maybeSingle();
+    const { data: account1Category } = await client1.from('service_categories').select('id').limit(1).maybeSingle();
+    if (account1Topic && account1Category) {
+      const { error: foreignTopicLinkError } = await client2
+        .from('aftercare_topic_categories')
+        .insert({ practice_id: account1PracticeId, topic_id: account1Topic.id, category_id: account1Category.id });
+      check(
+        "account 2 cannot link account 1's aftercare topic to a category",
+        !!foreignTopicLinkError,
+        foreignTopicLinkError ? foreignTopicLinkError.message : 'insert unexpectedly succeeded'
+      );
+    }
+    const { error: seedError } = await client2.rpc('seed_default_aftercare_topics', { p_practice_id: account1PracticeId });
+    check('no browser can run the aftercare seeding function', !!seedError, seedError ? seedError.message : 'rpc unexpectedly succeeded');
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via
@@ -422,6 +456,14 @@ async function main() {
       );
     }
   }
+
+  // Cleanup: remove the test rows in account 2's throwaway practice,
+  // so repeated runs don't pile up test rows (the appointment goes with the
+  // patient — on delete cascade).
+  // RLS limits client2 to its own practice, so this also clears leftovers of
+  // earlier runs and can never touch account 1's data.
+  await client2.from('patients').delete().eq('first_name', 'Verify').eq('last_name', 'Tenant');
+  await client2.from('therapists').delete().eq('name', 'Verify Therapist');
 
   await client1.auth.signOut();
   await client2.auth.signOut();

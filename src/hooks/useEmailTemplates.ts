@@ -12,6 +12,12 @@ import { TEMPLATE_DEFS, type TemplateKey, type TemplateOverride } from '../../su
 // parent row to derive practice_id from, so it's set explicitly on insert.
 export type TemplateOverrides = Partial<Record<TemplateKey, TemplateOverride>>;
 
+/** A titled section rendered under a template's body (aftercare topics). */
+export interface PreviewSection {
+  title: string;
+  body: string;
+}
+
 /** What the editor form holds — text fields are never null here, they start as
     the effective (override-or-default) wording. */
 export interface TemplateFormValues {
@@ -113,10 +119,15 @@ export function useEmailTemplates() {
     [reload]
   );
 
+  // `sections`: the aftercare topics shown under the intro (Navodila po posegu).
   const previewTemplate = useCallback(
-    async (key: TemplateKey, values: Pick<TemplateFormValues, 'subject' | 'heading' | 'body'>): Promise<{ html: string } | { error: string }> => {
+    async (
+      key: TemplateKey,
+      values: Pick<TemplateFormValues, 'subject' | 'heading' | 'body'>,
+      sections?: PreviewSection[]
+    ): Promise<{ html: string } | { error: string }> => {
       const { data, error } = await supabase.functions.invoke('email-template-preview', {
-        body: { templateKey: key, override: values },
+        body: { templateKey: key, override: values, sections },
       });
       if (error) return { error: await messageFromInvokeError(error) };
       return { html: (data as { html: string }).html };
@@ -125,9 +136,13 @@ export function useEmailTemplates() {
   );
 
   const sendTestEmail = useCallback(
-    async (key: TemplateKey, values: Pick<TemplateFormValues, 'subject' | 'heading' | 'body'>): Promise<{ sentTo: string } | { error: string }> => {
+    async (
+      key: TemplateKey,
+      values: Pick<TemplateFormValues, 'subject' | 'heading' | 'body'>,
+      sections?: PreviewSection[]
+    ): Promise<{ sentTo: string } | { error: string }> => {
       const { data, error } = await supabase.functions.invoke('email-template-preview', {
-        body: { templateKey: key, override: values, sendTest: true },
+        body: { templateKey: key, override: values, sendTest: true, sections },
       });
       if (error) return { error: await messageFromInvokeError(error) };
       return { sentTo: (data as { sentTo: string }).sentTo };

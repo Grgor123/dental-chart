@@ -3,6 +3,8 @@ import { AppNavShell } from '../components/ui/AppNavShell';
 import { CardTabs } from '../components/ui/CardTabs';
 import { usePracticeContext } from '../contexts/PracticeContext';
 import { useEmailTemplates, type TemplateFormValues } from '../hooks/useEmailTemplates';
+import { useAftercareTopics } from '../hooks/useAftercareTopics';
+import { AftercareTopicsSection } from '../components/email/AftercareTopicsSection';
 import {
   PLACEHOLDER_LABELS,
   TEMPLATE_DEFS,
@@ -52,6 +54,9 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
   // Bumped on reset so the editor below (keyed on it) re-initializes from
   // the platform defaults.
   const [resetVersion, setResetVersion] = useState(0);
+  // "Navodila po posegu" has its own one-card editor: the intro template and
+  // the aftercare topics library together (AftercareTopicsSection).
+  const aftercare = useAftercareTopics();
 
   return (
     <>
@@ -99,7 +104,28 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
             selectedKey={selectedKey}
             onSelect={(key) => setSelectedKey(key as TemplateKey)}
           >
-            {({ squareTopLeft }) => (
+            {({ squareTopLeft }) =>
+              selectedKey === 'aftercare' ? (
+                aftercare.loading ? (
+                  <p className="text-sm text-[var(--ink-soft,#45524f)]">Nalaganje …</p>
+                ) : (
+                  <AftercareTopicsSection
+                    key={`aftercare-${resetVersion}`}
+                    topics={aftercare.topics}
+                    categories={aftercare.categories}
+                    error={aftercare.error}
+                    squareTopLeft={squareTopLeft}
+                    override={overrides.aftercare}
+                    createTopic={aftercare.createTopic}
+                    saveTopic={aftercare.saveTopic}
+                    deleteTopic={aftercare.deleteTopic}
+                    saveTemplate={saveTemplate}
+                    resetTemplate={resetTemplate}
+                    previewTemplate={previewTemplate}
+                    sendTestEmail={sendTestEmail}
+                  />
+                )
+              ) : (
               <TemplateEditor
                 templateKey={selectedKey}
                 formVersion={resetVersion}
@@ -114,7 +140,8 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
                 sendTestEmail={sendTestEmail}
                 squareTopLeft={squareTopLeft}
               />
-            )}
+              )
+            }
           </CardTabs>
         )}
       </div>
@@ -182,11 +209,14 @@ function TemplateEditor({
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const result = await previewTemplate(templateKey, {
-        subject: values.subject,
-        heading: values.heading,
-        body: values.body,
-      });
+      const result = await previewTemplate(
+        templateKey,
+        {
+          subject: values.subject,
+          heading: values.heading,
+          body: values.body,
+        },
+      );
       if (cancelled) return;
       if ('error' in result) {
         setPreviewError(result.error);
@@ -254,11 +284,14 @@ function TemplateEditor({
 
   async function handleTest() {
     setBusy('test');
-    const result = await sendTestEmail(templateKey, {
-      subject: values.subject,
-      heading: values.heading,
-      body: values.body,
-    });
+    const result = await sendTestEmail(
+      templateKey,
+      {
+        subject: values.subject,
+        heading: values.heading,
+        body: values.body,
+      },
+    );
     setBusy(null);
     setStatus(
       'error' in result

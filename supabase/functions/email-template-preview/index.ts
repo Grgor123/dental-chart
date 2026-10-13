@@ -41,6 +41,16 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+// Aftercare topics shown under the intro ("Navodila po posegu") — plain text
+// from the browser, escaped by the renderer like everything else; capped.
+function sectionsOf(value: unknown): { title: string; body: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 20)
+    .filter((s): s is { title: string; body: string } => typeof s?.title === 'string' && typeof s?.body === 'string')
+    .map((s) => ({ title: s.title.slice(0, 200), body: s.body.slice(0, 10000) }));
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -74,6 +84,7 @@ Deno.serve(async (req) => {
     // Templates with a fixed action button (the questionnaire link) show it
     // in the preview too, pointing nowhere.
     actionUrl: '#',
+    sections: sectionsOf(body.sections),
   });
 
   if (!body.sendTest) return json({ subject: content.subject, html: content.html });

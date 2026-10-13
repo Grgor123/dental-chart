@@ -22,6 +22,9 @@ import { InvoiceEmailDialog } from '../components/invoices/InvoiceEmailDialog';
 import { useEmailTemplates } from '../hooks/useEmailTemplates';
 import { useZzzsSetting } from '../hooks/useZzzs';
 import { useChartBilling } from '../hooks/useChartBilling';
+import { useAftercareTopics } from '../hooks/useAftercareTopics';
+import { renderAftercarePrintHtml } from '../lib/aftercarePrint';
+import type { AftercareSendResult } from '../hooks/useInvoices';
 import { ChartBillingDialog, type ChartBillingPick } from '../components/invoices/ChartBillingDialog';
 import { effectiveChartLink, workItemKey } from '../lib/chartBilling';
 import { fillTemplateText } from '../../supabase/functions/_shared/email/templates';
@@ -99,7 +102,7 @@ function sameDraft(a: { fields: DraftFields; lines: InvoiceLineDraft[] }, b: { f
 export function InvoiceEditor(props: InvoiceEditorProps) {
   const { invoiceId, onBack, backLabel, onOpenInvoice } = props;
   const { practiceName } = usePracticeContext();
-  const { invoice, loading, error, reload, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail } = useInvoice(invoiceId);
+  const { invoice, loading, error, reload, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail, sendAftercare } = useInvoice(invoiceId);
   // FURS davčno potrjevanje: on once the premise is registered (Nastavitve →
   // Podatki za račune); cash/card invoices then go to FURS right after issuing.
   const furs = useFurs();
@@ -127,13 +130,76 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     [services, links, zzzsSetting.enabled]
   );
 
-  const [fields, setFields] = useState<DraftFields>({ serviceDate: todayIso(), paymentMethod: 'cash', note: '', payer: EMPTY_PAYER });
+  const [fields, setFields] = useState<DraftFields>({ serviceDate: todayIso(), paymentMethod: 'cash', note: '', payer: EMPTY_PAYER, aftercareTopicIds: null });
   const [lines, setLines] = useState<InvoiceLineDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<'issue' | 'delete' | 'cancel' | null>(null);
   const [issueAndPrint, setIssueAndPrint] = useState(false);
   const [printWhenIssued, setPrintWhenIssued] = useState(false);
+
+  // Aftercare instructions (migration 034): topics ticked automatically from
+  // the categories of the lines' services, until changed by hand (then
+  // fields.aftercareTopicIds holds the explicit choice).
+  const aftercare = useAftercareTopics();
+  const [aftercareNotice, setAftercareNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const activeTopics = useMemo(() => aftercare.topics.filter((t) => t.isActive), [aftercare.topics]);
+  const autoTopicIds = useMemo(() => {
+    const categoryIds = new Set(
+      lines.map((l) => services.find((s) => s.id === l.serviceId)?.categoryId).filter((id): id is string => !!id)
+    );
+    return activeTopics.filter((t) => t.categoryIds.some((c) => categoryIds.has(c))).map((t) => t.id);
+  }, [lines, services, activeTopics]);
+  const tickedTopicIds = fields.aftercareTopicIds ?? autoTopicIds;
+
+  function toggleTopic(id: string) {
+    const next = tickedTopicIds.includes(id) ? tickedTopicIds.filter((t) => t !== id) : [...tickedTopicIds, id];
+    setFields({ ...fields, aftercareTopicIds: next });
+  }
+
+  function describeAftercareResult(result: AftercareSendResult): { kind: 'ok' | 'error'; text: string } | null {
+    if (result.status === 'sent') return { kind: 'ok', text: `Navodila po posegu so poslana na ${result.to}.` };
+    if (result.status === 'failed') return { kind: 'error', text: `Navodil ni bilo mogoče poslati: ${result.error ?? 'neznana napaka'}` };
+    switch (result.reason) {
+      case 'no_email':
+        return { kind: 'error', text: 'Pacient nima e-poštnega naslova — navodila natisnite.' };
+      case 'opted_out':
+        return { kind: 'error', text: 'Pacient je odjavljen od e-poštnih obvestil — navodila natisnite.' };
+      case 'disabled':
+        return { kind: 'error', text: 'Pošiljanje navodil ob izdaji je izklopljeno (E-pošta → Navodila po posegu) — navodila natisnite ali jih pošljite ročno.' };
+      case 'already_sent':
+        return { kind: 'ok', text: 'Navodila so bila že poslana.' };
+      default:
+        return null;
+    }
+  }
+
+  async function handleSendAftercare() {
+    setBusy(true);
+    setAftercareNotice(null);
+    const result = await sendAftercare(false);
+    setBusy(false);
+    setAftercareNotice(describeAftercareResult(result));
+  }
+
+  function handlePrintAftercare() {
+    if (!invoice) return;
+    const ids = invoice.status === 'draft' ? tickedTopicIds : (invoice.aftercareTopicIds ?? []);
+    const topics = aftercare.topics.filter((t) => ids.includes(t.id));
+    if (topics.length === 0) return;
+    const [y, m, d] = invoice.serviceDate.split('-');
+    const issuer = liveIssuer;
+    printHtml(
+      renderAftercarePrintHtml({
+        practiceName: issuer.legalName || practiceName || '',
+        practiceLines: [issuer.address, [issuer.postalCode, issuer.city].filter(Boolean).join(' '), issuer.phone, issuer.email],
+        patientName: invoice.patientBuyer?.name || invoice.buyer.name,
+        date: `${Number(d)}. ${Number(m)}. ${y}`,
+        topics: topics.map((t) => ({ title: t.title, body: t.body })),
+      })
+    );
+  }
+
 
   // Reset the local draft to what's stored whenever the invoice (re)loads.
   useEffect(() => {
@@ -143,6 +209,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
       paymentMethod: invoice.paymentMethod,
       note: invoice.note,
       payer: invoice.buyer,
+      aftercareTopicIds: invoice.aftercareTopicIds,
     });
     setLines(invoice.lines);
   }, [invoice]);
@@ -159,6 +226,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
           paymentMethod: invoice.paymentMethod,
           note: invoice.note,
           payer: invoice.buyer,
+          aftercareTopicIds: invoice.aftercareTopicIds,
         },
         lines: invoice.lines,
       }
@@ -274,9 +342,12 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
 
   async function handleIssue() {
     setConfirming(null);
+    // What's ticked on screen is what the issued invoice keeps (and emails).
+    const topicIds = invoice?.patientId ? tickedTopicIds : [];
+    setAftercareNotice(null);
     const ok = await run(async () => {
-      if (dirty) {
-        const saved = await saveDraft(fields, lines);
+      if (dirty || fields.aftercareTopicIds === null) {
+        const saved = await saveDraft({ ...fields, aftercareTopicIds: topicIds }, lines);
         if (saved.error) return saved;
       }
       const issued = await issue();
@@ -287,6 +358,8 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         await fiscalizeInvoice(invoiceId);
         await reload();
       }
+      // The aftercare email. Its outcome is shown, never undoes the issue.
+      if (topicIds.length > 0) setAftercareNotice(describeAftercareResult(await sendAftercare(true)));
       return {};
     });
     if (ok && issueAndPrint) setPrintWhenIssued(true);
@@ -697,11 +770,11 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
                     </dd>
                   </>
                 )}
-                {invoice.emailLog.length > 0 && (
+                {invoice.emailLog.some((e) => e.type !== 'aftercare') && (
                   <>
                     <dt className="text-[var(--ink-soft,#45524f)]">Poslano po e-pošti</dt>
                     <dd className="flex flex-col">
-                      {invoice.emailLog.map((e) => (
+                      {invoice.emailLog.filter((e) => e.type !== 'aftercare').map((e) => (
                         <span key={`${e.to}-${e.sentAt}`} className={e.status === 'failed' || e.status === 'bounced' ? 'text-[var(--danger,#b3261e)]' : ''}>
                           {formatDateTime(e.sentAt)} → {e.to}
                           {e.status === 'failed' ? ' (ni uspelo)' : e.status === 'bounced' ? ' (zavrnjeno)' : ''}
@@ -852,6 +925,104 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
               </label>
             ) : (
               invoice.note && <p className="text-sm text-[var(--ink-soft,#45524f)]">Opomba: {invoice.note}</p>
+            )}
+
+            {invoice.patientId &&
+              invoice.kind === 'invoice' &&
+              (isDraft || (invoice.aftercareTopicIds?.length ?? 0) > 0 || invoice.emailLog.some((e) => e.type === 'aftercare')) && (
+              <div className="flex flex-col gap-2 rounded border border-[var(--line,#ccd6d4)] p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-sm font-semibold text-[var(--ink,#1c2624)]">Navodila po posegu</span>
+                  {isDraft && fields.aftercareTopicIds !== null && (
+                    <button
+                      type="button"
+                      onClick={() => setFields({ ...fields, aftercareTopicIds: null })}
+                      className="text-xs text-[var(--accent,#2e6e62)] hover:underline"
+                    >
+                      Označi samodejno po kategorijah
+                    </button>
+                  )}
+                </div>
+                {isDraft ? (
+                  <>
+                    {activeTopics.length === 0 ? (
+                      <span className="text-xs text-[var(--muted,#6f7c79)]">Ni tematik — dodate jih v E-pošta → Navodila po posegu.</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                        {activeTopics.map((t) => (
+                          <label key={t.id} className="flex items-center gap-1.5 text-sm text-[var(--ink,#1c2624)]">
+                            <input type="checkbox" checked={tickedTopicIds.includes(t.id)} onChange={() => toggleTopic(t.id)} />
+                            {t.title}
+                            {t.needsReview && <span className="text-[10px] text-[#6b4a00]">(osnutek)</span>}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <span className="text-xs text-[var(--muted,#6f7c79)]">
+                      {tickedTopicIds.length === 0
+                        ? 'Nobena tematika ni označena — navodila ne bodo poslana.'
+                        : !invoice.patientEmail
+                          ? 'Pacient nima e-poštnega naslova — po izdaji navodila natisnite.'
+                          : invoice.patientEmailOptOut
+                            ? 'Pacient je odjavljen od e-poštnih obvestil — po izdaji navodila natisnite.'
+                            : `Ob izdaji računa bodo navodila poslana na ${invoice.patientEmail}.`}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-sm text-[var(--ink,#1c2624)]">
+                      {aftercare.topics
+                        .filter((t) => invoice.aftercareTopicIds?.includes(t.id))
+                        .map((t) => t.title)
+                        .join(' · ') || 'Ni označenih navodil.'}
+                    </span>
+                    {invoice.emailLog
+                      .filter((e) => e.type === 'aftercare')
+                      .map((e) => (
+                        <span
+                          key={`${e.to}-${e.sentAt}`}
+                          className={`text-xs ${e.status === 'failed' || e.status === 'bounced' ? 'text-[var(--danger,#b3261e)]' : 'text-[var(--ink-soft,#45524f)]'}`}
+                        >
+                          Poslano {formatDateTime(e.sentAt)} → {e.to}
+                          {e.status === 'failed' ? ' (ni uspelo)' : e.status === 'bounced' ? ' (zavrnjeno)' : ''}
+                        </span>
+                      ))}
+                    {(invoice.aftercareTopicIds?.length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={busy || !invoice.patientEmail || invoice.patientEmailOptOut}
+                          onClick={handleSendAftercare}
+                          title={
+                            !invoice.patientEmail
+                              ? 'Pacient nima e-poštnega naslova.'
+                              : invoice.patientEmailOptOut
+                                ? 'Pacient je odjavljen od e-poštnih obvestil.'
+                                : undefined
+                          }
+                          className="rounded border border-[var(--accent,#2e6e62)] px-3 py-1.5 text-sm font-medium text-[var(--accent,#2e6e62)] hover:bg-[#eaf4f1] disabled:opacity-40"
+                        >
+                          {invoice.emailLog.some((e) => e.type === 'aftercare' && e.status !== 'failed' && e.status !== 'bounced')
+                            ? 'Pošlji znova'
+                            : 'Pošlji navodila'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handlePrintAftercare}
+                          className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+                        >
+                          Natisni navodila
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+                {aftercareNotice && (
+                  <span className={`text-sm ${aftercareNotice.kind === 'error' ? 'text-[#8a1c14]' : 'text-[var(--accent,#2e6e62)]'}`}>
+                    {aftercareNotice.text}
+                  </span>
+                )}
+              </div>
             )}
 
             {actionError && <p className="text-sm text-[var(--danger,#b3261e)]">{actionError}</p>}

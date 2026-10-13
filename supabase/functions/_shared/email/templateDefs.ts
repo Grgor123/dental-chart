@@ -19,6 +19,7 @@ export const TEMPLATE_KEYS = [
   'health_questionnaire',
   'invoice',
   'credit_note',
+  'aftercare',
 ] as const;
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 
@@ -256,6 +257,23 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     actionLabel: null,
     manualOnly: true,
     noUnsubscribeFooter: true,
+  },
+  aftercare: {
+    key: 'aftercare',
+    label: 'Navodila po posegu',
+    description:
+      'Ob izdaji računa, če so na njem označena navodila (tematike) — ali ročno z gumbom »Pošlji znova« na izdanem računu. Pod tem uvodom sledijo označene tematike.',
+    defaultSubject: 'Navodila po obisku — {ordinacija}',
+    defaultHeading: 'Navodila po obisku',
+    // The ticked topics follow this text as sections (templates.ts).
+    defaultBody:
+      'Pozdravljeni {ime},\n\nhvala za vaš obisk dne {datum}. Spodaj so navodila za čas po posegu — prosimo, preberite jih in jih upoštevajte.\n\nČe imate kakršnakoli vprašanja ali težave, nas pokličite.',
+    // {datum} is the invoice's service date.
+    placeholders: ['ime', 'priimek', 'datum', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: null,
   },
 };
 

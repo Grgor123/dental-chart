@@ -85,6 +85,10 @@ export interface InvoiceDetail extends InvoiceSummary {
   creditNote: { id: string; number: string | null } | null;
   /** The linked patient's email (prefilled as the recipient), if any. */
   patientEmail: string | null;
+  /** The patient unsubscribed from email (no aftercare email then). */
+  patientEmailOptOut: boolean;
+  /** Ticked aftercare topics (migration 034); null = follow the categories. */
+  aftercareTopicIds: string[] | null;
   /** Every time this invoice was emailed (migration 026), newest first. */
   emailLog: InvoiceEmailLogEntry[];
   /** FURS davčno potrjevanje (migration 032); null when not sent to FURS. */
@@ -105,6 +109,16 @@ export interface InvoiceEmailLogEntry {
   to: string;
   sentAt: string;
   status: string;
+  /** 'invoice' (the invoice/credit note itself) or 'aftercare'. */
+  type: string;
+}
+
+/** What send-aftercare-email did. */
+export interface AftercareSendResult {
+  status?: 'sent' | 'failed' | 'skipped';
+  reason?: 'no_topics' | 'no_patient' | 'no_email' | 'opted_out' | 'disabled' | 'already_sent';
+  to?: string;
+  error?: string;
 }
 
 export interface SendInvoiceEmailInput {
@@ -128,6 +142,8 @@ export interface DraftFields {
   note: string;
   /** Who pays — editable on the draft (e.g. a company paying for a patient). */
   payer: InvoiceBuyer;
+  /** Ticked aftercare topics; null = follow the lines' categories. */
+  aftercareTopicIds: string[] | null;
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -240,14 +256,14 @@ export function useInvoice(invoiceId: string) {
     const [main, creditNotes, emails] = await Promise.all([
       supabase
         .from('invoices')
-        .select('*, patients(first_name, last_name, address, postal_code, city, email), invoice_lines(*)')
+        .select('*, patients(first_name, last_name, address, postal_code, city, email, email_opt_out), invoice_lines(*)')
         .eq('id', invoiceId)
         .single(),
       supabase.from('invoices').select('id, number').eq('original_invoice_id', invoiceId).limit(1),
       // Fails harmlessly (empty history) until migration 026 adds invoice_id.
       supabase
         .from('email_log')
-        .select('recipient_email, sent_at, status')
+        .select('recipient_email, sent_at, status, email_type')
         .eq('invoice_id', invoiceId)
         .order('sent_at', { ascending: false }),
     ]);
@@ -271,6 +287,7 @@ export function useInvoice(invoiceId: string) {
       postal_code: string | null;
       city: string | null;
       email: string | null;
+      email_opt_out: boolean | null;
     } | null;
     const buyerSnapshot = row.buyer as {
       name?: string;
@@ -327,6 +344,8 @@ export function useInvoice(invoiceId: string) {
       originalNumber,
       creditNote: credit ? { id: credit.id, number: credit.number } : null,
       patientEmail: patient?.email ?? null,
+      patientEmailOptOut: !!patient?.email_opt_out,
+      aftercareTopicIds: (row.aftercare_topic_ids as string[] | null) ?? null,
       furs: row.furs_status
         ? {
             status: row.furs_status as InvoiceFurs['status'],
@@ -341,6 +360,7 @@ export function useInvoice(invoiceId: string) {
         to: e.recipient_email as string,
         sentAt: e.sent_at as string,
         status: e.status as string,
+        type: (e.email_type as string | null) ?? 'invoice',
       })),
     });
     setError(null);
@@ -370,6 +390,7 @@ export function useInvoice(invoiceId: string) {
             tax_number: fields.payer.taxNumber.trim() || null,
           },
           buyer_tax_number: fields.payer.taxNumber.trim() || null,
+          aftercare_topic_ids: fields.aftercareTopicIds,
         })
         .eq('id', invoiceId);
       if (updateError) return { error: friendlyError(updateError.message) };
@@ -475,5 +496,29 @@ export function useInvoice(invoiceId: string) {
     [invoiceId, reload]
   );
 
-  return { invoice, loading, error, reload, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail };
+  /** Emails the ticked aftercare topics — supabase/functions/send-aftercare-email.
+      `auto` (right after issuing) respects the template's on/off switch and
+      sends once; a manual send always goes. */
+  const sendAftercare = useCallback(
+    async (auto: boolean): Promise<AftercareSendResult> => {
+      const { data, error: fnError } = await supabase.functions.invoke('send-aftercare-email', {
+        body: { invoiceId, auto },
+      });
+      if (fnError) {
+        let message = fnError.message;
+        const context = (fnError as { context?: Response }).context;
+        if (context && typeof context.json === 'function') {
+          const payload = await context.json().catch(() => null);
+          if (payload?.error) message = payload.error;
+        }
+        await reload();
+        return { status: 'failed', error: message };
+      }
+      await reload();
+      return data as AftercareSendResult;
+    },
+    [invoiceId, reload]
+  );
+
+  return { invoice, loading, error, reload, saveDraft, deleteDraft, issue, setPaid, cancel, sendByEmail, sendAftercare };
 }

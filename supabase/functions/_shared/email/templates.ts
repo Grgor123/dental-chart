@@ -189,6 +189,14 @@ export interface RenderContext {
   unsubscribeUrl: string;
   /** Per-recipient URL for the template's fixed action button (actionLabel). */
   actionUrl?: string;
+  /** Titled sections after the body — the aftercare topics. Same plain-text
+      format as the body ({placeholders}, blank line = paragraph, **bold**). */
+  sections?: { title: string; body: string }[];
+}
+
+function sectionHtml(section: { title: string; body: string }, vars: TemplateVars): string {
+  const title = `<h2 style="margin:24px 0 8px;font-size:16px;color:${ACCENT_COLOR};">${escapeHtml(singleLine(section.title))}</h2>`;
+  return [title, ...paragraphsOf(section.body, vars).map(paragraphToHtml)].join('\n');
 }
 
 export function renderTemplate(
@@ -206,9 +214,11 @@ export function renderTemplate(
   // so it's visible without scrolling; anything further follows it.
   const action = def.actionLabel && context.actionUrl ? { label: def.actionLabel, url: context.actionUrl } : null;
   const paragraphHtml = paragraphs.map(paragraphToHtml);
-  const bodyHtml = action
-    ? [...paragraphHtml.slice(0, 2), actionButtonHtml(action), ...paragraphHtml.slice(2)].join('\n')
-    : paragraphHtml.join('\n');
+  const sections = context.sections ?? [];
+  const bodyHtml = [
+    action ? [...paragraphHtml.slice(0, 2), actionButtonHtml(action), ...paragraphHtml.slice(2)].join('\n') : paragraphHtml.join('\n'),
+    ...sections.map((section) => sectionHtml(section, vars)),
+  ].join('\n');
 
   const unsubscribeUrl = def.noUnsubscribeFooter ? null : context.unsubscribeUrl;
   const html = wrapEmailLayout({
@@ -219,7 +229,10 @@ export function renderTemplate(
   });
   const actionText = action ? `\n\n${action.label}: ${action.url}` : '';
   const unsubscribeText = unsubscribeUrl ? `\n\nOdjava od e-poštnih obvestil: ${unsubscribeUrl}` : '';
-  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}${actionText}${unsubscribeText}`;
+  const sectionText = sections
+    .map((section) => `\n\n${singleLine(section.title).toUpperCase()}\n\n${paragraphsOf(section.body, vars).map((p) => p.replace(/\*\*/g, '')).join('\n\n')}`)
+    .join('');
+  const text = `${heading}\n\n${paragraphs.map((p) => p.replace(/\*\*/g, '')).join('\n\n')}${sectionText}${actionText}${unsubscribeText}`;
 
   return { subject, html, text };
 }
