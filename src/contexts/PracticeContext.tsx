@@ -5,6 +5,8 @@ import { usePractice } from '../hooks/usePractice';
 interface PracticeContextValue {
   practiceId: string | null;
   practiceName: string | null;
+  /** The signed-in user's role in the practice; null while loading. */
+  role: 'owner' | 'staff' | null;
   loading: boolean;
   error: string | null;
 }
@@ -27,6 +29,7 @@ export function PracticeProvider({ session, children }: PracticeProviderProps) {
       value={{
         practiceId: practice?.practiceId ?? null,
         practiceName: practice?.practiceName ?? null,
+        role: practice?.role ?? null,
         loading,
         error,
       }}

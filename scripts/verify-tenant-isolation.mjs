@@ -370,6 +370,26 @@ async function main() {
     check('no browser can run the aftercare seeding function', !!seedError, seedError ? seedError.message : 'rpc unexpectedly succeeded');
   }
 
+  // 4k. Staff invitations (036_practice_invitations.sql) — no browser can
+  // write an invitation (that would let anyone join a practice), account 2
+  // can't read account 1's, and the practice-users function lists only
+  // account 2's own practice.
+  if (account1PracticeId) {
+    const { error: inviteWriteError } = await client2
+      .from('practice_invitations')
+      .insert({ practice_id: account1PracticeId, email: 'spoof@example.com', role: 'owner' });
+    check('no browser can create an invitation (function only)', !!inviteWriteError, inviteWriteError ? inviteWriteError.message : 'insert unexpectedly succeeded');
+    const { data: leakedInvites } = await client2.from('practice_invitations').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's invitations", !leakedInvites || leakedInvites.length === 0, `${leakedInvites?.length ?? 0} row(s) visible`);
+    const { data: usersList, error: usersError } = await client2.functions.invoke('practice-users', { body: { action: 'list' } });
+    const listed = (usersList?.users ?? []).map((u) => u.email);
+    check(
+      "practice-users lists only account 2's own practice",
+      !usersError && !listed.includes(ACCOUNT1_EMAIL.toLowerCase()),
+      usersError ? usersError.message : `${listed.length} user(s) listed`
+    );
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

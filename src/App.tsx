@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from './hooks/useAuth';
+import { SetPassword } from './pages/SetPassword';
+import { AUTH_LINK } from './lib/supabase';
 import { Login } from './pages/Login';
 import { PatientList } from './pages/PatientList';
 import { PatientChart } from './pages/PatientChart';
@@ -50,13 +52,24 @@ type Route =
   | { page: 'invoice'; invoiceId: string; returnTo: Route };
 
 function App() {
-  const { session, loading, signIn, signOut, signInError } = useAuth();
+  const { session, loading, signIn, signOut, signInError, mustSetPassword, setPassword, requestPasswordReset, authLinkError } = useAuth();
 
   if (DEV_PAGE === 'showcase') return <StatusShowcase />;
   if (DEV_PAGE === 'patient-mockup') return <PatientPageMockup />;
 
   if (loading) return null;
-  if (!session) return <Login onSignIn={signIn} error={signInError} />;
+  if (!session) return <Login onSignIn={signIn} error={signInError} onRequestReset={requestPasswordReset} linkError={authLinkError} />;
+  // Opened from an invitation / password-reset link: choose a password first.
+  if (mustSetPassword) {
+    return (
+      <SetPassword
+        email={session.user.email ?? ''}
+        invited={AUTH_LINK.type === 'invite'}
+        onSetPassword={setPassword}
+        onCancel={signOut}
+      />
+    );
+  }
 
   return (
     <PracticeProvider session={session}>

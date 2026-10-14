@@ -4,6 +4,7 @@ import { CardTabs } from '../components/ui/CardTabs';
 import { PriceListSection } from '../components/settings/PriceListSection';
 import { InvoiceSettingsSection } from '../components/settings/InvoiceSettingsSection';
 import { UserProfileSection } from '../components/settings/UserProfileSection';
+import { PracticeUsersSection } from '../components/settings/PracticeUsersSection';
 import { usePracticeContext } from '../contexts/PracticeContext';
 
 interface SettingsProps {
@@ -26,6 +27,7 @@ const SECTIONS = [
   { key: 'cenik', label: 'Cenik' },
   { key: 'racuni', label: 'Podatki za račune' },
   { key: 'profil', label: 'Moj profil' },
+  { key: 'uporabniki', label: 'Uporabniki' },
 ];
 
 // "Nastavitve" — the practice-wide setup area (the submenu item used to be an
@@ -62,6 +64,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
               {section === 'cenik' && <PriceListSection />}
               {section === 'racuni' && <InvoiceSettingsSection />}
               {section === 'profil' && <UserProfileSection />}
+              {section === 'uporabniki' && <PracticeUsersSection />}
             </div>
           )}
         </CardTabs>

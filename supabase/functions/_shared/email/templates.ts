@@ -83,6 +83,34 @@ export function renderPlainEmail(params: { practiceName: string; heading: string
 }
 
 /**
+ * An account email to a staff member (invitation, password reset): the same
+ * layout, plain-text paragraphs and one action button, no unsubscribe footer
+ * (it's about their own login, not a notification).
+ */
+export function renderActionEmail(params: {
+  practiceName: string;
+  heading: string;
+  message: string;
+  action: { label: string; url: string };
+  /** Shown under the button, e.g. how long the link is valid. */
+  footnote?: string;
+}): { html: string; text: string } {
+  const paragraphs = params.message
+    .replace(/\r\n/g, '\n')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const bodyHtml = [
+    ...paragraphs.map(paragraphToHtml),
+    actionButtonHtml(params.action),
+    params.footnote ? `<p style="margin:0 0 16px;line-height:1.5;color:${MUTED_COLOR};font-size:13px;">${escapeHtml(params.footnote)}</p>` : '',
+  ].join('\n');
+  const html = wrapEmailLayout({ practiceName: params.practiceName, heading: singleLine(params.heading), bodyHtml, unsubscribeUrl: null });
+  const text = `${singleLine(params.heading)}\n\n${paragraphs.join('\n\n')}\n\n${params.action.label}: ${params.action.url}${params.footnote ? `\n\n${params.footnote}` : ''}`;
+  return { html, text };
+}
+
+/**
  * Fills a template's text for editing before a manual send (the invoice email
  * window): the same substitution as a real send — a paragraph whose known
  * placeholder is empty is dropped — returned as plain text.

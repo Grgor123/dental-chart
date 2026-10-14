@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase';
 export interface Practice {
   practiceId: string;
   practiceName: string;
+  /** 'owner' manages users (Nastavitve → Uporabniki, migration 036). */
+  role: 'owner' | 'staff';
 }
 
 // Resolves the signed-in user's own practice — the multi-tenancy
@@ -42,7 +44,7 @@ export function usePractice(session: Session | null) {
     async function load() {
       const { data, error: fetchError } = await supabase
         .from('practice_members')
-        .select('practice_id, practices(name)')
+        .select('practice_id, role, practices(name)')
         .eq('user_id', userId)
         .limit(1)
         .maybeSingle();
@@ -63,7 +65,11 @@ export function usePractice(session: Session | null) {
       }
       const practices = data.practices as unknown as { name: string } | { name: string }[] | null;
       const practiceName = Array.isArray(practices) ? practices[0]?.name : practices?.name;
-      setPractice({ practiceId: data.practice_id as string, practiceName: practiceName ?? '' });
+      setPractice({
+        practiceId: data.practice_id as string,
+        practiceName: practiceName ?? '',
+        role: data.role === 'owner' ? 'owner' : 'staff',
+      });
       setLoading(false);
     }
 

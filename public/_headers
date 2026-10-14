@@ -1,0 +1,9 @@
+# Cloudflare Pages response headers for the published app (copied to dist/
+# by Vite). Medical data: no framing by other sites, no MIME sniffing, no
+# referrer leaking to other origins, no browser features the app doesn't use.
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

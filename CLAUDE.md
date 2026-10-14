@@ -136,6 +136,8 @@ src/
                                 # registration — see "FURS" below
       UserProfileSection.tsx   # Nastavitve → Moj profil: own name + tax
                                 # number (FURS operator) — see "FURS" below
+      PracticeUsersSection.tsx # Nastavitve → Uporabniki: users, invite,
+                                # roles, remove — see "Staff users" below
       ZzzsPickerDialog.tsx     # Cenik → "+ Iz šifranta ZZZS" — see "ZZZS
                                 # šifrant" below
       PriceListImportDialog.tsx # Cenik → "Uvozi cenik" (CSV/.xlsx, preview)
@@ -216,6 +218,8 @@ src/
                                 # links — see "Aftercare instructions" below
     useChartBilling.ts          # Chart work per visit → performed_services,
                                 # billed state — see "ZZZS šifrant" below
+    usePracticeUsers.ts         # The practice's users via the practice-users
+                                # function — see "Staff users" below
     useFurs.ts                  # FURS on the browser side: own profile,
                                 # premise registration, fiscalizeInvoice() —
                                 # see "FURS" below
@@ -255,7 +259,10 @@ src/
                                 # Day/Week — see "Native scheduling
                                 # calendar" below
   pages/
-    Login.tsx                  # Email/password sign-in screen
+    Login.tsx                  # Email/password sign-in screen, plus
+                                # "Pozabljeno geslo?" — see "Staff users"
+    SetPassword.tsx            # "Nastavite geslo" after an invitation /
+                                # reset link — see "Staff users" below
     PatientList.tsx             # Landing page after login — search/pick a
                                 # patient or add a new one — see "Patient
                                 # list" below
@@ -483,16 +490,17 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`035_puljenje_category.sql` — all confirmed run (016–019 are the
+`036_practice_invitations.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Invoicing" below; 030–031 the patient's message history, see
 "Communication history" below; 032 FURS; 033 the ZZZS šifrant and
 chart → invoice, see "ZZZS šifrant" below; 034–035 aftercare instructions,
-see "Aftercare instructions" below). `supabase/schema.sql`
+see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
+below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(035 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(036 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -742,10 +750,10 @@ now, which still exercises the same trigger.
   `with check (user_id = auth.uid())` would let any authenticated user add
   themselves to *any* `practice_id` they can guess — instant full access to
   that practice's entire patient database. All provisioning goes through
-  the trigger; leave it that way until a real, validated invite flow
-  exists (not built yet — `practice_members`' composite PK and `role`
-  column already support a user belonging to >1 practice / being "staff"
-  rather than "owner," but nothing in the UI uses either yet).
+  the trigger — including staff invitations (2026-10-14, see "Staff users
+  and invitations" below), which reach `practice_members` only through the
+  `practice-users` Edge Function (owner-checked, service role) and the
+  trigger reading `practice_invitations` (no client write policies).
 - `practices`/child-table foreign keys have no `on delete cascade` —
   deleting a practice while patients reference it fails loudly instead of
   silently cascading into patient-record deletion. Deliberate.
@@ -4372,6 +4380,104 @@ via an external tool, since the treatment is clinical data.
 **Deploy**: `send-aftercare-email`, `email-template-preview` (default JWT
 verification ON).
 
+### Hosting (Cloudflare Pages)
+
+**Status: live since 2026-10-14 — https://dental-chart.pages.dev/**
+(Gregor's choice of Cloudflare Pages; Gregor's own Cloudflare account). Until
+then the app only ran on `localhost:5181`.
+
+- Connected to GitHub `Grgor123/dental-chart`, branch `main`: **every push to
+  main deploys automatically** (1–3 minutes). Build: framework preset
+  **None** (the "VitePress" preset is a different tool), `npm run build`,
+  output `dist`.
+- Environment variables (Cloudflare → project → Settings): `VITE_SUPABASE_URL`,
+  `VITE_SUPABASE_ANON_KEY` (public by design — RLS protects the data),
+  `NODE_VERSION=22`. Never the database password or a service-role key.
+- `public/_headers` (copied into `dist/`): no framing by other sites
+  (`X-Frame-Options: DENY`), `nosniff`, a strict referrer policy, HSTS, no
+  camera/mic/location. The app's own invoice/print iframes use `srcdoc`, so
+  they're unaffected.
+- The app has no URL routes (state-based navigation), so no SPA redirect rule
+  is needed.
+- **Supabase Auth → URL Configuration**: Site URL = the pages.dev address;
+  Redirect URLs = `https://dental-chart.pages.dev/**` and
+  `http://localhost:5181/**`. **"Allow new users to sign up" is OFF** — with
+  the app public and its anon key visible, open sign-up would let anyone
+  create a login (and, via the trigger, an empty practice). Dashboard "Add
+  user" and invitations still work.
+- The patient-facing pages (SMS confirm, questionnaire, unsubscribe) stay on
+  GitHub Pages (`docs/`), unchanged.
+- A custom domain (e.g. `app.<practice-domain>.si`) can be added later under
+  the project's "Custom domains"; add it to Supabase's Redirect URLs and to
+  the functions' `APP_URL` secret then.
+
+### Staff users and invitations (Nastavitve → Uporabniki)
+
+**Status: built and confirmed by Gregor on localhost (2026-10-14)** —
+migration 036 run, `practice-users` and `request-password-reset` deployed.
+Gregor's choices: invitation by email; a staff member ("Sodelavec") can do
+everything except manage users; "Pozabljeno geslo?" included.
+
+- **Nastavitve → Uporabniki** (`PracticeUsersSection.tsx`,
+  `usePracticeUsers.ts`): the practice's users (name from `user_profiles`,
+  email, role Lastnik/Sodelavec, last sign-in or "Vabilo poslano"). Owners
+  also get: invite (name, email, role), "Pošlji znova" for a pending
+  invitation, role dropdown, "Odstrani" (confirm dialog). Whether to show the
+  owner controls comes from the function's own answer (`callerRole`), not
+  the app's sign-in state — an earlier version read the role from
+  `PracticeContext` and showed no buttons until a fresh sign-in.
+- **`practice-users` Edge Function** (user JWT, verification ON) — every
+  action acts on the caller's own practice, read with the service role; the
+  caller is taken from the **verified token's claims** (`sub`, `email`).
+  `auth.getUser(jwt)` was tried first and answered "Auth session missing!"
+  for valid signed-in users, so it's not used; the gateway rejects missing
+  and forged tokens (checked: `UNAUTHORIZED_LEGACY_JWT`). Actions:
+  `list` (everyone), `invite` / `resend` / `set_role` / `remove` (owners).
+  - **invite**: inserts a `practice_invitations` row **first**, then
+    `auth.admin.generateLink('invite')` creates the auth user — the signup
+    trigger `handle_new_user_practice()` finds the pending invitation for that
+    address and joins the user to the inviting practice with the invited role
+    (and their name into `user_profiles`) instead of creating a new practice.
+    An address with an account and no practice (removed earlier) is re-joined
+    and unblocked; one belonging to another practice is refused (one practice
+    per login for now).
+  - **remove**: deletes the membership and **bans** the login (~100 years)
+    — the auth user stays, since invoices/records reference it. Re-inviting
+    the address restores access.
+  - **Guards**: the last owner can't be removed or demoted; nobody removes
+    themselves.
+- **Emails** (`_shared/account.ts` + `renderActionEmail()` in
+  `templates.ts`): invitation ("Vabilo v {ordinacija}", button "Nastavite
+  geslo") and reset ("Novo geslo"), sent through **our SES sender** from the
+  practice's identity — Supabase's built-in auth mailer is rate-limited and
+  generic, so `generateLink` is used and Supabase sends nothing itself. Links
+  are valid 24 hours and land on the address the request came from
+  (`redirectTarget()`: `APP_URL` secret, default
+  `https://dental-chart.pages.dev`, or `http://localhost:5181`).
+- **"Pozabljeno geslo?"** on the login screen → `request-password-reset`
+  (no session needed): always answers the same ("če račun obstaja …") so it
+  can't be used to probe addresses; sends a link only to a non-banned user
+  who belongs to a practice.
+- **Landing**: `lib/supabase.ts` reads the URL fragment (`type=invite` /
+  `recovery`, or `error_code` for an expired/used link) **before** the client
+  consumes it (`AUTH_LINK`); `useAuth` then sends a signed-in user to
+  **`SetPassword.tsx`** ("Dobrodošli" / "Novo geslo", min 8 characters,
+  repeat) before the app, clears the fragment from the address bar, and the
+  login screen explains an expired link. Sign-in errors are translated
+  (wrong password, disabled account).
+- **`practice_invitations`** (migration 036): practice, email (lowercase),
+  name, role, invited_by, `linked_at`/`user_id` once the trigger used it. RLS:
+  select own practice only; **no write policies** — only the function writes.
+- **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4k (no
+  browser can write an invitation, can't read another practice's, the
+  function lists only the caller's practice) — added, not yet run.
+- **Not done**: a user belonging to several practices (schema allows it, the
+  app assumes one); self-serve practice sign-up; per-user permissions beyond
+  owner/staff.
+
+**Deploy**: `practice-users`, `request-password-reset` (default JWT
+verification ON — the reset request is sent with the public anon key).
+
 ---
 
 ## ZVOP-3 / GDPR Compliance Notes
@@ -4512,11 +4618,10 @@ verification ON).
 - Mlečni zobje (primary teeth — 5x/6x/7x/8x series)
 - Periodontogram as separate full-screen view
 - SMS/email reminders
-- Multiple staff logins *within* one practice — `practice_members`' schema
-  already supports it (a `role` column, a composite key allowing >1 member
-  per practice — see "Multi-tenancy" above), but no invite-flow UI exists.
-  **Multiple separate practices** (multi-tenancy) is a different concern
-  and IS built — see "Multi-tenancy" above; don't confuse the two.
+- ~~Multiple staff logins *within* one practice~~ — **built** (invitations,
+  owner/staff roles, removal, password reset — see "Staff users and
+  invitations"). **Multiple separate practices** (multi-tenancy) is a
+  different concern and was built earlier — see "Multi-tenancy" above.
 
 ---
 
@@ -4902,13 +5007,21 @@ next:
    (Repeating line-table headings and a unit per service are built — see
    "Invoicing".)
 7. Everything past Phase 1: CRM features, appointment
-   integration with the separate calendar app, staff-invite UI for
-   `practice_members`, self-serve practice signup — see "Multi-tenancy" and
+   integration with the separate calendar app, self-serve practice signup
+   (staff invitations are built — see "Staff users and invitations") — see "Multi-tenancy" and
    "Out of Scope for Phase 1" above
 
 ---
 
-*Last updated: 2026-10-13 (Aftercare instructions built and confirmed on
+*Last updated: 2026-10-14 (Published on Cloudflare Pages —
+https://dental-chart.pages.dev/, auto-deploy from main, security headers,
+open sign-up switched off; staff users built — Nastavitve → Uporabniki with
+email invitations through SES, owner/staff roles, removal by blocking the
+login, "Pozabljeno geslo?" and a "Nastavite geslo" page — migration 036; see
+"Hosting (Cloudflare Pages)" and "Staff users and invitations". Earlier: the
+Računi page's FURS status pills and "Neobračunano" overview.)*
+
+*Previous entry: 2026-10-13 (Aftercare instructions built and confirmed on
 localhost — topics library with draft texts for Monika to review, one-card
 editor on E-pošta, ticked from price-list categories on the invoice, emailed
 on issue, resend and A4 printout; new starter category Puljenje — migrations
