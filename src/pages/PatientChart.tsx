@@ -16,6 +16,7 @@ import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
+import { usePatientConsentStatus } from '../hooks/usePatientConsentStatus';
 import { useHealthQuestionnaire } from '../hooks/useHealthQuestionnaire';
 import { formatMessageTime, usePatientMessages, type MessageChannel, type MessageTone, type PatientMessage } from '../hooks/usePatientMessages';
 import { invoiceState, useInvoiceList } from '../hooks/useInvoices';
@@ -286,18 +287,34 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     if ('error' in result) setMarketingError(`Soglasja ni bilo mogoče preklicati: ${result.error}`);
     else setPatientDraft(result.patient);
   }
+  // Live consent badges (migration 040): the patient confirms by SMS/email
+  // outside this page, so the four status fields are merged in whenever they
+  // change — only those fields, so an open Uredi draft is never overwritten.
+  const { status: consentStatus, reload: reloadConsentStatus } = usePatientConsentStatus(patientId);
+  useEffect(() => {
+    if (!consentStatus) return;
+    const { smsConsentStatus, emailOptOut, emailBounced, marketingConsent } = consentStatus;
+    setPatientDraft((prev) =>
+      prev.smsConsentStatus === smsConsentStatus &&
+      prev.emailOptOut === emailOptOut &&
+      prev.emailBounced === emailBounced &&
+      prev.marketingConsent === marketingConsent
+        ? prev
+        : { ...prev, smsConsentStatus, emailOptOut, emailBounced, marketingConsent }
+    );
+  }, [consentStatus]);
   // "Pošlji soglasje": asks the patient by email (double opt-in) — staff can't
-  // grant consent themselves.
-  const [marketingRequestNote, setMarketingRequestNote] = useState<string | null>(null);
+  // grant consent themselves. While the request waits for the patient, the
+  // button reads "Soglasje poslano" (a click re-sends the same link).
   async function handleRequestMarketing() {
     setMarketingSaving(true);
     setMarketingError(null);
-    setMarketingRequestNote(null);
     const result = await requestMarketingConsent(patientId);
     setMarketingSaving(false);
     if (result.error) setMarketingError(result.error);
-    else setMarketingRequestNote(`Prošnja za soglasje je poslana na ${result.email}. Soglasje velja, ko ga pacient potrdi.`);
+    reloadConsentStatus();
   }
+  const consentRequestPending = consentStatus?.consentRequestPending ?? false;
   // Health questionnaire (Frame 1) — see useHealthQuestionnaire.ts.
   const healthQuestionnaire = useHealthQuestionnaire(patientId);
   // "Prevzemi" on the patient's own contact corrections — same updatePatient()
@@ -1359,7 +1376,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     health questionnaire, so the only staff action is
                     withdrawing it on request. */}
                 <div className="flex flex-col gap-1">
-                  <span className={VIEW_LABEL_CLASSES}>Marketing (novice, akcije)</span>
+                  <span className={VIEW_LABEL_CLASSES}>Marketing (novice, promocije)</span>
                   <div className="flex items-center gap-2">
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -1383,14 +1400,20 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                         type="button"
                         disabled={marketingSaving}
                         onClick={handleRequestMarketing}
-                        className="text-xs text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
+                        title={
+                          consentRequestPending
+                            ? `Čaka na potrditev pacienta (${patientDraft.email}). Klik pošlje povezavo znova.`
+                            : `Pošlje prošnjo za soglasje na ${patientDraft.email}.`
+                        }
+                        className={`text-xs hover:underline disabled:opacity-60 ${
+                          consentRequestPending ? 'text-[var(--muted,#6f7c79)]' : 'text-[var(--accent,#2e6e62)]'
+                        }`}
                       >
-                        {marketingSaving ? 'Pošiljam …' : 'Pošlji soglasje'}
+                        {marketingSaving ? 'Pošiljam …' : consentRequestPending ? 'Soglasje poslano' : 'Pošlji soglasje'}
                       </button>
                     )}
                   </div>
                   {marketingError && <span className="text-xs text-[var(--danger,#b3261e)]">{marketingError}</span>}
-                  {marketingRequestNote && <span className="text-xs text-[var(--accent,#2e6e62)]">{marketingRequestNote}</span>}
                 </div>
 
                 <div className="flex flex-col gap-1">

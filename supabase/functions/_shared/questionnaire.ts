@@ -230,8 +230,8 @@ export const FORM_TEXT = {
   // whoever handles the practice's ZVOP-3/GDPR obligations. The exact text
   // shown is stored with every consent, so changing it later is safe.
   marketingText: {
-    sl: 'Želim prejemati obvestila o novostih, akcijah in preventivnih pregledih zobozdravstva Goslar po e-pošti in SMS-ih. Soglasje lahko kadarkoli prekličem.',
-    en: 'I would like to receive news, offers and preventive check-up reminders from Zobozdravstvo Goslar by email and SMS. I can withdraw this consent at any time.',
+    sl: 'Želim prejemati obvestila o novostih, promocijah in preventivnih pregledih zobozdravstva Goslar po e-pošti. Soglasje lahko kadarkoli prekličem.',
+    en: 'I would like to receive news, promotions and preventive check-up reminders from Zobozdravstvo Goslar by email. I can withdraw this consent at any time.',
   },
   marketingHint: {
     sl: 'Ni pogoj za zdravljenje ali oddajo vprašalnika.',

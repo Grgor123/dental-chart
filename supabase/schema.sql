@@ -2754,3 +2754,21 @@ alter table public.email_log add constraint email_log_email_type_check check (em
   'aftercare',
   'marketing_consent'
 ));
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/040_realtime_patient_consents.sql.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['patients', 'marketing_consent_requests'] loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end
+$$;

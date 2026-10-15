@@ -29,7 +29,7 @@
     }
     function render(html) { app.innerHTML = html; }
     function done(practice) {
-      render(`<h1>Hvala!</h1><p>Soglasje je potrjeno. Obvestila ${practice ? esc(practice) + ' ' : ''}boste prejemali po e-pošti in SMS-ih. Soglasje lahko kadarkoli prekličete.</p>`);
+      render(`<h1>Hvala!</h1><p>Soglasje je potrjeno. Obvestila ${practice ? esc(practice) + ' ' : ''}boste prejemali po e-pošti. Soglasje lahko kadarkoli prekličete.</p>`);
     }
 
     async function load() {

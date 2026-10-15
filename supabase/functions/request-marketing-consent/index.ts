@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
   const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { headers: { Authorization: authHeader } } });
   const { data: patient } = await asUser
     .from('patients')
-    .select('id, practice_id, first_name, email, email_opt_out, marketing_consent')
+    .select('id, practice_id, first_name, email, email_opt_out, marketing_consent, marketing_consent_at')
     .eq('id', patientId)
     .maybeSingle();
   if (!patient) return json({ error: 'Pacient ni bil najden.' }, 404);
@@ -71,16 +71,20 @@ Deno.serve(async (req) => {
   const email = (patient.email as string).trim().toLowerCase();
   const consentText = FORM_TEXT.marketingText.sl;
 
-  const { data: open } = await service
+  // Re-use an open request only if it was sent after the last consent change
+  // (an older one was overtaken by the patient's later answer).
+  let openQuery = service
     .from('marketing_consent_requests')
     .select('id, token')
     .eq('patient_id', patient.id)
     .eq('email', email)
+    // Only a request with today's wording — after the wording changes, the
+    // patient must see (and confirm) the new text.
+    .eq('consent_text', consentText)
     .is('confirmed_at', null)
-    .gt('expires_at', new Date(Date.now() + 24 * 3600 * 1000).toISOString())
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .gt('expires_at', new Date(Date.now() + 24 * 3600 * 1000).toISOString());
+  if (patient.marketing_consent_at) openQuery = openQuery.gt('created_at', patient.marketing_consent_at as string);
+  const { data: open } = await openQuery.order('created_at', { ascending: false }).limit(1).maybeSingle();
   let token = open?.token as string | undefined;
   if (!token) {
     token = randomToken();
@@ -115,7 +119,7 @@ Deno.serve(async (req) => {
     heading: 'Prejemanje novic in obvestil',
     message:
       `Pozdravljeni${patient.first_name ? ` ${patient.first_name}` : ''},\n\n` +
-      `občasno pošiljamo obvestila o novostih, akcijah in preventivnih pregledih. Če jih želite prejemati, to potrdite s klikom na spodnji gumb:\n\n` +
+      `občasno pošiljamo e-poštna obvestila o novostih, promocijah in preventivnih pregledih. Če jih želite prejemati, to potrdite s klikom na spodnji gumb:\n\n` +
       `**${consentText}**\n\n` +
       `Če ne želite, tega sporočila preprosto ne upoštevajte — brez vaše potrditve vam obvestil ne bomo pošiljali.`,
     action: { label: 'Da, želim prejemati obvestila', url: `${CONSENT_PAGE_URL}?token=${token}` },
