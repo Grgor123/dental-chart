@@ -10,6 +10,7 @@ import {
 } from '../../hooks/useWebhooks';
 import {
   MAX_WEBHOOK_HEADERS,
+  WEBHOOK_EMAIL_TYPES,
   WEBHOOK_EVENTS,
   WEBHOOK_PLACEHOLDERS,
   buildWebhookBody,
@@ -19,6 +20,7 @@ import {
 } from '../../../supabase/functions/_shared/webhookBody';
 import { usePracticeContext } from '../../contexts/PracticeContext';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { ApiKeysSection } from './ApiKeysSection';
 
 // Nastavitve → Integracije (migration 037, owners only): outbound webhooks that
 // tell an external tool (FluentCRM, Make, Zapier, n8n, Brevo …) when a patient
@@ -40,8 +42,8 @@ const EXAMPLE_PAYLOAD = `{
   "first_name": "Ana",
   "last_name": "Novak",
   "phone": "+38641123456",
-  "tags": [],
   "tag": null,
+  "email_type": null,
   "marketing_consent": true,
   "marketing_consent_at": "2026-10-14T09:11:58.000Z"
 }`;
@@ -232,6 +234,35 @@ function WebhookCard({
           </label>
         ))}
       </div>
+
+      {webhook.events.includes('email_sent') && (
+        <div className="flex flex-col gap-1.5 rounded bg-[#f7faf9] p-3">
+          <span className="text-xs font-semibold text-[var(--ink-soft,#45524f)]">
+            Katere e-pošte sprožijo dogodek (ime e-pošte pride kot »tag«, le za paciente s soglasjem):
+          </span>
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-[var(--ink,#1c2624)]">
+            {WEBHOOK_EMAIL_TYPES.map((t) => (
+              <label key={t.key} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={webhook.emailTypes.includes(t.key)}
+                  onChange={(ev) =>
+                    commit({
+                      emailTypes: WEBHOOK_EMAIL_TYPES.map((x) => x.key).filter((k) =>
+                        k === t.key ? ev.target.checked : webhook.emailTypes.includes(k)
+                      ),
+                    })
+                  }
+                />
+                {t.label}
+              </label>
+            ))}
+          </div>
+          {webhook.emailTypes.length === 0 && (
+            <span className="text-xs text-[#6b4a00]">Izberite vsaj eno e-pošto, sicer se ta dogodek ne sproži.</span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-xs font-semibold text-[var(--ink-soft,#45524f)]">Skrivni ključ za podpis:</span>
@@ -437,8 +468,9 @@ export function IntegrationsSection() {
     <div className="flex flex-col gap-5">
       <p className="max-w-[900px] text-sm text-[var(--ink-soft,#45524f)]">
         Spletni klici (webhooki) obvestijo zunanje orodje — npr. FluentCRM, Make, Zapier ali Brevo — ko pacient na vprašalniku o
-        zdravju da soglasje za obveščanje, ali ko je soglasje preklicano. Pošljemo le kontaktne podatke (ob preklicu samo e-pošto in
-        telefon), nikoli zdravstvenih podatkov. Prejemnik je lahko katerakoli aplikacija — obliko telesa in glave lahko prilagodite.
+        zdravju da soglasje za obveščanje, ko je soglasje preklicano, ali ko pacientu s soglasjem pošljemo izbrano e-pošto (npr.
+        zahvalo po obisku — ime e-pošte pride kot »tag«). Pošljemo le kontaktne podatke (ob preklicu samo e-pošto in telefon), nikoli
+        zdravstvenih podatkov ali vsebine e-pošte. Prejemnik je lahko katerakoli aplikacija — obliko telesa in glave lahko prilagodite.
         Če prejemnik ni dosegljiv, poskušamo znova do 24 ur.
       </p>
 
@@ -564,6 +596,10 @@ export function IntegrationsSection() {
             </table>
           </div>
         )}
+      </div>
+
+      <div className="border-t border-[var(--line,#ccd6d4)] pt-5">
+        <ApiKeysSection />
       </div>
 
       {confirmDelete && (

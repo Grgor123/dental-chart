@@ -1,22 +1,42 @@
-// Outbound webhook bodies (migrations 037–038) — pure TS, no Deno APIs, so the
+// Outbound webhook bodies (migrations 037–038, 043) — pure TS, no Deno APIs, so the
 // deliver-webhooks Edge Function AND the Integracije editor (preview,
 // validation) build bodies with the same code, like templateDefs.ts.
 //
 // A webhook either sends the standard body (body_template null) or the
 // practice's own JSON with {placeholders}:
-//   - a string that is exactly one placeholder ("{tags}", "{marketing_consent}")
-//     becomes the raw value — an array, a boolean, null …;
+//   - a string that is exactly one placeholder ("{marketing_consent}") becomes
+//     the raw value — a boolean, null …;
 //   - inside a longer string a placeholder is replaced by its text
 //     ("Pacient {full_name}"); an unknown {name} is left as typed.
 // Keys and fixed values are the practice's own, so any receiving app's format
 // can be matched.
 
-export type WebhookEventKey = 'consent_granted' | 'consent_withdrawn';
+export type WebhookEventKey = 'consent_granted' | 'consent_withdrawn' | 'email_sent';
 
 export const WEBHOOK_EVENTS: { key: WebhookEventKey; label: string }[] = [
   { key: 'consent_granted', label: 'Soglasje za obveščanje dano' },
   { key: 'consent_withdrawn', label: 'Soglasje za obveščanje preklicano' },
+  // 043: only for patients with marketing consent, only the ticked types.
+  { key: 'email_sent', label: 'E-pošta poslana' },
 ];
+
+/** Email types that can fire email_sent (email_log.email_type) and the name sent as "tag". */
+export const WEBHOOK_EMAIL_TYPES: { key: string; label: string }[] = [
+  { key: 'appointment_confirmation', label: 'Potrditev termina' },
+  { key: 'appointment_reminder', label: 'Opomnik na termin' },
+  { key: 'appointment_rescheduled', label: 'Sprememba termina' },
+  { key: 'appointment_cancelled', label: 'Odpoved termina' },
+  { key: 'post_visit', label: 'Zahvala po obisku' },
+  { key: 'recall', label: 'Vabilo na kontrolni pregled' },
+  { key: 'health_questionnaire', label: 'Vprašalnik o zdravju' },
+  { key: 'aftercare', label: 'Navodila po posegu' },
+  { key: 'invoice', label: 'Račun' },
+];
+
+export function emailTypeLabel(key: string | null): string | null {
+  if (!key) return null;
+  return WEBHOOK_EMAIL_TYPES.find((t) => t.key === key)?.label ?? key;
+}
 
 export interface WebhookValues {
   event: string;
@@ -29,13 +49,18 @@ export interface WebhookValues {
   first_name: string | null;
   last_name: string | null;
   full_name: string | null;
-  tags: string[];
+  /** email_sent: the email's name, e.g. "Zahvala po obisku" — for tagging the contact. */
+  tag: string | null;
+  /** email_sent: the email's type key, e.g. "post_visit". */
+  email_type: string | null;
   marketing_consent: boolean;
   marketing_consent_at: string | null;
 }
 
 export const WEBHOOK_PLACEHOLDERS: { key: keyof WebhookValues; label: string }[] = [
-  { key: 'event', label: 'dogodek (consent_granted / consent_withdrawn / test)' },
+  { key: 'event', label: 'dogodek (consent_granted / consent_withdrawn / email_sent / test)' },
+  { key: 'tag', label: 'ime poslane e-pošte, npr. »Zahvala po obisku« (pri email_sent)' },
+  { key: 'email_type', label: 'vrsta poslane e-pošte, npr. post_visit (pri email_sent)' },
   { key: 'email', label: 'e-pošta' },
   { key: 'first_name', label: 'ime (prazno pri preklicu)' },
   { key: 'last_name', label: 'priimek (prazno pri preklicu)' },
@@ -43,7 +68,6 @@ export const WEBHOOK_PLACEHOLDERS: { key: keyof WebhookValues; label: string }[]
   { key: 'phone', label: 'telefon (E.164)' },
   { key: 'marketing_consent', label: 'soglasje (true / false)' },
   { key: 'marketing_consent_at', label: 'čas soglasja ali preklica' },
-  { key: 'tags', label: 'oznake (seznam, zaenkrat prazen)' },
   { key: 'practice', label: 'ime ordinacije' },
   { key: 'occurred_at', label: 'čas pošiljanja' },
   { key: 'event_id', label: 'ID dogodka (enak pri ponovnih poskusih)' },
@@ -64,7 +88,8 @@ export function sampleWebhookValues(eventId: string, practice: string): WebhookV
     first_name: 'Testni',
     last_name: 'Pacient',
     full_name: 'Testni Pacient',
-    tags: [],
+    tag: 'Zahvala po obisku',
+    email_type: 'post_visit',
     marketing_consent: true,
     marketing_consent_at: now,
   };
@@ -81,8 +106,8 @@ export function standardWebhookBody(v: WebhookValues): Record<string, unknown> {
     first_name: v.first_name,
     last_name: v.last_name,
     phone: v.phone,
-    tags: v.tags,
-    tag: null,
+    tag: v.tag,
+    email_type: v.email_type,
     marketing_consent: v.marketing_consent,
     marketing_consent_at: v.marketing_consent_at,
   };

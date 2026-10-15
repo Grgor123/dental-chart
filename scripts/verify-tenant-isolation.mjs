@@ -415,6 +415,20 @@ async function main() {
     }
   }
 
+  // 4m. Inbound API keys (042_inbound_api.sql) — account 2 can't add or read
+  // API keys of account 1's practice, and the public API refuses a request
+  // without a key.
+  if (account1PracticeId) {
+    const { error: keySpoofError } = await client2.from('api_keys').insert({
+      practice_id: account1PracticeId, name: 'Spoof', prefix: 'dc_spoof', key_hash: '0'.repeat(64), scopes: ['unsubscribe'],
+    });
+    check("account 2 cannot add an API key to account 1's practice", !!keySpoofError, keySpoofError ? keySpoofError.message : 'insert unexpectedly succeeded');
+    const { data: leakedKeys } = await client2.from('api_keys').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's API keys", !leakedKeys || leakedKeys.length === 0, `${leakedKeys?.length ?? 0} row(s) visible`);
+    const noKey = await fetch(`${SUPABASE_URL}/functions/v1/public-api/ping`, { method: 'POST' });
+    check('the public API refuses a request without a key', noKey.status === 401, `HTTP ${noKey.status}`);
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

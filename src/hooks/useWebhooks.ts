@@ -22,10 +22,12 @@ export interface Webhook {
   /** null = the standard body. */
   bodyTemplate: string | null;
   headers: Record<string, string>;
+  /** Email types that fire email_sent (migration 043). */
+  emailTypes: string[];
   createdAt: string;
 }
 
-export type WebhookFields = Partial<Pick<Webhook, 'name' | 'url' | 'enabled' | 'events' | 'bodyTemplate' | 'headers'>>;
+export type WebhookFields = Partial<Pick<Webhook, 'name' | 'url' | 'enabled' | 'events' | 'bodyTemplate' | 'headers' | 'emailTypes'>>;
 
 export interface WebhookDelivery {
   id: string;
@@ -62,6 +64,7 @@ function mapWebhook(row: Record<string, unknown>): Webhook {
     enabled: row.enabled as boolean,
     bodyTemplate: (row.body_template as string | null) ?? null,
     headers: (row.headers as Record<string, string> | null) ?? {},
+    emailTypes: (row.email_types as string[] | null) ?? [],
     createdAt: row.created_at as string,
   };
 }
@@ -129,9 +132,10 @@ export function useWebhooks() {
   }
 
   async function updateWebhook(id: string, fields: WebhookFields): Promise<{ error?: string }> {
-    const { bodyTemplate, ...rest } = fields;
+    const { bodyTemplate, emailTypes, ...rest } = fields;
     const row: Record<string, unknown> = { ...rest };
     if (bodyTemplate !== undefined) row.body_template = bodyTemplate;
+    if (emailTypes !== undefined) row.email_types = emailTypes;
     const { error: updateError } = await supabase.from('webhooks').update(row).eq('id', id);
     if (updateError) return { error: updateError.message };
     await reload();

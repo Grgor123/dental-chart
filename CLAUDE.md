@@ -140,6 +140,7 @@ src/
                                 # roles, remove — see "Staff users" below
       IntegrationsSection.tsx  # Nastavitve → Integracije (owners): outbound
                                 # webhooks — see "Outbound webhooks" below
+      ApiKeysSection.tsx       # Integracije → API ključi (inbound API)
       ZzzsPickerDialog.tsx     # Cenik → "+ Iz šifranta ZZZS" — see "ZZZS
                                 # šifrant" below
       PriceListImportDialog.tsx # Cenik → "Uvozi cenik" (CSV/.xlsx, preview)
@@ -233,6 +234,8 @@ src/
                                 # via Realtime — see "Outbound webhooks" below
     useWebhooks.ts              # Integracije: webhooks, delivery log, test,
                                 # backfill — see "Outbound webhooks" below
+    useApiKeys.ts               # Inbound API keys (made in the browser, only
+                                # the hash stored) — see "Outbound webhooks"
   lib/
     supabase.ts                # Supabase client
     describeToothRecord.ts     # One tooth_records row -> its bullet-point
@@ -496,7 +499,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`040_realtime_patient_consents.sql` — all confirmed run (016–019 are the
+`043_remove_tags_add_email_sent.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -504,10 +507,10 @@ marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Communication history" below; 032 FURS; 033 the ZZZS šifrant and
 chart → invoice, see "ZZZS šifrant" below; 034–035 aftercare instructions,
 see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
-below; 037–040 outbound webhooks and marketing consent requests, see
-"Outbound webhooks" below). `supabase/schema.sql`
+below; 037–043 outbound webhooks, marketing consent requests and the inbound
+API — 041's tags were removed again by 043 — see "Outbound webhooks" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(040 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(043 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3830,7 +3833,9 @@ before starting):
      instructions instead.
    - ~~Independent of invoicing: a real communication history on the
      patient record~~ — **built**, see "Communication history" below.
-2. **Tags** (`tags`/`patient_tags`, manual + automatic) with a **share
+2. **Dropped 2026-10-15** (built, then removed as too complicated — see
+   "Outbound webhooks and marketing consent"; `email_sent` replaced it).
+   **Tags** (`tags`/`patient_tags`, manual + automatic) with a **share
    externally** flag per tag — treatment-derived tags (`implantat`,
    `ortodontija`) are clinical and must never reach an external autoresponder.
 3. **Built 2026-10-15 — see "Outbound webhooks and marketing consent". The
@@ -3844,7 +3849,8 @@ before starting):
    it maps onto **FluentCRM's incoming webhook** (Gregor's autoresponder) and
    onto Make/Zapier/n8n/Brevo without an adapter; HMAC-signed, retried,
    delivery log.
-4. **Inbound API** with per-practice hashed API keys (list/search patients,
+4. **Built 2026-10-15, unsubscribe sync only** — see "Outbound webhooks and
+   marketing consent". **Inbound API** with per-practice hashed API keys (list/search patients,
    add/remove tags, create/update, set marketing consent), plus syncing an
    unsubscribe made in the autoresponder back to `marketing_consent = false`.
    Webhook/API-key configuration belongs on the deferred Nastavitve page.
@@ -4495,10 +4501,18 @@ verification ON — the reset request is sent with the public anon key).
 ### Outbound webhooks and marketing consent (Nastavitve → Integracije)
 
 **Status: built, deployed and confirmed by Gregor (2026-10-15)** — migrations
-037–040 run, tested end to end with webhook.site; isolation 46/46. Gregor's
-choices: events for consent given **and** withdrawn; tags later (the payload
-already has an empty `tags`); owners only; a button for patients who
-consented earlier; any receiving app, not just FluentCRM.
+037–043 run, tested end to end with webhook.site and PowerShell; isolation
+49/49. Gregor's choices: events for consent given **and** withdrawn, plus
+"email sent"; owners only; a button for patients who consented earlier; any
+receiving app, not just FluentCRM; an inbound API that only syncs
+unsubscribes.
+
+**Tags were built and removed the same day** (041 → 043): manual tags,
+automatic ones (price-list category on an issued invoice, "Nov pacient",
+"Brez obiska 12 mesecev", nightly job), a per-tag "share externally" flag and
+tag_added/tag_removed events. Gregor found it too complicated ("nobody would
+understand it") and chose the simpler `email_sent` event below instead. Don't
+reintroduce tags without asking.
 
 - **Nastavitve → Integracije** (`IntegrationsSection.tsx`, `useWebhooks.ts`;
   tab shown to owners only, RLS `current_practice_role() = 'owner'` on both
@@ -4518,10 +4532,11 @@ consented earlier; any receiving app, not just FluentCRM.
   skipped too.
 - **Bodies** (`_shared/webhookBody.ts`, shared by the function and the
   editor): standard flat JSON `event, event_id, occurred_at, practice,
-  source, email, first_name, last_name, phone, tags, tag, marketing_consent,
-  marketing_consent_at`. In a custom body a string that is exactly one
-  placeholder keeps its type (`"{marketing_consent}"` → `true`), inside
-  longer text it's text. JSON only — other formats (form-encoded) skipped
+  source, email, first_name, last_name, phone, tag, email_type,
+  marketing_consent, marketing_consent_at` (`tag`/`email_type` only for
+  email_sent). In a custom body a string that is exactly one placeholder
+  keeps its type (`"{marketing_consent}"` → `true`), inside longer text it's
+  text. JSON only — other formats (form-encoded) skipped
   until a real app needs them (Gregor).
 - **Delivery** (`deliver-webhooks`, outbox table `webhook_deliveries`):
   posted at once (pg_net from the trigger) and by a 5-minute cron for retries
@@ -4556,15 +4571,39 @@ consented earlier; any receiving app, not just FluentCRM.
   returning to the window — a 20 s poll was tried and removed at Gregor's
   request). Only those status fields are merged, so an open Uredi draft is
   never overwritten. A failed "Prekliči soglasje" now shows its error.
+- **"E-pošta poslana" (`email_sent`, migration 043)**: an integration with
+  this event ticks which email types count (Potrditev termina, Opomnik,
+  Sprememba, Odpoved, Zahvala po obisku, Vabilo na kontrolni pregled,
+  Vprašalnik, Navodila po posegu, Račun — `WEBHOOK_EMAIL_TYPES` in
+  `_shared/webhookBody.ts`, `webhooks.email_types`). Trigger
+  `enqueue_webhook_email_sent` on `email_log` insert with status `sent`, for a
+  patient with marketing consent (re-checked at send time). The body carries
+  `tag` = the email's name (e.g. "Zahvala po obisku", for FluentCRM "Add tag")
+  and `email_type` = its key — never the content (aftercare topics, invoice
+  amounts stay inside).
+- **Inbound API** (migration 042, `public-api` function, `--no-verify-jwt`):
+  per-practice keys made in Integracije → "API ključi" (owners; generated in
+  the browser, shown once, only SHA-256 hash + prefix stored, scopes, last use,
+  revoke). `POST …/functions/v1/public-api/unsubscribe` with `{"email"}` (JSON
+  or form) and `Authorization: Bearer dc_…` (or `X-Api-Key`) sets marketing
+  consent false for that address in the key's practice (source `api`), which
+  also sends consent_withdrawn webhooks; never grants consent. `…/ping` checks
+  a key. FluentCRM: automation "Contact unsubscribed" → Outgoing Webhook.
+  Testing from Windows PowerShell: `Invoke-RestMethod` (not `curl`), key read
+  with `(Get-Clipboard -Raw).Trim()` — a hidden `Read-Host` prompt didn't take
+  a paste in the VS Code terminal, and without `-Raw` a trailing newline makes
+  it an array.
 - **Tenant isolation**: section 4l (no webhook on another practice, no
   reading its webhooks/deliveries, no claim RPC from a browser, no backfill
-  or test on another practice's webhook) — passed 2026-10-15 (46/46).
-- **Not done**: tags (+ tag events), the inbound API / syncing an
-  autoresponder unsubscribe back, SMS marketing consent.
+  or test on another practice's webhook) and 4m (no API key on / read from
+  another practice, the public API refuses a request without a key) — passed
+  2026-10-15 (49/49).
+- **Not done**: more API scopes (reading consented contacts, creating leads —
+  offered, not chosen), SMS marketing consent.
 
 **Deploy**: `deliver-webhooks`, `request-marketing-consent` (JWT ON),
-`marketing-consent-confirm --no-verify-jwt`, `health-questionnaire
---no-verify-jwt` (consent wording).
+`marketing-consent-confirm --no-verify-jwt`, `public-api --no-verify-jwt`,
+`health-questionnaire --no-verify-jwt` (consent wording).
 
 ---
 
@@ -4992,10 +5031,9 @@ next:
    deferred, since it depends on a Google OAuth app-verification review
    (CASA assessment) outside this project's control — see "Email
    notifications (Amazon SES)" above
-5. Email follow-ups agreed in design but not built: tags and the inbound
-   API/API keys for autoresponders like FluentCRM — see "Email templates
-   (E-pošta)" above, "Planned next" (outbound webhooks are built — see
-   "Outbound webhooks and marketing consent")
+5. ~~Email follow-ups (tags, webhooks, inbound API)~~ — webhooks and the
+   inbound API (unsubscribe) are built, tags were dropped — see "Outbound
+   webhooks and marketing consent"
 5a. **Price list built (Nastavitve → Cenik, migration `020_add_price_list.sql`); invoicing phase 1 built too (see "Invoicing" above) — FURS fiscal verification (phase 2) is next.**
    `services`/`service_categories`, both practice-scoped root tables (4 RLS
    policies each, like `therapists`), every practice seeded with a starter
@@ -5102,7 +5140,13 @@ next:
 
 ---
 
-*Last updated: 2026-10-15 (Outbound webhooks — Nastavitve → Integracije,
+*Last updated: 2026-10-15, later (Tags built and removed again as too
+complicated; replaced by an "E-pošta poslana" webhook event with per-type
+checkboxes and the email's name as "tag"; inbound API with per-key
+permissions — unsubscribe sync only — migrations 041–043; isolation 49/49.
+See "Outbound webhooks and marketing consent".)*
+
+*Previous entry: 2026-10-15 (Outbound webhooks — Nastavitve → Integracije,
 owners only, consent given/withdrawn, custom JSON body + headers, signed,
 retried, logged; "Pošlji soglasje" double opt-in by email; email opt-out
 withdraws marketing consent; marketing consent is email only; live consent

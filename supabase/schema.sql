@@ -2772,3 +2772,129 @@ begin
   end loop;
 end
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/042_inbound_api.sql.
+-- ---------------------------------------------------------------------------
+create table public.api_keys (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  name text not null check (length(trim(name)) between 1 and 80),
+  prefix text not null,                    -- first characters, to recognise a key
+  key_hash text not null unique check (key_hash ~ '^[0-9a-f]{64}$'),
+  scopes text[] not null check (cardinality(scopes) >= 1 and scopes <@ array['unsubscribe']::text[]),
+  created_by uuid references auth.users(id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  use_count int not null default 0,
+  revoked_at timestamptz
+);
+create index api_keys_practice_id_idx on public.api_keys(practice_id);
+
+alter table public.api_keys enable row level security;
+create policy api_keys_select on public.api_keys for select
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy api_keys_insert on public.api_keys for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy api_keys_update on public.api_keys for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy api_keys_delete on public.api_keys for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+-- From the browser only the name can change and the key be revoked; the hash,
+-- scopes and usage stay as created (usage is written by the function).
+create or replace function public.guard_api_key_changes()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  if auth.role() = 'service_role' then
+    return new;
+  end if;
+  if new.key_hash <> old.key_hash or new.prefix <> old.prefix or new.scopes <> old.scopes
+     or new.practice_id <> old.practice_id or new.use_count <> old.use_count
+     or new.last_used_at is distinct from old.last_used_at then
+    raise exception 'api_key_immutable';
+  end if;
+  if old.revoked_at is not null and new.revoked_at is null then
+    raise exception 'api_key_revoked';
+  end if;
+  return new;
+end;
+$$;
+create trigger guard_api_key_changes_trigger
+  before update on public.api_keys
+  for each row execute function public.guard_api_key_changes();
+
+alter table public.patients drop constraint if exists patients_marketing_consent_source_check;
+alter table public.patients add constraint patients_marketing_consent_source_check
+  check (marketing_consent_source in ('questionnaire', 'staff', 'email', 'unsubscribe', 'api'));
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/043_remove_tags_add_email_sent.sql
+-- (041's tags are not baked in — 043 removed them again).
+-- ---------------------------------------------------------------------------
+-- ---- Remove tags (041) -------------------------------------------------------------
+select cron.unschedule(jobid) from cron.job where jobname = 'refresh-activity-tags';
+drop trigger if exists tag_patient_on_invoice_issued_trigger on public.invoices;
+drop table if exists public.patient_tags;
+drop table if exists public.tags;
+drop function if exists public.tag_patient_on_invoice_issued();
+drop function if exists public.refresh_activity_tags();
+drop function if exists public.ensure_auto_tag(uuid, text, text);
+drop function if exists public.enqueue_webhook_tag_change();
+drop function if exists public.kick_webhooks_after_statement();
+drop function if exists public.set_patient_tag_practice_id();
+drop function if exists public.guard_tag_changes();
+
+delete from public.webhook_deliveries where event in ('tag_added', 'tag_removed');
+alter table public.webhook_deliveries drop column if exists tag_id;
+alter table public.webhook_deliveries drop column if exists tag_name;
+
+-- ---- email_sent ------------------------------------------------------------------------
+alter table public.webhooks drop constraint if exists webhooks_events_check;
+update public.webhooks
+  set events = array(select e from unnest(events) e where e in ('consent_granted', 'consent_withdrawn'))
+  where events && array['tag_added', 'tag_removed'];
+-- A webhook that only had tag events keeps a valid event but is switched off.
+update public.webhooks set events = array['consent_granted'], enabled = false where cardinality(events) = 0;
+alter table public.webhooks add constraint webhooks_events_check
+  check (cardinality(events) >= 1 and events <@ array['consent_granted', 'consent_withdrawn', 'email_sent']::text[]);
+
+-- Which email types fire email_sent for this webhook (email_log.email_type).
+alter table public.webhooks add column if not exists email_types text[] not null default '{}';
+
+alter table public.webhook_deliveries drop constraint if exists webhook_deliveries_event_check;
+alter table public.webhook_deliveries add constraint webhook_deliveries_event_check
+  check (event in ('consent_granted', 'consent_withdrawn', 'email_sent', 'test'));
+alter table public.webhook_deliveries add column if not exists email_type text;
+
+-- An email logged as sent to a consented patient → queue for the webhooks that
+-- ticked its type.
+create or replace function public.enqueue_webhook_email_sent()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_count int;
+begin
+  if new.status <> 'sent' or new.patient_id is null then
+    return new;
+  end if;
+  if not exists (select 1 from public.patients where id = new.patient_id and marketing_consent) then
+    return new;
+  end if;
+  insert into public.webhook_deliveries (practice_id, webhook_id, event, origin, patient_id, email_type)
+  select w.practice_id, w.id, 'email_sent', 'trigger', new.patient_id, new.email_type
+  from public.webhooks w
+  join public.patients p on p.id = new.patient_id and p.practice_id = w.practice_id
+  where w.enabled and 'email_sent' = any(w.events) and new.email_type = any(w.email_types);
+  get diagnostics v_count = row_count;
+  if v_count > 0 then
+    perform public.kick_webhook_delivery();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_webhook_email_sent_trigger on public.email_log;
+create trigger enqueue_webhook_email_sent_trigger
+  after insert on public.email_log
+  for each row execute function public.enqueue_webhook_email_sent();

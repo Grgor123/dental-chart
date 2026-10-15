@@ -15,6 +15,8 @@
 //   SENDING (re-checked on every attempt); name, email, phone.
 // - consent_withdrawn (038): only if the consent is still withdrawn; email and
 //   phone only, so the receiving tool can find the contact and stop marketing.
+// - email_sent (043): an email of a ticked type went to a patient; only while
+//   the patient has consent; "tag" carries the email's name, never content.
 // The body is the standard flat JSON or the webhook's own template, plus the
 // webhook's own headers (038) — built by _shared/webhookBody.ts.
 //
@@ -23,7 +25,7 @@
 //
 // Deploy: supabase functions deploy deliver-webhooks
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { buildWebhookBody, headerError, sampleWebhookValues, type WebhookValues } from '../_shared/webhookBody.ts';
+import { buildWebhookBody, emailTypeLabel, headerError, sampleWebhookValues, type WebhookValues } from '../_shared/webhookBody.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -65,6 +67,7 @@ interface Delivery {
   origin: string;
   patient_id: string | null;
   attempts: number;
+  email_type: string | null;
 }
 
 // ---- SSRF guard: public https hosts only ------------------------------------------
@@ -196,7 +199,9 @@ async function processQueue(service: SupabaseClient): Promise<{ processed: numbe
       await finish({ status: 'skipped', last_error: 'Integracija je izklopljena.' });
       continue;
     }
-    const granted = d.event === 'consent_granted';
+    const isEmail = d.event === 'email_sent';
+    // email_sent needs a consented patient, like consent_granted.
+    const granted = d.event === 'consent_granted' || isEmail;
     if ((!granted && d.event !== 'consent_withdrawn') || !d.patient_id) {
       await finish({ status: 'skipped', last_error: 'Neznan dogodek.' });
       continue;
@@ -219,6 +224,7 @@ async function processQueue(service: SupabaseClient): Promise<{ processed: numbe
       continue;
     }
 
+
     if (!practices.has(d.practice_id)) practices.set(d.practice_id, await practiceName(service, d.practice_id));
     const values: WebhookValues = {
       event: d.event,
@@ -232,7 +238,8 @@ async function processQueue(service: SupabaseClient): Promise<{ processed: numbe
       first_name: granted ? patient.first_name : null,
       last_name: granted ? patient.last_name : null,
       full_name: granted ? `${patient.first_name} ${patient.last_name}` : null,
-      tags: [],
+      tag: isEmail ? emailTypeLabel(d.email_type) : null,
+      email_type: isEmail ? d.email_type : null,
       marketing_consent: granted,
       marketing_consent_at: patient.marketing_consent_at,
     };
