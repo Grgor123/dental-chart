@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Soglasje za obveščanje</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 520px; margin: 48px auto; padding: 0 16px; text-align: center; color: #222; }
+  h1 { font-size: 1.3rem; }
+  p { color: #555; line-height: 1.5; }
+  .consent { color: #222; font-weight: 600; }
+  button { font-size: 1.05rem; padding: 14px 24px; border-radius: 8px; border: none; cursor: pointer; background: #2e6e62; color: white; margin-top: 16px; }
+  button:disabled { opacity: 0.6; cursor: default; }
+</style>
+</head>
+<body>
+  <!-- Static page on GitHub Pages: Supabase Edge Functions can't serve HTML on
+       the shared domain (see docs/sms-consent.html). Data and the confirm action
+       come from the marketing-consent-confirm function (migration 039). -->
+  <div id="app"><p>Nalaganje …</p></div>
+  <script>
+    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/marketing-consent-confirm';
+    const token = new URLSearchParams(location.search).get('token');
+    const app = document.getElementById('app');
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    }
+    function render(html) { app.innerHTML = html; }
+    function done(practice) {
+      render(`<h1>Hvala!</h1><p>Soglasje je potrjeno. Obvestila ${practice ? esc(practice) + ' ' : ''}boste prejemali po e-pošti in SMS-ih. Soglasje lahko kadarkoli prekličete.</p>`);
+    }
+
+    async function load() {
+      if (!token) return render('<h1>Povezava ni veljavna.</h1>');
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok) return render('<h1>Povezava ni veljavna.</h1>');
+        if (data.status === 'confirmed') return done(data.practiceName);
+        if (data.status === 'expired') return render('<h1>Povezava je potekla.</h1><p>Za novo povezavo se obrnite na ordinacijo.</p>');
+        render(`
+          <h1>Soglasje za obveščanje</h1>
+          <p>${esc(data.practiceName)}</p>
+          <p class="consent">${esc(data.consentText)}</p>
+          <button id="confirmBtn">Da, želim prejemati obvestila</button>
+          <p style="font-size:0.9rem">Če ne želite, to stran preprosto zaprite.</p>
+        `);
+        document.getElementById('confirmBtn').addEventListener('click', () => confirmConsent(data.practiceName));
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    async function confirmConsent(practice) {
+      const btn = document.getElementById('confirmBtn');
+      btn.disabled = true;
+      btn.textContent = 'Pošiljanje …';
+      try {
+        const res = await fetch(`${FUNCTION_URL}?token=${encodeURIComponent(token)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error('failed');
+        if (data.status === 'expired') return render('<h1>Povezava je potekla.</h1><p>Za novo povezavo se obrnite na ordinacijo.</p>');
+        done(practice);
+      } catch (e) {
+        render('<h1>Prišlo je do napake. Poskusite znova.</h1>');
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

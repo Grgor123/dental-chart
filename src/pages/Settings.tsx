@@ -5,6 +5,7 @@ import { PriceListSection } from '../components/settings/PriceListSection';
 import { InvoiceSettingsSection } from '../components/settings/InvoiceSettingsSection';
 import { UserProfileSection } from '../components/settings/UserProfileSection';
 import { PracticeUsersSection } from '../components/settings/PracticeUsersSection';
+import { IntegrationsSection } from '../components/settings/IntegrationsSection';
 import { usePracticeContext } from '../contexts/PracticeContext';
 
 interface SettingsProps {
@@ -28,14 +29,17 @@ const SECTIONS = [
   { key: 'racuni', label: 'Podatki za račune' },
   { key: 'profil', label: 'Moj profil' },
   { key: 'uporabniki', label: 'Uporabniki' },
+  // Owners only (webhooks send patient contact data out of the app).
+  { key: 'integracije', label: 'Integracije', ownerOnly: true },
 ];
 
 // "Nastavitve" — the practice-wide setup area (the submenu item used to be an
 // inert placeholder). See supabase/migrations/020_add_price_list.sql for the
 // price list this first section manages.
 export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateInvoices, onNavigateSettings, initialSection }: SettingsProps) {
-  const { practiceName } = usePracticeContext();
-  const [section, setSection] = useState(SECTIONS.some((s) => s.key === initialSection) ? initialSection! : SECTIONS[0].key);
+  const { practiceName, role } = usePracticeContext();
+  const sections = SECTIONS.filter((s) => !('ownerOnly' in s) || role === 'owner');
+  const [section, setSection] = useState(sections.some((s) => s.key === initialSection) ? initialSection! : sections[0].key);
 
   return (
     <>
@@ -56,7 +60,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
           <p className="mt-1.5 text-sm text-[var(--ink-soft,#45524f)]">Nastavitve ordinacije.</p>
         </div>
 
-        <CardTabs tabs={SECTIONS} selectedKey={section} onSelect={setSection}>
+        <CardTabs tabs={sections} selectedKey={section} onSelect={setSection}>
           {({ squareTopLeft }) => (
             <div
               className={`rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-5 ${squareTopLeft ? 'rounded-tl-none' : ''}`}
@@ -65,6 +69,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
               {section === 'racuni' && <InvoiceSettingsSection />}
               {section === 'profil' && <UserProfileSection />}
               {section === 'uporabniki' && <PracticeUsersSection />}
+              {section === 'integracije' && role === 'owner' && <IntegrationsSection />}
             </div>
           )}
         </CardTabs>

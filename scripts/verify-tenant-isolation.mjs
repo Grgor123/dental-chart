@@ -390,6 +390,31 @@ async function main() {
     );
   }
 
+  // 4l. Outbound webhooks (037_outbound_webhooks.sql) — account 2 can't add a
+  // webhook to account 1's practice (that would leak its patients' contacts),
+  // can't read account 1's webhooks/delivery log, can't start a backfill or a
+  // test send for them, and can't call the queue-claiming function at all.
+  if (account1PracticeId) {
+    const { error: hookSpoofError } = await client2
+      .from('webhooks')
+      .insert({ practice_id: account1PracticeId, name: 'Spoof', url: 'https://example.com/hook' });
+    check("account 2 cannot add a webhook to account 1's practice", !!hookSpoofError, hookSpoofError ? hookSpoofError.message : 'insert unexpectedly succeeded');
+    const { data: account1Hooks } = await client1.from('webhooks').select('id').limit(1);
+    const account1HookId = account1Hooks?.[0]?.id;
+    const { data: leakedHooks } = await client2.from('webhooks').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's webhooks", !leakedHooks || leakedHooks.length === 0, `${leakedHooks?.length ?? 0} row(s) visible`);
+    const { data: leakedDeliveries } = await client2.from('webhook_deliveries').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's webhook deliveries", !leakedDeliveries || leakedDeliveries.length === 0, `${leakedDeliveries?.length ?? 0} row(s) visible`);
+    const { error: claimError } = await client2.rpc('claim_webhook_deliveries', { p_limit: 1 });
+    check('no browser can claim webhook deliveries (service role only)', !!claimError, claimError ? claimError.message : 'call unexpectedly succeeded');
+    if (account1HookId) {
+      const { error: backfillError } = await client2.rpc('queue_webhook_backfill', { p_webhook_id: account1HookId });
+      check("account 2 cannot start a backfill on account 1's webhook", !!backfillError, backfillError ? backfillError.message : 'call unexpectedly succeeded');
+      const { error: testError } = await client2.functions.invoke('deliver-webhooks', { body: { action: 'test', webhookId: account1HookId } });
+      check("account 2 cannot send a test on account 1's webhook", !!testError, testError ? 'refused' : 'test unexpectedly sent');
+    }
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

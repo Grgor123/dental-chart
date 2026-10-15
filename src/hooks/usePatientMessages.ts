@@ -58,7 +58,8 @@ function dateTime(iso: string): string {
 
 function emailToMessage(row: Row): PatientMessage {
   const type = row.email_type as string;
-  const label = type in TEMPLATE_DEFS ? TEMPLATE_DEFS[type as TemplateKey].label : 'E-pošta';
+  const label =
+    type === 'marketing_consent' ? 'Prošnja za soglasje' : type in TEMPLATE_DEFS ? TEMPLATE_DEFS[type as TemplateKey].label : 'E-pošta';
   const status = EMAIL_STATUS[row.status as string] ?? EMAIL_STATUS.sent;
   return {
     id: `email-${row.id as string}`,

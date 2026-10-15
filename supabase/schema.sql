@@ -2413,3 +2413,344 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/037_outbound_webhooks.sql.
+-- ---------------------------------------------------------------------------
+-- The signed-in user's role in their practice (RLS helper, like
+-- current_practice_id()).
+create or replace function public.current_practice_role()
+returns text
+language sql stable security definer set search_path = public, pg_temp
+as $$
+  select role from public.practice_members
+  where user_id = auth.uid() and practice_id = public.current_practice_id()
+  limit 1
+$$;
+revoke all on function public.current_practice_role() from public;
+grant execute on function public.current_practice_role() to authenticated;
+
+create table public.webhooks (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  name text not null check (length(trim(name)) between 1 and 80),
+  url text not null check (url ~ '^https://[^\s]+$' and length(url) <= 2000),
+  events text[] not null default '{consent_granted}' check (events <@ array['consent_granted']::text[]),
+  -- Shared with the receiver to check the X-Webhook-Signature header.
+  secret text not null default replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''),
+  enabled boolean not null default true,
+  created_by uuid references auth.users(id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index webhooks_practice_id_idx on public.webhooks(practice_id);
+
+alter table public.webhooks enable row level security;
+-- Owners only — a webhook sends patient contact data out of the app.
+create policy webhooks_select on public.webhooks for select
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy webhooks_insert on public.webhooks for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy webhooks_update on public.webhooks for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy webhooks_delete on public.webhooks for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+create table public.webhook_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  webhook_id uuid not null references public.webhooks(id) on delete cascade,
+  event text not null check (event in ('consent_granted', 'test')),
+  -- 'trigger' (live event), 'backfill' ("Pošlji obstoječe"), 'test'.
+  origin text not null default 'trigger' check (origin in ('trigger', 'backfill', 'test')),
+  patient_id uuid references public.patients(id) on delete cascade,
+  status text not null default 'pending'
+    check (status in ('pending', 'sending', 'delivered', 'failed', 'skipped')),
+  attempts int not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  locked_at timestamptz,
+  payload jsonb,              -- what was actually sent (last attempt)
+  response_status int,
+  last_error text,
+  created_at timestamptz not null default now(),
+  delivered_at timestamptz
+);
+create index webhook_deliveries_due_idx on public.webhook_deliveries(next_attempt_at) where status in ('pending', 'sending');
+create index webhook_deliveries_webhook_idx on public.webhook_deliveries(webhook_id, created_at desc);
+
+alter table public.webhook_deliveries enable row level security;
+-- Read-only for owners (the delivery log); only the Edge Function writes.
+create policy webhook_deliveries_select on public.webhook_deliveries for select
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+-- Wake the deliver-webhooks function now (the cron job is the safety net).
+create or replace function public.kick_webhook_delivery()
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_service_role_key text;
+begin
+  select decrypted_secret into v_service_role_key
+    from vault.decrypted_secrets where name = 'edge_function_service_role_key';
+  if v_service_role_key is not null then
+    perform net.http_post(
+      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/deliver-webhooks',
+      headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
+      body := '{"processQueue": true}'::jsonb
+    );
+  end if;
+end;
+$$;
+revoke execute on function public.kick_webhook_delivery() from public, anon, authenticated;
+
+-- consent_granted: marketing_consent turned on.
+create or replace function public.enqueue_webhook_consent_granted()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_count int;
+begin
+  if not new.marketing_consent then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.marketing_consent then
+    return new;
+  end if;
+  insert into public.webhook_deliveries (practice_id, webhook_id, event, origin, patient_id)
+  select w.practice_id, w.id, 'consent_granted', 'trigger', new.id
+  from public.webhooks w
+  where w.practice_id = new.practice_id and w.enabled and 'consent_granted' = any(w.events);
+  get diagnostics v_count = row_count;
+  if v_count > 0 then
+    perform public.kick_webhook_delivery();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger enqueue_webhook_consent_granted_trigger
+  after insert or update of marketing_consent on public.patients
+  for each row execute function public.enqueue_webhook_consent_granted();
+
+-- "Pošlji obstoječe": queue every patient who currently has consent (skipping
+-- those already waiting in this webhook's queue). Owner only.
+create or replace function public.queue_webhook_backfill(p_webhook_id uuid)
+returns int language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_webhook public.webhooks;
+  v_count int;
+begin
+  if public.current_practice_role() is distinct from 'owner' then
+    raise exception 'Samo lastnik ordinacije lahko pošilja podatke prek integracij.';
+  end if;
+  select * into v_webhook from public.webhooks
+  where id = p_webhook_id and practice_id = public.current_practice_id();
+  if v_webhook.id is null then
+    raise exception 'Integracija ne obstaja.';
+  end if;
+  if not v_webhook.enabled then
+    raise exception 'Integracija je izklopljena.';
+  end if;
+  insert into public.webhook_deliveries (practice_id, webhook_id, event, origin, patient_id)
+  select p.practice_id, v_webhook.id, 'consent_granted', 'backfill', p.id
+  from public.patients p
+  where p.practice_id = v_webhook.practice_id
+    and p.marketing_consent
+    and not exists (
+      select 1 from public.webhook_deliveries d
+      where d.webhook_id = v_webhook.id and d.patient_id = p.id and d.status in ('pending', 'sending')
+    );
+  get diagnostics v_count = row_count;
+  if v_count > 0 then
+    perform public.kick_webhook_delivery();
+  end if;
+  return v_count;
+end;
+$$;
+revoke execute on function public.queue_webhook_backfill(uuid) from public, anon;
+grant execute on function public.queue_webhook_backfill(uuid) to authenticated;
+
+-- Hand the function a batch of due deliveries, marking them 'sending' so a
+-- second concurrent run can't post the same one twice. A row stuck in
+-- 'sending' for 5 minutes (function crashed) is due again. Service role only.
+create or replace function public.claim_webhook_deliveries(p_limit int)
+returns setof public.webhook_deliveries
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  return query
+  update public.webhook_deliveries d
+  set status = 'sending', locked_at = now()
+  where d.id in (
+    select id from public.webhook_deliveries
+    where next_attempt_at <= now()
+      and (status = 'pending' or (status = 'sending' and locked_at < now() - interval '5 minutes'))
+    order by next_attempt_at
+    limit p_limit
+    for update skip locked
+  )
+  returning d.*;
+end;
+$$;
+revoke execute on function public.claim_webhook_deliveries(int) from public, anon, authenticated;
+grant execute on function public.claim_webhook_deliveries(int) to service_role;
+
+-- Retries: every 5 minutes.
+select cron.schedule(
+  'deliver-webhooks',
+  '*/5 * * * *',
+  $$
+  select net.http_post(
+    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/deliver-webhooks',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
+    ),
+    body := '{"processQueue": true}'::jsonb
+  );
+  $$
+);
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/038_webhook_custom_body_and_withdrawal.sql.
+-- ---------------------------------------------------------------------------
+alter table public.webhooks drop constraint webhooks_events_check;
+alter table public.webhooks add constraint webhooks_events_check
+  check (cardinality(events) >= 1 and events <@ array['consent_granted', 'consent_withdrawn']::text[]);
+
+alter table public.webhooks
+  add column body_template text check (body_template is null or length(body_template) <= 10000),
+  add column headers jsonb not null default '{}'::jsonb check (jsonb_typeof(headers) = 'object');
+
+alter table public.webhook_deliveries drop constraint webhook_deliveries_event_check;
+alter table public.webhook_deliveries add constraint webhook_deliveries_event_check
+  check (event in ('consent_granted', 'consent_withdrawn', 'test'));
+
+-- Replaces 037's trigger function: both transitions.
+create or replace function public.enqueue_webhook_consent_granted()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_event text;
+  v_count int;
+begin
+  if new.marketing_consent and (tg_op = 'INSERT' or not old.marketing_consent) then
+    v_event := 'consent_granted';
+  elsif tg_op = 'UPDATE' and old.marketing_consent and not new.marketing_consent then
+    v_event := 'consent_withdrawn';
+  else
+    return new;
+  end if;
+  insert into public.webhook_deliveries (practice_id, webhook_id, event, origin, patient_id)
+  select w.practice_id, w.id, v_event, 'trigger', new.id
+  from public.webhooks w
+  where w.practice_id = new.practice_id and w.enabled and v_event = any(w.events);
+  get diagnostics v_count = row_count;
+  if v_count > 0 then
+    perform public.kick_webhook_delivery();
+  end if;
+  return new;
+end;
+$$;
+
+-- 037's version, plus: only for a webhook that receives consent_granted.
+create or replace function public.queue_webhook_backfill(p_webhook_id uuid)
+returns int language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_webhook public.webhooks;
+  v_count int;
+begin
+  if public.current_practice_role() is distinct from 'owner' then
+    raise exception 'Samo lastnik ordinacije lahko pošilja podatke prek integracij.';
+  end if;
+  select * into v_webhook from public.webhooks
+  where id = p_webhook_id and practice_id = public.current_practice_id();
+  if v_webhook.id is null then
+    raise exception 'Integracija ne obstaja.';
+  end if;
+  if not v_webhook.enabled then
+    raise exception 'Integracija je izklopljena.';
+  end if;
+  if not ('consent_granted' = any(v_webhook.events)) then
+    raise exception 'Integracija ne prejema dogodka »soglasje dano«.';
+  end if;
+  insert into public.webhook_deliveries (practice_id, webhook_id, event, origin, patient_id)
+  select p.practice_id, v_webhook.id, 'consent_granted', 'backfill', p.id
+  from public.patients p
+  where p.practice_id = v_webhook.practice_id
+    and p.marketing_consent
+    and not exists (
+      select 1 from public.webhook_deliveries d
+      where d.webhook_id = v_webhook.id and d.patient_id = p.id and d.status in ('pending', 'sending')
+    );
+  get diagnostics v_count = row_count;
+  if v_count > 0 then
+    perform public.kick_webhook_delivery();
+  end if;
+  return v_count;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/039_marketing_consent_requests.sql.
+-- ---------------------------------------------------------------------------
+create table public.marketing_consent_requests (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  patient_id uuid not null references public.patients(id) on delete cascade,
+  token text not null unique,
+  email text not null,
+  consent_text text not null,       -- the exact wording the patient will confirm
+  requested_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '30 days',
+  confirmed_at timestamptz
+);
+create index marketing_consent_requests_patient_idx on public.marketing_consent_requests(patient_id);
+
+alter table public.marketing_consent_requests enable row level security;
+-- Read-only for the practice; only the Edge Functions write (service role).
+create policy marketing_consent_requests_select on public.marketing_consent_requests for select
+  using (practice_id = public.current_practice_id());
+
+alter table public.patients drop constraint if exists patients_marketing_consent_source_check;
+alter table public.patients add constraint patients_marketing_consent_source_check
+  check (marketing_consent_source in ('questionnaire', 'staff', 'email', 'unsubscribe'));
+
+-- Unsubscribing from email (staff "Odjavi", the patient's unsubscribe link, a
+-- hard bounce) also withdraws marketing consent — someone who wants no email
+-- wants no marketing (Gregor, 2026-10-15). Re-enabling email does NOT restore
+-- it; that needs the patient's own confirmation ("Pošlji soglasje").
+create or replace function public.withdraw_marketing_on_email_opt_out()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  if new.email_opt_out and not coalesce(old.email_opt_out, false) and new.marketing_consent then
+    new.marketing_consent := false;
+    new.marketing_consent_at := now();
+    new.marketing_consent_source := 'unsubscribe';
+    new.marketing_consent_text := null;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger withdraw_marketing_on_email_opt_out_trigger
+  before update of email_opt_out on public.patients
+  for each row execute function public.withdraw_marketing_on_email_opt_out();
+
+-- The webhook trigger (037/038) listened to "update OF marketing_consent",
+-- which doesn't fire when a BEFORE trigger (above) changes the column. Listen
+-- to every update instead; the function itself compares old and new.
+drop trigger enqueue_webhook_consent_granted_trigger on public.patients;
+create trigger enqueue_webhook_consent_granted_trigger
+  after insert or update on public.patients
+  for each row execute function public.enqueue_webhook_consent_granted();
+
+alter table public.email_log drop constraint if exists email_log_email_type_check;
+alter table public.email_log add constraint email_log_email_type_check check (email_type in (
+  'appointment_confirmation',
+  'appointment_reminder',
+  'appointment_cancelled',
+  'appointment_rescheduled',
+  'post_visit',
+  'recall',
+  'health_questionnaire',
+  'invoice',
+  'aftercare',
+  'marketing_consent'
+));

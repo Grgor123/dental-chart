@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { usePracticeContext } from '../contexts/PracticeContext';
 import type { Patient } from '../types/dental';
@@ -304,6 +305,20 @@ export function usePatients() {
     []
   );
 
+  // "Pošlji soglasje" (migration 039): emails the patient a request to confirm
+  // marketing consent — the consent itself is only set by the patient's click.
+  const requestMarketingConsent = useCallback(async (patientId: string): Promise<{ email?: string; error?: string }> => {
+    const { data, error: fnError } = await supabase.functions.invoke('request-marketing-consent', { body: { patientId } });
+    if (fnError) {
+      if (fnError instanceof FunctionsHttpError) {
+        const payload = await fnError.context.json().catch(() => null);
+        if (payload?.error) return { error: payload.error as string };
+      }
+      return { error: fnError.message };
+    }
+    return { email: (data as { email: string }).email };
+  }, []);
+
   return {
     patients,
     loading,
@@ -313,5 +328,6 @@ export function usePatients() {
     setSmsConsentStatus,
     setEmailOptOut,
     withdrawMarketingConsent,
+    requestMarketingConsent,
   };
 }

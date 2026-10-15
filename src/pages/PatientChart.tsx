@@ -188,7 +188,7 @@ function sameTarget(a: Target, b: Target): boolean {
 // comments for exactly what each does.
 export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings, onNavigateInvoices, onOpenInvoice }: PatientChartProps) {
   const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
-  const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent } = usePatients();
+  const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent, requestMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
   // "Natisni karto": while true, ChartPrintSheet renders the A4 printout and
@@ -277,11 +277,26 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // Marketing consent — staff can only withdraw it (the patient gives it on
   // the health questionnaire); see usePatients.ts's withdrawMarketingConsent().
   const [marketingSaving, setMarketingSaving] = useState(false);
+  const [marketingError, setMarketingError] = useState<string | null>(null);
   async function handleWithdrawMarketing() {
     setMarketingSaving(true);
+    setMarketingError(null);
     const result = await withdrawMarketingConsent(patientId);
     setMarketingSaving(false);
-    if (!('error' in result)) setPatientDraft(result.patient);
+    if ('error' in result) setMarketingError(`Soglasja ni bilo mogoče preklicati: ${result.error}`);
+    else setPatientDraft(result.patient);
+  }
+  // "Pošlji soglasje": asks the patient by email (double opt-in) — staff can't
+  // grant consent themselves.
+  const [marketingRequestNote, setMarketingRequestNote] = useState<string | null>(null);
+  async function handleRequestMarketing() {
+    setMarketingSaving(true);
+    setMarketingError(null);
+    setMarketingRequestNote(null);
+    const result = await requestMarketingConsent(patientId);
+    setMarketingSaving(false);
+    if (result.error) setMarketingError(result.error);
+    else setMarketingRequestNote(`Prošnja za soglasje je poslana na ${result.email}. Soglasje velja, ko ga pacient potrdi.`);
   }
   // Health questionnaire (Frame 1) — see useHealthQuestionnaire.ts.
   const healthQuestionnaire = useHealthQuestionnaire(patientId);
@@ -1253,14 +1268,19 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                   )}
                 </div>
 
-                {/* SMS-consent indicator — only meaningful once a phone
-                    exists, matching the trigger's own condition (no phone,
-                    no consent flow at all). Always actionable regardless of
-                    the Uredi/Shrani toggle above, since it's a status
-                    action, not a draft text edit. */}
-                {patientDraft.phone && (
-                  <div className="flex flex-col gap-1">
-                    <span className={VIEW_LABEL_CLASSES}>SMS opomniki</span>
+                {/* SMS-consent indicator — shown on every profile (Gregor's
+                    request), greyed "Ni telefona" with no actions until a
+                    phone exists, matching the trigger's own condition (no
+                    phone, no consent flow at all). Always actionable
+                    regardless of the Uredi/Shrani toggle above, since it's a
+                    status action, not a draft text edit. */}
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>SMS opomniki</span>
+                  {!patientDraft.phone ? (
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-[#eef2f1] px-2 py-0.5 text-xs font-semibold text-[var(--muted,#6f7c79)]">Ni telefona</span>
+                    </div>
+                  ) : (
                     <div className="flex items-center gap-2">
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SMS_CONSENT_BADGE_CLASSES[patientDraft.smsConsentStatus]}`}
@@ -1287,17 +1307,21 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                         </button>
                       )}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
 
-                {/* Email opt-out indicator — only meaningful once an email
-                    is on file, same reasoning as the SMS badge above.
-                    Opt-out model, not SMS's opt-in: an email on file is
-                    treated as implied consent, so this only needs 2 states
-                    and 1 toggle, not SMS's 4. */}
-                {patientDraft.email && (
-                  <div className="flex flex-col gap-1">
-                    <span className={VIEW_LABEL_CLASSES}>E-poštna obvestila</span>
+                {/* Email opt-out indicator — shown on every profile like the
+                    SMS badge above, greyed "Ni e-pošte" with no actions until
+                    an email is on file. Opt-out model, not SMS's opt-in: an
+                    email on file is treated as implied consent, so this only
+                    needs 2 states and 1 toggle, not SMS's 4. */}
+                <div className="flex flex-col gap-1">
+                  <span className={VIEW_LABEL_CLASSES}>E-pošta o terminih in računih</span>
+                  {!patientDraft.email ? (
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-[#eef2f1] px-2 py-0.5 text-xs font-semibold text-[var(--muted,#6f7c79)]">Ni e-pošte</span>
+                    </div>
+                  ) : (
                     <div className="flex items-center gap-2">
                       <span
                         className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -1328,14 +1352,14 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                         </button>
                       )}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Marketing consent — opt-in only from the patient's own
                     health questionnaire, so the only staff action is
                     withdrawing it on request. */}
                 <div className="flex flex-col gap-1">
-                  <span className={VIEW_LABEL_CLASSES}>Marketinško obveščanje</span>
+                  <span className={VIEW_LABEL_CLASSES}>Marketing (novice, akcije)</span>
                   <div className="flex items-center gap-2">
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -1351,10 +1375,22 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                         onClick={handleWithdrawMarketing}
                         className="text-xs text-[var(--danger,#b3261e)] hover:underline disabled:opacity-60"
                       >
-                        Prekliči soglasje
+                        {marketingSaving ? 'Preklicujem …' : 'Prekliči soglasje'}
+                      </button>
+                    )}
+                    {!patientDraft.marketingConsent && patientDraft.email && !patientDraft.emailOptOut && (
+                      <button
+                        type="button"
+                        disabled={marketingSaving}
+                        onClick={handleRequestMarketing}
+                        className="text-xs text-[var(--accent,#2e6e62)] hover:underline disabled:opacity-60"
+                      >
+                        {marketingSaving ? 'Pošiljam …' : 'Pošlji soglasje'}
                       </button>
                     )}
                   </div>
+                  {marketingError && <span className="text-xs text-[var(--danger,#b3261e)]">{marketingError}</span>}
+                  {marketingRequestNote && <span className="text-xs text-[var(--accent,#2e6e62)]">{marketingRequestNote}</span>}
                 </div>
 
                 <div className="flex flex-col gap-1">

@@ -27,7 +27,7 @@ export async function resolveUnsubscribeToken(supabase: SupabaseClient, patientI
 export type EmailLogStatus = 'sent' | 'failed';
 // One email_log type per template key — except 'credit_note', whose email is
 // logged as 'invoice' (the type is about the document, not the template).
-export type EmailType = Exclude<TemplateKey, 'credit_note'>;
+export type EmailType = Exclude<TemplateKey, 'credit_note'> | 'marketing_consent'; // 039: the consent request has no editable template
 
 export interface LogEmailInput {
   patientId?: string | null;
