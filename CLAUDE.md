@@ -138,6 +138,8 @@ src/
                                 # number (FURS operator) — see "FURS" below
       PracticeUsersSection.tsx # Nastavitve → Uporabniki: users, invite,
                                 # roles, remove — see "Staff users" below
+      IntegrationsSection.tsx  # Nastavitve → Integracije (owners): outbound
+                                # webhooks — see "Outbound webhooks" below
       ZzzsPickerDialog.tsx     # Cenik → "+ Iz šifranta ZZZS" — see "ZZZS
                                 # šifrant" below
       PriceListImportDialog.tsx # Cenik → "Uvozi cenik" (CSV/.xlsx, preview)
@@ -227,6 +229,10 @@ src/
                                 # appointment_reminders, patient_sms_consents),
                                 # newest first, live via Realtime — see
                                 # "Communication history" below
+    usePatientConsentStatus.ts  # The patient record's consent badges, live
+                                # via Realtime — see "Outbound webhooks" below
+    useWebhooks.ts              # Integracije: webhooks, delivery log, test,
+                                # backfill — see "Outbound webhooks" below
   lib/
     supabase.ts                # Supabase client
     describeToothRecord.ts     # One tooth_records row -> its bullet-point
@@ -490,7 +496,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`036_practice_invitations.sql` — all confirmed run (016–019 are the
+`040_realtime_patient_consents.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -498,9 +504,10 @@ marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 "Communication history" below; 032 FURS; 033 the ZZZS šifrant and
 chart → invoice, see "ZZZS šifrant" below; 034–035 aftercare instructions,
 see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
-below). `supabase/schema.sql`
+below; 037–040 outbound webhooks and marketing consent requests, see
+"Outbound webhooks" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(036 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(040 included), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3826,7 +3833,8 @@ before starting):
 2. **Tags** (`tags`/`patient_tags`, manual + automatic) with a **share
    externally** flag per tag — treatment-derived tags (`implantat`,
    `ortodontija`) are clinical and must never reach an external autoresponder.
-3. **Outbound webhooks** using **`patients.marketing_consent`** (explicit
+3. **Built 2026-10-15 — see "Outbound webhooks and marketing consent". The
+   note below is the original design.** **Outbound webhooks** using **`patients.marketing_consent`** (explicit
    opt-in, separate from `email_opt_out` — the column **exists now**,
    collected on the health questionnaire, see "Health questionnaire" below;
    only consented patients are ever included in a payload). Every marketing
@@ -3971,17 +3979,22 @@ Slovenia's form) as an online form a patient fills in before their visit.
   the reviewer's login email + time.
 - **Marketing consent** (`patients.marketing_consent` + `_at`/`_source`/
   `_text`): an **optional, unticked** checkbox in its own "Obveščanje
-  (neobvezno)" section on the questionnaire — wording ("…po e-pošti
-  in SMS-ih. Soglasje lahko kadarkoli prekličem.") **checked and approved by
-  Gregor (2026-10-05)**. The exact wording shown is stored with each
+  (neobvezno)" section on the questionnaire — wording **approved by Gregor
+  (2026-10-05)** and narrowed to **email only** on 2026-10-15 ("…o novostih,
+  promocijah in preventivnih pregledih … po e-pošti. Soglasje lahko kadarkoli
+  prekličem." — SMS stays for appointment reminders; SMS promotions would need
+  their own consent). Older consents keep the "e-pošti in SMS-ih" text they
+  were given with. The exact wording shown is stored with each
   consent (and on the questionnaire row as the audit record). **Hidden
   entirely for a patient who already consented** — Gregor's explicit choice,
   to avoid patients unsubscribing by accident — so a questionnaire can only
   ever grant it. Staff can only **withdraw** it ("Prekliči soglasje" on the
-  Frame 2 "Marketinško obveščanje" badge), never grant it, so every "true"
-  was ticked by the patient. The booking widget's own GDPR checkbox (sibling
-  project) covers only appointment communication, not marketing — checked.
-  Nothing sends marketing yet.
+  Frame 2 "Marketing (novice, promocije)" badge) or **ask** for it by email
+  ("Pošlji soglasje", 039), never grant it, so every "true" was confirmed by
+  the patient. The booking widget's own GDPR checkbox (sibling project) covers
+  only appointment communication, not marketing — checked. The app sends no
+  marketing itself; consent changes go out by webhook — see "Outbound
+  webhooks and marketing consent".
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4f
   (spoof insert + read isolation) — passed in the 2026-10-09 run (33/33).
 
@@ -4470,13 +4483,88 @@ everything except manage users; "Pozabljeno geslo?" included.
   select own practice only; **no write policies** — only the function writes.
 - **Tenant isolation**: `scripts/verify-tenant-isolation.mjs` section 4k (no
   browser can write an invitation, can't read another practice's, the
-  function lists only the caller's practice) — added, not yet run.
+  function lists only the caller's practice) — passed in the 2026-10-15 run
+  (46/46).
 - **Not done**: a user belonging to several practices (schema allows it, the
   app assumes one); self-serve practice sign-up; per-user permissions beyond
   owner/staff.
 
 **Deploy**: `practice-users`, `request-password-reset` (default JWT
 verification ON — the reset request is sent with the public anon key).
+
+### Outbound webhooks and marketing consent (Nastavitve → Integracije)
+
+**Status: built, deployed and confirmed by Gregor (2026-10-15)** — migrations
+037–040 run, tested end to end with webhook.site; isolation 46/46. Gregor's
+choices: events for consent given **and** withdrawn; tags later (the payload
+already has an empty `tags`); owners only; a button for patients who
+consented earlier; any receiving app, not just FluentCRM.
+
+- **Nastavitve → Integracije** (`IntegrationsSection.tsx`, `useWebhooks.ts`;
+  tab shown to owners only, RLS `current_practice_role() = 'owner'` on both
+  tables, helper added in 037). Per integration: name, `https://` URL, on/off,
+  events, signing secret (show/copy), **body** — "Standardna oblika" or
+  "Po meri" (own JSON with `{placeholders}`, live preview with a test
+  patient) — and up to 10 **headers** (API keys …). Buttons: "Pošlji testni
+  dogodek" (fake Testni Pacient, shows the receiver's reply), "Pošlji
+  obstoječe (N)" (queues every currently consented patient), "Izbriši". A log
+  of the last 50 sends (status, HTTP code, error).
+- **Events** (trigger `enqueue_webhook_consent_granted` on every patients
+  insert/update, comparing old/new): `consent_granted` (marketing_consent
+  false → true) and `consent_withdrawn` (true → false). Withdrawal carries
+  only email + phone, names null. **Consent is re-checked at send time**: a
+  "granted" whose patient has meanwhile withdrawn is skipped (never send
+  contact data after a no); a "withdrawn" whose patient re-consented is
+  skipped too.
+- **Bodies** (`_shared/webhookBody.ts`, shared by the function and the
+  editor): standard flat JSON `event, event_id, occurred_at, practice,
+  source, email, first_name, last_name, phone, tags, tag, marketing_consent,
+  marketing_consent_at`. In a custom body a string that is exactly one
+  placeholder keeps its type (`"{marketing_consent}"` → `true`), inside
+  longer text it's text. JSON only — other formats (form-encoded) skipped
+  until a real app needs them (Gregor).
+- **Delivery** (`deliver-webhooks`, outbox table `webhook_deliveries`):
+  posted at once (pg_net from the trigger) and by a 5-minute cron for retries
+  (1, 5, 15 min … 24 h, then `failed`); rows claimed with `for update skip
+  locked` (`claim_webhook_deliveries`, service role only). Headers
+  `X-Webhook-Event`, `X-Webhook-Id` (stable across retries),
+  `X-Webhook-Signature: t=<unix>,v1=<HMAC-SHA256 of "t.body">`. SSRF guard:
+  https only, no private/loopback addresses (DNS checked), no redirects,
+  10 s timeout.
+- **FluentCRM**: its incoming webhook sets one fixed status, so use two
+  integrations — consent_granted → a "subscribed" webhook, consent_withdrawn →
+  an "unsubscribed" one.
+- **"Pošlji soglasje"** (039, `request-marketing-consent` +
+  `marketing-consent-confirm` + `docs/marketing-consent.html`): next to "Ni
+  soglasja" when the patient has an email and isn't unsubscribed. Emails a
+  double opt-in link (30 days, `marketing_consent_requests`, logged in
+  `email_log` as `marketing_consent` → Sporočila "Prošnja za soglasje"); the
+  patient's click sets consent (source `email`, exact wording stored) and so
+  fires the webhook. The button reads "Soglasje poslano" (grey, click
+  re-sends) while a request sent after the last consent change waits; an open
+  request is re-used only with the current wording.
+- **Email opt-out withdraws marketing consent** (039 trigger
+  `withdraw_marketing_on_email_opt_out`, source `unsubscribe`): staff
+  "Odjavi", the patient's unsubscribe link, a hard bounce. Re-enabling email
+  doesn't restore it. (Found in testing: "Odjavi" under the email row was
+  taken for the marketing withdrawal — the rows were then relabeled
+  "E-pošta o terminih in računih" / "Marketing (novice, promocije)".)
+- **Patient record** (Frame 2): SMS opomniki and E-pošta rows are shown on
+  every profile, greyed "Ni telefona" / "Ni e-pošte" without one. All consent
+  badges update **live** (`usePatientConsentStatus.ts`, Realtime on
+  `patients` + `marketing_consent_requests`, migration 040, plus a re-read on
+  returning to the window — a 20 s poll was tried and removed at Gregor's
+  request). Only those status fields are merged, so an open Uredi draft is
+  never overwritten. A failed "Prekliči soglasje" now shows its error.
+- **Tenant isolation**: section 4l (no webhook on another practice, no
+  reading its webhooks/deliveries, no claim RPC from a browser, no backfill
+  or test on another practice's webhook) — passed 2026-10-15 (46/46).
+- **Not done**: tags (+ tag events), the inbound API / syncing an
+  autoresponder unsubscribe back, SMS marketing consent.
+
+**Deploy**: `deliver-webhooks`, `request-marketing-consent` (JWT ON),
+`marketing-consent-confirm --no-verify-jwt`, `health-questionnaire
+--no-verify-jwt` (consent wording).
 
 ---
 
@@ -4904,9 +4992,10 @@ next:
    deferred, since it depends on a Google OAuth app-verification review
    (CASA assessment) outside this project's control — see "Email
    notifications (Amazon SES)" above
-5. Email follow-ups agreed in design but not built: tags, outbound webhooks
-   + `marketing_consent`, and the inbound API/API keys for autoresponders
-   like FluentCRM — see "Email templates (E-pošta)" above, "Planned next"
+5. Email follow-ups agreed in design but not built: tags and the inbound
+   API/API keys for autoresponders like FluentCRM — see "Email templates
+   (E-pošta)" above, "Planned next" (outbound webhooks are built — see
+   "Outbound webhooks and marketing consent")
 5a. **Price list built (Nastavitve → Cenik, migration `020_add_price_list.sql`); invoicing phase 1 built too (see "Invoicing" above) — FURS fiscal verification (phase 2) is next.**
    `services`/`service_categories`, both practice-scoped root tables (4 RLS
    policies each, like `therapists`), every practice seeded with a starter
@@ -5013,7 +5102,14 @@ next:
 
 ---
 
-*Last updated: 2026-10-14 (Published on Cloudflare Pages —
+*Last updated: 2026-10-15 (Outbound webhooks — Nastavitve → Integracije,
+owners only, consent given/withdrawn, custom JSON body + headers, signed,
+retried, logged; "Pošlji soglasje" double opt-in by email; email opt-out
+withdraws marketing consent; marketing consent is email only; live consent
+badges via Realtime — migrations 037–040; isolation 46/46. See "Outbound
+webhooks and marketing consent".)*
+
+*Previous entry: 2026-10-14 (Published on Cloudflare Pages —
 https://dental-chart.pages.dev/, auto-deploy from main, security headers,
 open sign-up switched off; staff users built — Nastavitve → Uporabniki with
 email invitations through SES, owner/staff roles, removal by blocking the
