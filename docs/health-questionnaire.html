@@ -76,8 +76,9 @@
        which reads supabase/functions/_shared/questionnaire.ts — the same
        definition the Patient Record page uses. -->
   <div class="wrap" id="app"><div class="card center">Nalaganje …</div></div>
+  <script src="backend.js"></script>
   <script>
-    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/health-questionnaire';
+    const FUNCTION_URL = window.dcFunctionUrl('health-questionnaire');
     const token = new URLSearchParams(location.search).get('token');
     const app = document.getElementById('app');
 

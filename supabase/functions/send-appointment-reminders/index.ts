@@ -18,6 +18,7 @@
 // nodes (read via the n8n API) — auth is a plain `apiKey` header, phone
 // goes in a `destinations` array, `message` is a {content, isUnicode}
 // object, and a successful response is `{ messages: [{ messageId }] }`.
+import { publicPageUrl } from '../_shared/publicPages.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -90,7 +91,7 @@ Deno.serve(async (req) => {
     // Points at the GitHub Pages page, not this Edge Function's own URL —
     // see appointment-confirm's own comment for why (Supabase won't serve
     // real HTML from *.supabase.co).
-    const link = `https://grgor123.github.io/dental-chart/appointment-confirm.html?token=${token}`;
+    const link = publicPageUrl('appointment-confirm.html', token);
     // Plain ASCII (no š/č/ž), matching the sibling n8n workflow's own
     // reminder text convention (isUnicode: false below) — GSM-7 keeps this
     // a single, cheaper SMS segment.

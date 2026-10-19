@@ -19,6 +19,7 @@
 // than guessed — auth is a plain `apiKey` header (not `Authorization:
 // Bearer`), phone goes in a `destinations` array, and `message` is an
 // object ({content, isUnicode}), not a plain string.
+import { publicPageUrl } from '../_shared/publicPages.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -61,7 +62,7 @@ Deno.serve(async (req) => {
   // Points at the GitHub Pages page, not this Edge Function's own URL —
   // see sms-consent-confirm's own comment for why (Supabase won't serve
   // real HTML from *.supabase.co).
-  const link = `https://grgor123.github.io/dental-chart/sms-consent.html?token=${token}`;
+  const link = publicPageUrl('sms-consent.html', token);
   const message = `Zobozdravstvo Goslar: za prejemanje SMS opomnikov o terminih potrdite tukaj: ${link}`;
 
   const consentRow = { patient_id: patientId, consent_token: token, consent_text: consentText };

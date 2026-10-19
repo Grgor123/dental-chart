@@ -18,8 +18,9 @@
   <!-- Same reason this is a static page, not served from the Edge Function
        directly, as docs/sms-consent.html's own comment explains. -->
   <div id="app"><p>Nalaganje …</p></div>
+  <script src="backend.js"></script>
   <script>
-    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/appointment-confirm';
+    const FUNCTION_URL = window.dcFunctionUrl('appointment-confirm');
     const token = new URLSearchParams(location.search).get('token');
     const app = document.getElementById('app');
     const LABELS = { confirmed: 'potrjen', declined: 'odpovedan' };

@@ -19,8 +19,9 @@
        the shared domain (see docs/sms-consent.html). Data and the confirm action
        come from the marketing-consent-confirm function (migration 039). -->
   <div id="app"><p>Nalaganje …</p></div>
+  <script src="backend.js"></script>
   <script>
-    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/marketing-consent-confirm';
+    const FUNCTION_URL = window.dcFunctionUrl('marketing-consent-confirm');
     const token = new URLSearchParams(location.search).get('token');
     const app = document.getElementById('app');
 

@@ -10,8 +10,12 @@ import { buildTemplateVars, renderTemplate } from './templates.ts';
 import { buildIcsEvent } from './ics.ts';
 import { logEmail, resolveUnsubscribeToken } from './log.ts';
 import { TEMPLATE_DEFS, type TemplateKey, type TemplateOverride } from './templateDefs.ts';
+import { publicPageUrl } from '../publicPages.ts';
 
-export const UNSUBSCRIBE_PAGE_URL = 'https://grgor123.github.io/dental-chart/email-unsubscribe.html';
+/** The patient's unsubscribe link (persistent token per patient). */
+export function unsubscribeUrl(token: string): string {
+  return publicPageUrl('email-unsubscribe.html', token);
+}
 
 export const APPOINTMENT_SELECT =
   'id, starts_at, ends_at, service, practice_id, patients(id, first_name, last_name, email, email_opt_out), practices(id, name, contact_email, email_sending_mode, custom_domain, custom_domain_sender_local_part, custom_domain_verified), therapists(name)';
@@ -117,7 +121,7 @@ export async function sendAppointmentEmail(
   });
 
   const unsubscribeToken = await resolveUnsubscribeToken(supabase, patient.id);
-  const unsubscribeUrl = `${UNSUBSCRIBE_PAGE_URL}?token=${unsubscribeToken}`;
+  const unsubscribeLink = unsubscribeUrl(unsubscribeToken);
 
   const vars = buildTemplateVars({
     practiceName: practice.name,
@@ -127,7 +131,7 @@ export async function sendAppointmentEmail(
     service: appointment.service,
     therapistName: appointment.therapists?.name ?? null,
   });
-  const content = renderTemplate(templateKey, override, vars, { practiceName: practice.name, unsubscribeUrl });
+  const content = renderTemplate(templateKey, override, vars, { practiceName: practice.name, unsubscribeUrl: unsubscribeLink });
 
   let attachmentIcs: { filename: string; content: string; method: 'REQUEST' | 'CANCEL' } | null = null;
   if (def.ics) {

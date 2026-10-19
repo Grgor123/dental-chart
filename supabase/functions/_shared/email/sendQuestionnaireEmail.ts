@@ -14,9 +14,9 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { sendEmail, resolveSenderIdentity } from './send.ts';
 import { renderTemplate } from './templates.ts';
 import { logEmail, resolveUnsubscribeToken } from './log.ts';
-import { loadTemplateOverride, UNSUBSCRIBE_PAGE_URL, type SendOutcome } from './sendAppointmentEmail.ts';
+import { loadTemplateOverride, unsubscribeUrl, type SendOutcome } from './sendAppointmentEmail.ts';
+import { publicPageUrl } from '../publicPages.ts';
 
-export const QUESTIONNAIRE_PAGE_URL = 'https://grgor123.github.io/dental-chart/health-questionnaire.html';
 
 const LINK_VALID_DAYS = 30;
 const RESEND_AFTER_MONTHS = 12;
@@ -123,8 +123,8 @@ export async function sendQuestionnaireEmail(
     { ime: patient.first_name, priimek: patient.last_name, datum: '', ura: '', storitev: '', terapevt: '', ordinacija: practice.name },
     {
       practiceName: practice.name,
-      unsubscribeUrl: `${UNSUBSCRIBE_PAGE_URL}?token=${unsubscribeToken}`,
-      actionUrl: `${QUESTIONNAIRE_PAGE_URL}?token=${token}`,
+      unsubscribeUrl: unsubscribeUrl(unsubscribeToken),
+      actionUrl: publicPageUrl('health-questionnaire.html', token),
     }
   );
 

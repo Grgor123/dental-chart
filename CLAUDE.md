@@ -499,7 +499,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`043_remove_tags_add_email_sent.sql` — all confirmed run (016–019 are the
+`044_project_url_from_vault.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -510,7 +510,7 @@ see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
 below; 037–043 outbound webhooks, marketing consent requests and the inbound
 API — 041's tags were removed again by 043 — see "Outbound webhooks" below). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(043 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(044 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -4430,6 +4430,34 @@ then the app only ran on `localhost:5181`.
   the project's "Custom domains"; add it to Supabase's Redirect URLs and to
   the functions' `APP_URL` secret then.
 
+### Development and production projects
+
+**Status: step 1 done (2026-10-19), the rest planned.** Agreed with Gregor:
+the current "Dental charting" project becomes **development** (test data,
+FURS test); **production** will be a new, clean Supabase project (Pro plan —
+backups, no pausing) shared by all clinics (multi-tenant), built from
+`schema.sql`. Git: develop on a `dev` branch (Cloudflare preview → dev
+project), merge to `main` to release (production env vars → prod project);
+migrations run on dev first, then prod; functions deployed to both.
+Gregor first shows the staging version to Monika before going live.
+
+- **Done — no project address in code (migration 044):** pg_net calls in
+  triggers and cron jobs use `public.edge_function_url('<name>')`, which reads
+  the Vault secret `project_url` (dev: `https://aqubyxhudwxhfkhihgtk.supabase.co`,
+  set via `select vault.create_secret('<url>', 'project_url')`). Email/SMS
+  links to the patient pages come from `_shared/publicPages.ts` and carry
+  `&p=<project ref>`; `docs/backend.js` maps that to the function URL, only
+  for refs on its `ALLOWED_PROJECTS` list (first = default for older links) —
+  **add the production ref there** when it exists.
+- **To do for production:** new project + Pro; `schema.sql`; Vault secrets
+  `project_url` + `edge_function_service_role_key`; function secrets (SES,
+  Lertify, FURS production certificate, `APP_URL`); deploy every function
+  (with the same `--no-verify-jwt` flags); Auth URL settings + sign-up off;
+  SES/SNS bounce webhook for the new project; Cloudflare production env vars;
+  `scripts/sync-zzzs.mjs`; FURS premise registration; Monika's data.
+- **Before a second clinic:** per-practice FURS certificates; the SMS texts and
+  the marketing-consent wording still say "Zobozdravstvo Goslar".
+
 ### Staff users and invitations (Nastavitve → Uporabniki)
 
 **Status: built and confirmed by Gregor on localhost (2026-10-14)** —
@@ -5140,7 +5168,13 @@ next:
 
 ---
 
-*Last updated: 2026-10-15, later (Tags built and removed again as too
+*Last updated: 2026-10-19 (No project address in code — Vault secret
+`project_url` + `edge_function_url()` in triggers/cron (migration 044), patient
+page links carry `&p=<ref>` checked by `docs/backend.js` — step 1 of separate
+development and production projects; see "Development and production
+projects".)*
+
+*Previous entry: 2026-10-15, later (Tags built and removed again as too
 complicated; replaced by an "E-pošta poslana" webhook event with per-type
 checkboxes and the email's name as "tag"; inbound API with per-key
 permissions — unsubscribe sync only — migrations 041–043; isolation 49/49.

@@ -19,8 +19,9 @@
        function itself (sms-consent-confirm) only ever serves JSON now;
        this page just calls it via fetch() and renders the result. -->
   <div id="app"><p>Nalaganje …</p></div>
+  <script src="backend.js"></script>
   <script>
-    const FUNCTION_URL = 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/sms-consent-confirm';
+    const FUNCTION_URL = window.dcFunctionUrl('sms-consent-confirm');
     const token = new URLSearchParams(location.search).get('token');
     const app = document.getElementById('app');
 

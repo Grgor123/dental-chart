@@ -558,6 +558,17 @@ create trigger reset_email_bounced_on_email_change_trigger
 -- not-committed `vault.create_secret(...)` call this depends on.
 create extension if not exists pg_net;
 
+-- The project's own address (migration 044): every pg_net call to an Edge
+-- Function reads it from the Vault secret "project_url", set once per project:
+--   select vault.create_secret('https://<project-ref>.supabase.co', 'project_url');
+-- Set it right after running this file, before the first patient is saved.
+create or replace function public.edge_function_url(p_name text)
+returns text language sql stable security definer set search_path = public, pg_temp as $$
+  select rtrim(decrypted_secret, '/') || '/functions/v1/' || p_name
+  from vault.decrypted_secrets where name = 'project_url'
+$$;
+revoke all on function public.edge_function_url(text) from public, anon, authenticated;
+
 create or replace function request_sms_consent_on_phone_change()
 returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 declare
@@ -584,7 +595,7 @@ begin
     -- project, update this URL (and the one in the cron job below) to
     -- match.
     perform net.http_post(
-      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/request-sms-consent',
+      url := public.edge_function_url('request-sms-consent'),
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
       body := jsonb_build_object('patientId', new.id)
     );
@@ -612,7 +623,7 @@ begin
 
   if v_service_role_key is not null then
     perform net.http_post(
-      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-confirmation-email',
+      url := public.edge_function_url('send-appointment-confirmation-email'),
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
       body := jsonb_build_object('appointmentId', new.id)
     );
@@ -653,7 +664,7 @@ begin
 
   if v_service_role_key is not null then
     perform net.http_post(
-      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-change-email',
+      url := public.edge_function_url('send-appointment-change-email'),
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
       body := jsonb_build_object('appointmentId', new.id, 'kind', v_kind)
     );
@@ -687,7 +698,7 @@ begin
 
   if v_service_role_key is not null then
     perform net.http_post(
-      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-health-questionnaire',
+      url := public.edge_function_url('send-health-questionnaire'),
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
       body := jsonb_build_object('appointmentId', new.id)
     );
@@ -714,7 +725,7 @@ select cron.schedule(
   '0 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminders',
+    url := public.edge_function_url('send-appointment-reminders'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -735,7 +746,7 @@ select cron.schedule(
   '0 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-appointment-reminder-emails',
+    url := public.edge_function_url('send-appointment-reminder-emails'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -754,7 +765,7 @@ select cron.schedule(
   '0 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-post-visit-emails',
+    url := public.edge_function_url('send-post-visit-emails'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -769,7 +780,7 @@ select cron.schedule(
   '0 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/send-recall-emails',
+    url := public.edge_function_url('send-recall-emails'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -1788,7 +1799,7 @@ select cron.schedule(
   '*/10 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/fiscalize-invoice',
+    url := public.edge_function_url('fiscalize-invoice'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')
@@ -2492,7 +2503,7 @@ begin
     from vault.decrypted_secrets where name = 'edge_function_service_role_key';
   if v_service_role_key is not null then
     perform net.http_post(
-      url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/deliver-webhooks',
+      url := public.edge_function_url('deliver-webhooks'),
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_service_role_key),
       body := '{"processQueue": true}'::jsonb
     );
@@ -2597,7 +2608,7 @@ select cron.schedule(
   '*/5 * * * *',
   $$
   select net.http_post(
-    url := 'https://aqubyxhudwxhfkhihgtk.supabase.co/functions/v1/deliver-webhooks',
+    url := public.edge_function_url('deliver-webhooks'),
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'edge_function_service_role_key')

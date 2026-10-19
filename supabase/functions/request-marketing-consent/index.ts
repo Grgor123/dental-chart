@@ -20,11 +20,11 @@ import { resolveSenderIdentity, sendEmail } from '../_shared/email/send.ts';
 import { renderActionEmail } from '../_shared/email/templates.ts';
 import { logEmail } from '../_shared/email/log.ts';
 import { FORM_TEXT } from '../_shared/questionnaire.ts';
+import { publicPageUrl } from '../_shared/publicPages.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const CONSENT_PAGE_URL = 'https://grgor123.github.io/dental-chart/marketing-consent.html';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
       `občasno pošiljamo e-poštna obvestila o novostih, promocijah in preventivnih pregledih. Če jih želite prejemati, to potrdite s klikom na spodnji gumb:\n\n` +
       `**${consentText}**\n\n` +
       `Če ne želite, tega sporočila preprosto ne upoštevajte — brez vaše potrditve vam obvestil ne bomo pošiljali.`,
-    action: { label: 'Da, želim prejemati obvestila', url: `${CONSENT_PAGE_URL}?token=${token}` },
+    action: { label: 'Da, želim prejemati obvestila', url: publicPageUrl('marketing-consent.html', token) },
     footnote: 'Povezava velja 30 dni. Soglasje lahko kadarkoli prekličete.',
   });
 

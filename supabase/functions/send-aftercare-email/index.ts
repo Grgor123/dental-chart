@@ -23,7 +23,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { resolveSenderIdentity, sendEmail } from '../_shared/email/send.ts';
 import { formatDate, renderTemplate } from '../_shared/email/templates.ts';
 import { logEmail, resolveUnsubscribeToken } from '../_shared/email/log.ts';
-import { UNSUBSCRIBE_PAGE_URL } from '../_shared/email/sendAppointmentEmail.ts';
+import { unsubscribeUrl } from '../_shared/email/sendAppointmentEmail.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -147,7 +147,7 @@ Deno.serve(async (req) => {
     },
     {
       practiceName: practice.name,
-      unsubscribeUrl: `${UNSUBSCRIBE_PAGE_URL}?token=${unsubscribeToken}`,
+      unsubscribeUrl: unsubscribeUrl(unsubscribeToken),
       sections: topics.map((t) => ({ title: t.title as string, body: t.body as string })),
     }
   );
