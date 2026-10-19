@@ -11,11 +11,15 @@ import { renderActionEmail } from './email/templates.ts';
  *  in a request is ignored (it must also be in Supabase Auth's Redirect URLs). */
 const APP_URL = Deno.env.get('APP_URL') ?? 'https://dental-chart.pages.dev';
 const ALLOWED_ORIGINS = [APP_URL.replace(/\/$/, ''), 'http://localhost:5181'];
+// Cloudflare preview deployments (e.g. https://dev.dental-chart.pages.dev for
+// the dev branch) — subdomains of the app's own host.
+const APP_HOST = new URL(APP_URL).hostname.replace(/\./g, '\\.');
+const PREVIEW_ORIGIN = new RegExp(`^https://[a-z0-9-]+\\.${APP_HOST}$`);
 
 export function redirectTarget(requested: unknown): string {
   if (typeof requested === 'string') {
     const origin = requested.replace(/\/$/, '');
-    if (ALLOWED_ORIGINS.includes(origin)) return `${origin}/`;
+    if (ALLOWED_ORIGINS.includes(origin) || PREVIEW_ORIGIN.test(origin)) return `${origin}/`;
   }
   return `${ALLOWED_ORIGINS[0]}/`;
 }
