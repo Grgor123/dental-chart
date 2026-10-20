@@ -429,6 +429,17 @@ async function main() {
     check('the public API refuses a request without a key', noKey.status === 401, `HTTP ${noKey.status}`);
   }
 
+  // 4n. Voice entry's taught words (045_voice_aliases.sql) — account 2 can't
+  // add a word to account 1's practice or read its words.
+  if (account1PracticeId) {
+    const { error: aliasSpoofError } = await client2
+      .from('voice_aliases')
+      .insert({ practice_id: account1PracticeId, heard: 'spoof', meaning: 'karies' });
+    check("account 2 cannot teach a voice word to account 1's practice", !!aliasSpoofError, aliasSpoofError ? aliasSpoofError.message : 'insert unexpectedly succeeded');
+    const { data: leakedAliases } = await client2.from('voice_aliases').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's voice words", !leakedAliases || leakedAliases.length === 0, `${leakedAliases?.length ?? 0} row(s) visible`);
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

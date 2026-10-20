@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import PhoneInput from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import { DentalChart } from '../components/chart/DentalChart';
+import { VoicePanel } from '../components/chart/VoicePanel';
+import { useVoiceChartEntry } from '../hooks/useVoiceChartEntry';
+import { useVoiceAliases } from '../hooks/useVoiceAliases';
 import { hidesSurfaceDetail } from '../components/chart/ToothTopView';
 import { samePerioPoint, type PerioPoint } from '../components/chart/perioStyle';
 import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../data/toothMeta';
@@ -222,6 +225,61 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     flush,
     closeVisit,
   } = useVisit(patientId, visitId);
+
+  // Voice entry (microphone button next to the print icon): recognised
+  // phrases change the same chart state as clicks/typing — see
+  // useVoiceChartEntry.ts and lib/voice/parseVoiceCommand.ts.
+  const voiceSetters = useMemo(
+    () => ({
+      setSurfacesByFdi,
+      setNotesByFdi,
+      setPostByFdi,
+      setEndoByFdi,
+      setPocketsBuccalByFdi,
+      setPocketsLingualByFdi,
+      setGumMarginByFdi,
+      setBleedingBuccalByFdi,
+      setBleedingLingualByFdi,
+      setBridgeGroupByFdi,
+    }),
+    [
+      setSurfacesByFdi,
+      setNotesByFdi,
+      setPostByFdi,
+      setEndoByFdi,
+      setPocketsBuccalByFdi,
+      setPocketsLingualByFdi,
+      setGumMarginByFdi,
+      setBleedingBuccalByFdi,
+      setBleedingLingualByFdi,
+      setBridgeGroupByFdi,
+    ]
+  );
+  const voiceAliases = useVoiceAliases();
+  const voice = useVoiceChartEntry({
+    maps: {
+      surfacesByFdi,
+      notesByFdi,
+      postByFdi,
+      endoByFdi,
+      pocketsBuccalByFdi,
+      pocketsLingualByFdi,
+      gumMarginByFdi,
+      bleedingBuccalByFdi,
+      bleedingLingualByFdi,
+      bridgeGroupByFdi,
+    },
+    setters: voiceSetters,
+    isWholeToothStatus: (status) => redirectsSurfaceEditToWholeTooth(status),
+    onSelectTooth: (fdi) => setSelectedFdi(fdi),
+    aliases: voiceAliases.map,
+  });
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  function handleVoiceButton() {
+    setVoicePanelOpen(true);
+    if (voice.listening) voice.stop();
+    else voice.start();
+  }
 
   // Which single probing point is currently focused for keyboard entry, if
   // any — see PerioPoint (perioStyle.ts). Mutually exclusive with `selection`
@@ -1066,6 +1124,27 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           </div>
         </div>
       )}
+      {voicePanelOpen && (
+        <VoicePanel
+          listening={voice.listening}
+          interim={voice.interim}
+          error={voice.error}
+          log={voice.log}
+          canUndo={voice.canUndo}
+          onStart={voice.start}
+          onStop={voice.stop}
+          onUndo={voice.undo}
+          onClose={() => setVoicePanelOpen(false)}
+          aliases={voiceAliases.aliases}
+          onTeach={async (heard, meaning, phrase) => {
+            const result = await voiceAliases.teach(heard, meaning);
+            if (result.error || !result.map) return result.error ?? 'Ni shranjeno.';
+            voice.reprocess(phrase, result.map);
+            return null;
+          }}
+          onForget={(id) => voiceAliases.forget(id)}
+        />
+      )}
       {printingChart && (
         <ChartPrintSheet
           practiceName={practiceName}
@@ -1122,6 +1201,31 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
               <path d="M7 9V3h10v6" />
               <rect x="3" y="9" width="18" height="8" rx="2" />
               <path d="M7 14h10v7H7z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={handleVoiceButton}
+            disabled={!voice.supported}
+            title={
+              !voice.supported
+                ? 'Glasovni vnos deluje v brskalnikih Chrome in Edge.'
+                : voice.listening
+                  ? 'Izklopi glasovni vnos'
+                  : 'Glasovni vnos v karto'
+            }
+            aria-label="Glasovni vnos"
+            aria-pressed={voice.listening}
+            className={`flex-none rounded p-1 disabled:opacity-40 ${
+              voice.listening
+                ? 'bg-[#fdecea] text-[#d32f2f]'
+                : 'text-[var(--ink-soft,#45524f)] hover:bg-[#eef3f2] hover:text-[var(--accent,#2e6e62)]'
+            }`}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <path d="M12 18v3" />
             </svg>
           </button>
           <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">

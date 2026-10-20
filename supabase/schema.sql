@@ -2909,3 +2909,28 @@ drop trigger if exists enqueue_webhook_email_sent_trigger on public.email_log;
 create trigger enqueue_webhook_email_sent_trigger
   after insert on public.email_log
   for each row execute function public.enqueue_webhook_email_sent();
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/045_voice_aliases.sql.
+-- ---------------------------------------------------------------------------
+create table public.voice_aliases (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  heard text not null check (heard = lower(heard) and length(heard) between 1 and 60),
+  meaning text not null check (length(meaning) between 1 and 40),
+  created_by uuid references auth.users(id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now(),
+  unique (practice_id, heard)
+);
+create index voice_aliases_practice_id_idx on public.voice_aliases(practice_id);
+
+alter table public.voice_aliases enable row level security;
+create policy voice_aliases_select on public.voice_aliases for select
+  using (practice_id = public.current_practice_id());
+create policy voice_aliases_insert on public.voice_aliases for insert
+  with check (practice_id = public.current_practice_id());
+create policy voice_aliases_update on public.voice_aliases for update
+  using (practice_id = public.current_practice_id())
+  with check (practice_id = public.current_practice_id());
+create policy voice_aliases_delete on public.voice_aliases for delete
+  using (practice_id = public.current_practice_id());
