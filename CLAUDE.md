@@ -3153,7 +3153,7 @@ toggle on/off; Chrome/Edge only.
 - **Display fix that came with it:** bleeding recorded without a depth now
   shows as an empty red ring (`PocketDepthRow.tsx`).
 - **Tenant isolation**: section 4n (voice words not addable/readable across
-  practices) — added, not yet run.
+  practices) — passed 2026-10-21 (51/51).
 
 ### Chart printout (A4)
 
