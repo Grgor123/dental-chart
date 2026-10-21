@@ -67,8 +67,13 @@ export function PocketDepthRow({ fdis, surface, pockets, bleeding, statuses, onP
                 return (
                   <g key={i}>
                     {focused && <circle cx={x} cy={y} r={HIT_RADIUS} fill="none" stroke={SELECTED_COLOR} strokeWidth={1.5} />}
-                    {interactive && depthMm == null && (
+                    {interactive && depthMm == null && !bleeds && (
                       <circle cx={x} cy={y} r={POINT_RADIUS} fill="none" stroke={PLACEHOLDER_COLOR} strokeWidth={1} strokeDasharray="1.5 1.5" />
+                    )}
+                    {/* Bleeding recorded before a depth (e.g. by voice:
+                        "22 krvavitev") — still visible, as an empty red ring. */}
+                    {depthMm == null && bleeds && (
+                      <circle cx={x} cy={y} r={POINT_RADIUS} fill="#fff" stroke={BOP_COLOR} strokeWidth={3} />
                     )}
                     {depthMm != null && (
                       <>

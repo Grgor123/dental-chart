@@ -215,6 +215,16 @@ export function useVoiceChartEntry({ maps, setters, isWholeToothStatus, onSelect
             return { ...prev, [cmd.fdi]: next };
           });
           break;
+        case 'noBleeding':
+          for (const side of cmd.sides) {
+            const setter = side === 'buccal' ? s.setBleedingBuccalByFdi : s.setBleedingLingualByFdi;
+            setter((prev) => {
+              const cur = prev[cmd.fdi];
+              if (!cur) return prev;
+              return { ...prev, [cmd.fdi]: cur.map((v, i) => v && !cmd.points[i]) as BleedingPoints };
+            });
+          }
+          break;
         case 'note':
           s.setNotesByFdi((prev) => {
             const cur = prev[cmd.fdi]?.trim();

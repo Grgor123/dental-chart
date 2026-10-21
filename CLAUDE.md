@@ -60,6 +60,8 @@ src/
       ChartPrintSheet.tsx      # A4 landscape printout of the chart
                                 # ("Natisni karto") — see "Chart printout"
                                 # below
+      VoicePanel.tsx           # Voice entry's floating panel — see "Voice
+                                # entry" below
       perioStyle.ts            # Shared PD color thresholds + mesial/mid/distal
                                 # x-fractions, used by PerioGraphRow and
                                 # PocketDepthRow so the two stay consistent;
@@ -226,6 +228,10 @@ src/
     useFurs.ts                  # FURS on the browser side: own profile,
                                 # premise registration, fiscalizeInvoice() —
                                 # see "FURS" below
+    useSpeechRecognition.ts     # Browser speech recognition (sl-SI) —
+    useVoiceChartEntry.ts       # voice phrases → chart state, undo, log
+    useVoiceAliases.ts          # the practice's taught words (voice_aliases)
+                                # — all three: see "Voice entry" below
     usePatientMessages.ts       # One patient's emails + SMS (email_log,
                                 # appointment_reminders, patient_sms_consents),
                                 # newest first, live via Realtime — see
@@ -262,6 +268,8 @@ src/
     spreadsheet.ts              # CSV + .xlsx reader (no library), price-list
                                 # CSV template
     aftercarePrint.ts           # "Natisni navodila" A4 printout
+    voice/parseVoiceCommand.ts  # Spoken phrase → chart commands (pure) —
+                                # see "Voice entry" below
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -499,7 +507,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`044_project_url_from_vault.sql` — all confirmed run (016–019 are the
+`045_voice_aliases.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -508,9 +516,11 @@ marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
 chart → invoice, see "ZZZS šifrant" below; 034–035 aftercare instructions,
 see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
 below; 037–043 outbound webhooks, marketing consent requests and the inbound
-API — 041's tags were removed again by 043 — see "Outbound webhooks" below). `supabase/schema.sql`
+API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
+044 the project address from Vault, see "Development and production
+projects"; 045 voice entry's taught words, see "Voice entry"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(044 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(045 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3089,6 +3099,62 @@ chronological list).
   `send-appointment-change-email`, `send-post-visit-emails`,
   `send-recall-emails`, `send-appointment-reminders`, `request-sms-consent`.
 
+### Voice entry (Glasovni vnos)
+
+**Status: built and tested by Gregor (2026-10-19 … 21) — "pretty solid now";
+not yet used by Monika.** A microphone icon next to the chart's print icon
+switches on dictation; a floating panel (bottom right, `VoicePanel.tsx`, no
+layout shift) shows "Poslušam …", what was heard (»…«), what was applied (✓)
+and what wasn't understood, with **Razveljavi** (undo, one phrase = one step).
+Gregor's choices: perio + findings + notes; apply immediately with undo;
+toggle on/off; Chrome/Edge only.
+
+- **Recognition: the browser's own** (Web Speech API, `sl-SI`,
+  `useSpeechRecognition.ts`, up to 5 alternatives — the one that parses best
+  wins). In Chrome the audio goes to Google; the help text says not to say the
+  patient's name. **A cloud engine (OpenAI gpt-4o-transcribe, via an Edge
+  Function) was built, tested and removed at Gregor's request**: with a
+  vocabulary hint it echoed the hint back as a whole dictation (16 teeth
+  changed), without one it invented sentences from noise ("Zob 21 je zdrav.")
+  and changed teeth nobody had mentioned. Function, secret and code are gone;
+  don't bring a cloud engine back without asking.
+- **Tip that makes Chrome work: start every phrase with "zob"** — Chrome
+  clips the start of a phrase, and then it loses "zob", not the number.
+- **Parser** (`lib/voice/parseVoiceCommand.ts`, pure, tested with a scratch
+  script; `useVoiceChartEntry.ts` applies the commands to the same state maps
+  as clicks, so autosave/history/print work as usual): findings with surfaces
+  ("zob 36 karies MO", "obstoječa plomba distalno"), several teeth ("14 in 12
+  krona", "1716" → 17, 16), bridges ("most od 14 do 12" — same rules as "Člen
+  mostu"; ends become crowns if they aren't anchors yet), endo with stage
+  before or after ("potrebno endodontsko"), post, sealant/overlay stages,
+  perio ("16 bukalno 3 2 4 krvavitev", then bare "3 2 3" → next tooth,
+  skipping missing teeth; "zob 22 žep 123"; "Globine žepkov: 14: 3 2 2, …"),
+  bleeding at points and its removal ("22 ni več krvavitve"), recession, notes
+  (to the teeth named in them), undo, "konec / izklopi mikrofon".
+  Numbers as digits or words ("šestintrideset", "trideset šest", "štir pet"),
+  tooth number at the end ("Recesija na zobu 36"), a phrase split by a pause is
+  completed ("23 plomba" … "mezialno"; "zob 42 lingvalno" … "1 4 1").
+  Chrome's mishearings are built in by prefix/pattern (medialno/miziano →
+  mezialno, karje/"kar je" → karies, bokalno/pukalno → bukalno, "in do
+  donjsko"/"en dontsko"/betonsko → endo, "za litje" → zalitje, sob/zup → zob,
+  "1.4" → 14 or 1 4 in a depth reading).
+- **Safety rules — refuse rather than guess:** every phrase must name its own
+  tooth (a clipped number never falls back to the previous tooth); an
+  impossible number ("716", "646") means nothing from the phrase is applied;
+  after "zob" numbers are a tooth, never perio; a surface or finding that
+  isn't clear isn't applied to the whole tooth; "labialno" on a premolar/molar
+  is refused (misheard lingvalno).
+- **Taught words** (migration 045, `voice_aliases`, `useVoiceAliases.ts`):
+  under a phrase, "Nauči: [word]" → pick its meaning (most similar word
+  preselected) → "Shrani in uporabi" saves it for the whole practice and
+  reruns the phrase; listed under "Kaj lahko rečem?" → "Naučene besede" (×
+  forgets). Gregor found this hard to use; a "Popravi" alternative (retype the
+  sentence, the app learns the difference) was offered, not built.
+- **Display fix that came with it:** bleeding recorded without a depth now
+  shows as an empty red ring (`PocketDepthRow.tsx`).
+- **Tenant isolation**: section 4n (voice words not addable/readable across
+  practices) — added, not yet run.
+
 ### Chart printout (A4)
 
 **Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
@@ -5168,7 +5234,12 @@ next:
 
 ---
 
-*Last updated: 2026-10-19 (No project address in code — Vault secret
+*Last updated: 2026-10-21 (Voice entry on the dental chart — browser
+recognition, Slovene phrase parser with Chrome's mishearings built in, safety
+rules, undo, the practice's taught words (migration 045); a cloud engine was
+tried and removed; see "Voice entry (Glasovni vnos)".)*
+
+*Previous entry: 2026-10-19 (No project address in code — Vault secret
 `project_url` + `edge_function_url()` in triggers/cron (migration 044), patient
 page links carry `&p=<ref>` checked by `docs/backend.js` — step 1 of separate
 development and production projects; see "Development and production

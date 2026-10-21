@@ -30,7 +30,9 @@ export type VoiceCommand =
   | { kind: 'undo'; label: string }
   | { kind: 'stop'; label: string }
   /** Shown in the panel; changes nothing ("23 bukalno — povejte globine"). */
-  | { kind: 'info'; label: string };
+  | { kind: 'info'; label: string }
+  /** "22 ni več krvavitve": clear bleeding at these points on these sides. */
+  | { kind: 'noBleeding'; fdi: string; sides: PerioSide[]; points: Triple<boolean>; label: string };
 
 export interface VoiceContext {
   /** The tooth later commands without a number apply to. */
@@ -139,7 +141,9 @@ function tokenizeWord(tokens: Token[], cleaned: string) {
     // A number glued to a word ("6bukalno", "bukalno3") → two tokens.
     const glued = word.match(/^(\d+)([a-z]{3,})$/) ?? word.match(/^([a-z]{3,})(\d+)$/);
     if (glued) {
-      tokens.push({ word: glued[1], raw: glued[1] }, { word: glued[2], raw: glued[2] });
+      // each half on its own: "zepi213" → "zepi", 2, 1, 3
+      tokenizeWord(tokens, glued[1]);
+      tokenizeWord(tokens, glued[2]);
       return;
     }
     // Teeth run together: "1716" / "17.16" → 17, 16 (each pair a real tooth).
@@ -184,7 +188,7 @@ function surfaceOf(w: string): Surface | null {
   if (/^(mez|mes|med|miz|mec|mas)/.test(w) && /(no|na|ni|en)$/.test(w)) return 'm';
   if (/^dis/.test(w)) return 'd';
   if (/^s?ok[lu]/.test(w)) return 'o';
-  if (/^(buk|buc|bok|vest|ves|lab)/.test(w)) return 'b';
+  if (/^(buk|buc|bok|puk|vest|ves|lab)/.test(w)) return 'b';
   if (/^(ling|lin|pal|oral)/.test(w)) return 'l';
   return null;
 }
@@ -201,6 +205,10 @@ const FILLER = new Set([
   'meritev', 'zdravljenje', 'mikrofon', 'mikrofona', 'snemanje', 'poslusanje', 'zadnje', 'zadnji', 'zadnjo', 'dlesni', 'dlesen', 'stran', 'strani',
   'povezan', 'povezana', 'povezani', 'povezane', 'povezano', 'skupaj', 'med', 'sabo', 'seboj', 'ima', 'imata', 'imajo',
 ]);
+/** Filler, plus every form of "fisura" (fisur, fisuro, fisure …). */
+function isFiller(w: string): boolean {
+  return FILLER.has(w) || /^fisur/.test(w);
+}
 // Words that join teeth into a list: "14 in 12", "od 14 do 12".
 const JOINERS = new Set(['in', 'do', 'ter']);
 
@@ -212,6 +220,10 @@ const DONE = new Set([
 ]);
 
 const BLEEDING = new Set(['krvavitev', 'krvavi', 'krvavenje', 'kri']);
+/** krvavitev, krvavitve, krvavi, krvavenje … */
+function isBleeding(w: string): boolean {
+  return BLEEDING.has(w) || /^krvav/.test(w);
+}
 const RECESSION = new Set(['recesija', 'recesije', 'umik', 'odmik']);
 // "Globine žepkov: 14: 3 2 2, 15: 2 2 3" — tooth + three numbers = pocket depths.
 const PERIO_WORDS = new Set(['globina', 'globine', 'globino', 'zep', 'zepi', 'zepov', 'zepek', 'zepki', 'zepkov', 'sondiranje']);
@@ -221,8 +233,11 @@ const UNDO = new Set(['razveljavi', 'nazaj']);
 const STOP = new Set(['konec', 'ustavi', 'stop', 'izklopi', 'izkljuci', 'ugasni', 'koncaj', 'zakljuci']);
 const ENDO = new Set(['endo', 'kanal', 'endodontsko', 'endodontija', 'koreninski']);
 const POST = new Set(['zaticek', 'zaticka', 'zatick']);
-const NEGATION = new Set(['brez', 'odstrani', 'ni']);
-const TOOTH_WORD = new Set(['zob', 'zoba', 'zobu', 'zobom', 'zobje']);
+// "endodontsko" as Chrome writes it: donjsko, dotonsko, betonsko …
+const ENDO_TAIL = /(don(t|j|c)|dot?on|ton)sk/;
+const NEGATION = new Set(['brez', 'odstrani', 'ni', 'ne', 'nima']);
+// "zob" and how Chrome mishears it ("sob", "zup", "sop").
+const TOOTH_WORD = new Set(['zob', 'zoba', 'zobu', 'zobom', 'zobje', 'sob', 'zup', 'sop', 'zop']);
 
 const STATUS_LABEL: Record<ToothStatus, string> = {
   healthy: 'zdrav', caries: 'karies', caries_treated: 'plomba', filling: 'plomba (obstoječa)', crown: 'krona', bridge_pontic: 'člen mostu',
@@ -247,7 +262,8 @@ function baseStatus(word: string): 'caries' | 'filling' | 'crown' | 'implant' | 
   if (word === 'zdrav') return 'healthy';
   if (['proteza', 'protezo'].includes(word)) return 'prosthesis';
   if (word === 'overlay') return 'overlay';
-  if (['zalitje', 'zalitev', 'pecatenje'].includes(word)) return 'sealant';
+  // "za litje" — Chrome's split of "zalitje"
+  if (['zalitje', 'zalitja', 'zalitev', 'pecatenje', 'litje'].includes(word)) return 'sealant';
   return null;
 }
 
@@ -271,7 +287,7 @@ function isKeyword(w: string): boolean {
   return (
     !!baseStatus(w) ||
     /^endo/.test(w) ||
-    /don(t|j|c)sk/.test(w) ||
+    ENDO_TAIL.test(w) ||
     [UNDO, STOP, ENDO, POST, NOTE, RECESSION, BLEEDING, NEXT, TOOTH_WORD, NEGATION, PLANNED, EXISTING, DONE, PERIO_WORDS].some((set) =>
       set.has(w)
     )
@@ -293,6 +309,12 @@ export function nextPerioTooth(fdi: string, skip: (fdi: string) => boolean): str
     if (!skip(order[i])) return order[i];
   }
   return null;
+}
+
+/** Premolars and molars have no labial surface — "labialno" there was misheard. */
+function labialMessage(fdis: string[]): string {
+  const posterior = fdis.filter((f) => TOOTH_META[f]?.type === 'post').join(', ');
+  return `${posterior}: labialno ni ploskev kočnika — ste rekli lingvalno ali bukalno? Nič ni vneseno.`;
 }
 
 /** The teeth from the first to the last named one along the arch, or null when
@@ -326,7 +348,11 @@ export function parseVoiceCommand(
   skipPerio: (fdi: string) => boolean,
   aliases: Record<string, string> = {}
 ): VoiceParseResult {
-  const tokens = toothFirst(mergeToothPairs(applyAliases(tokenize(text), aliases)));
+  // While waiting for depths/millimetres, numbers stay where they are ("globine
+  // 1.4 1" is 1 4 1, not tooth 14).
+  const waiting = !!context.lastPerio?.pending || !!context.pendingRecession;
+  const merged = mergeToothPairs(applyAliases(tokenize(text), aliases));
+  const tokens = waiting ? merged : toothFirst(merged);
   const numberAt = (i: number): number | null => (i < tokens.length ? wordNumber(tokens[i].word) : null);
   const commands: VoiceCommand[] = [];
   const unknown: string[] = [];
@@ -364,7 +390,7 @@ export function parseVoiceCommand(
       const s = surfaceOf(t.word);
       if (s) {
         if (!named.includes(s)) named.push(s);
-      } else if (/\d/.test(t.word) || (!FILLER.has(t.word) && t.word.length > 2)) {
+      } else if (/\d/.test(t.word) || (!isFiller(t.word) && t.word.length > 2)) {
         // A number (a tooth, a depth) means a new entry, never a completion.
         onlySurfaces = false;
         break;
@@ -398,6 +424,15 @@ export function parseVoiceCommand(
     while (values.length < 3 && i < tokens.length) {
       // "dva, dva, tri" — commas between the numbers don't end them
       if (values.length > 0 && tokens[i].word === '|' && numberAt(i + 1) != null) i++;
+      // Chrome writes "1 4" as "1.4" (taken for tooth 14 elsewhere) — in a
+      // depth reading it's two depths.
+      const dotted = tokens[i]?.raw.match(/^(\d)[.\-/](\d)$/);
+      if (dotted) {
+        values.push(Number(dotted[1]));
+        if (values.length < 3) values.push(Number(dotted[2]));
+        i++;
+        continue;
+      }
       const n = numberAt(i);
       if (n == null || n > 15) break;
       values.push(n);
@@ -413,8 +448,8 @@ export function parseVoiceCommand(
 
   // Bleeding after a pocket entry: "krvavitev" (all) or "krvavitev mezialno distalno".
   function readBleeding(i: number): { bleeding: Triple<boolean> | null; next: number } {
-    if (tokens[i]?.word === '|' && BLEEDING.has(tokens[i + 1]?.word ?? '')) i++;
-    if (i >= tokens.length || !BLEEDING.has(tokens[i].word)) return { bleeding: null, next: i };
+    if (tokens[i]?.word === '|' && isBleeding(tokens[i + 1]?.word ?? '')) i++;
+    if (i >= tokens.length || !isBleeding(tokens[i].word)) return { bleeding: null, next: i };
     i++;
     const points: (0 | 1 | 2)[] = [];
     while (i < tokens.length && pointOf(tokens[i].word) != null) {
@@ -447,6 +482,13 @@ export function parseVoiceCommand(
   let bridgeRequested = false;
   const noTooth: string[] = [];
   const badNumbers: string[] = [];
+  let toothExpected = false;
+  let stageBefore: EndoStage | null = null;
+  const isEndoWord = (x: string) => ENDO.has(x) || /^endo/.test(x) || ENDO_TAIL.test(x);
+  function nextIsEndo(k: number): boolean {
+    while (k < tokens.length && (isFiller(tokens[k].word) || ['in', 'do', 'en', 'ena'].includes(tokens[k].word))) k++;
+    return k < tokens.length && isEndoWord(tokens[k].word);
+  }
   // After "globine žepkov": "tooth + three numbers" are depths on this side.
   let perioSide: PerioSide | null = null;
   /** In perio mode, right after a tooth: its three depths (separators skipped). */
@@ -488,8 +530,30 @@ export function parseVoiceCommand(
       i++;
       continue;
     }
-    if (PERIO_WORDS.has(w)) {
+    const pending = teeth.length === 0 && ctx.lastPerio?.pending ? ctx.lastPerio : null;
+    if (PERIO_WORDS.has(w) || (pending && PERIO_SIDE[surfaceOf(w) as Surface])) {
       perioSide = perioSide ?? 'buccal';
+      // "zob 22 žep 1 2 3", "zob 22 žepi lingvalno 3 2 4": depths for the tooth
+      // just named (buccal unless a side follows). After "zob 42 lingvalno —
+      // povejte globine", "globine 1 3 1" goes to 42 lingual.
+      if (teeth.length || pending) {
+        const target = teeth.length ? teeth[teeth.length - 1] : (pending as { fdi: string }).fdi;
+        let k = PERIO_WORDS.has(w) ? i + 1 : i;
+        let side: PerioSide = pending ? pending.side : 'buccal';
+        while (k < tokens.length && (tokens[k].word === '|' || PERIO_WORDS.has(tokens[k].word) || isFiller(tokens[k].word) || PERIO_SIDE[surfaceOf(tokens[k].word) as Surface])) {
+          const sd = PERIO_SIDE[surfaceOf(tokens[k].word) as Surface];
+          if (sd) side = sd;
+          k++;
+        }
+        const { values, next } = readValues(k);
+        if (values.length > 0) {
+          const { bleeding, next: afterBleeding } = readBleeding(next);
+          pushPocket(target, side, values, bleeding);
+          findingDone();
+          i = afterBleeding;
+          continue;
+        }
+      }
       i++;
       continue;
     }
@@ -509,6 +573,8 @@ export function parseVoiceCommand(
       continue;
     }
     if (TOOTH_WORD.has(w) || JOINERS.has(w)) {
+      // After "zob" a tooth number must follow — never perio depths.
+      if (TOOTH_WORD.has(w)) toothExpected = true;
       i++;
       continue;
     }
@@ -521,6 +587,12 @@ export function parseVoiceCommand(
 
     // A tooth number: "36", "šestintrideset", two single digits "ena šest",
     // or tens and units as two words "trideset šest".
+    // "en dontsko" — Chrome's split of "endodontsko": "en" here isn't "one".
+    if ((w === 'en' || w === 'ena') && nextIsEndo(i + 1)) {
+      i++;
+      continue;
+    }
+
     let n = numberAt(i);
     if (n != null) {
       const unit = numberAt(i + 1);
@@ -534,7 +606,7 @@ export function parseVoiceCommand(
 
       // Exactly three bare numbers right after a perio entry → the next tooth,
       // same side (two would be ambiguous with "ena šest" = tooth 16).
-      if (ctx.lastPerio && !VALID_FDI.has(asTooth) && teeth.length === 0) {
+      if (ctx.lastPerio && !VALID_FDI.has(asTooth) && teeth.length === 0 && !toothExpected) {
         const { values, next } = readValues(i);
         if (values.length === 3) {
           const target = ctx.lastPerio.pending ? ctx.lastPerio.fdi : nextPerioTooth(ctx.lastPerio.fdi, skipPerio);
@@ -577,7 +649,7 @@ export function parseVoiceCommand(
     }
 
     // "krvavitev [mezialno …]" on its own, right after a perio entry.
-    if (teeth.length === 0 && BLEEDING.has(w) && ctx.lastPerio && !ctx.lastPerio.pending) {
+    if (teeth.length === 0 && isBleeding(w) && ctx.lastPerio && !ctx.lastPerio.pending) {
       const { bleeding, next } = readBleeding(i);
       const { fdi, side } = ctx.lastPerio;
       commands.push({
@@ -616,7 +688,7 @@ export function parseVoiceCommand(
     if (teeth.length === 0) {
       // Before any tooth number: fillers and short noise ("na", "ki", "c")
       // are skipped; anything else is reported — nothing is guessed.
-      if (!FILLER.has(w) && w.length > 2) {
+      if (!isFiller(w) && w.length > 2) {
         noTooth.push(tokens[i].raw);
         if (!isKeyword(w) && !surfaceOf(w)) miss(tokens[i].raw);
       }
@@ -628,7 +700,7 @@ export function parseVoiceCommand(
 
     if (RECESSION.has(w)) {
       let k = i + 1;
-      while (k < tokens.length && (FILLER.has(tokens[k].word) || TOOTH_WORD.has(tokens[k].word) || tokens[k].word === '|')) k++;
+      while (k < tokens.length && (isFiller(tokens[k].word) || TOOTH_WORD.has(tokens[k].word) || tokens[k].word === '|')) k++;
       const { values, next } = readValues(k);
       if (values.length === 0) {
         commands.push({ kind: 'info', label: `${last} recesija — povejte milimetre` });
@@ -641,6 +713,49 @@ export function parseVoiceCommand(
       findingDone();
       i = next;
       continue;
+    }
+
+    // "22 ni več krvavitve", "22 lingvalno brez krvavitve distalno",
+    // "22 ne krvavi": remove bleeding (both sides / all points unless named).
+    {
+      let k = i;
+      const sides: PerioSide[] = [];
+      const points: (0 | 1 | 2)[] = [];
+      let negated = false;
+      while (k < tokens.length) {
+        const x = tokens[k].word;
+        const sd = PERIO_SIDE[surfaceOf(x) as Surface];
+        const p = pointOf(x);
+        if (NEGATION.has(x)) negated = true;
+        else if (sd && !/^(mez|mes|med|miz|dis)/.test(x)) sides.includes(sd) || sides.push(sd);
+        else if (p != null) points.includes(p) || points.push(p);
+        else if (!(x === 'vec' || isFiller(x))) break;
+        k++;
+      }
+      if (negated && k < tokens.length && isBleeding(tokens[k].word)) {
+        k++;
+        while (k < tokens.length && pointOf(tokens[k].word) != null) {
+          const p = pointOf(tokens[k].word) as 0 | 1 | 2;
+          if (!points.includes(p)) points.push(p);
+          k++;
+        }
+        const marks: Triple<boolean> = points.length ? [points.includes(0), points.includes(1), points.includes(2)] : [true, true, true];
+        const which: PerioSide[] = sides.length ? sides : ['buccal', 'lingual'];
+        for (const fdi of teeth) {
+          commands.push({
+            kind: 'noBleeding',
+            fdi,
+            sides: which,
+            points: marks,
+            label: `${fdi} brez krvavitve${points.length ? ` ${(['M', 'sredina', 'D'] as const).filter((_, idx) => marks[idx]).join(' ')}` : ''}${
+              sides.length ? ` (${sides.map((s) => (s === 'buccal' ? 'bukalno' : 'lingvalno')).join(', ')})` : ''
+            }`,
+          });
+        }
+        findingDone();
+        i = k;
+        continue;
+      }
     }
 
     // Bleeding at points: "35 distalno krvavitev" / "35 krvavitev distalno"
@@ -656,20 +771,32 @@ export function parseVoiceCommand(
         if (sd) side = sd;
         k++;
       }
-      if (k < tokens.length && BLEEDING.has(tokens[k].word)) {
-        const { bleeding, next } = readBleeding(k);
-        // Points named before "krvavitev" plus any after it; none at all = the
-        // whole side.
-        const after = next > k + 1 && bleeding ? bleeding : ([false, false, false] as Triple<boolean>);
-        const marks: Triple<boolean> =
-          points.length === 0 && next === k + 1 ? [true, true, true] : [0, 1, 2].map((idx) => points.includes(idx as 0 | 1 | 2) || after[idx]) as Triple<boolean>;
+      if (k < tokens.length && isBleeding(tokens[k].word)) {
+        // Points and the side may also come after "krvavitev":
+        // "22 krvavitev lingvalno distalno".
+        let next = k + 1;
+        while (next < tokens.length) {
+          const x = tokens[next].word;
+          const p = pointOf(x);
+          const sd = PERIO_SIDE[surfaceOf(x) as Surface];
+          if (p != null) {
+            if (!points.includes(p)) points.push(p);
+          } else if (sd) {
+            side = sd;
+          } else if (!isFiller(x)) {
+            break;
+          }
+          next++;
+        }
+        // None named = the whole side.
+        const marks: Triple<boolean> = points.length === 0 ? [true, true, true] : [points.includes(0), points.includes(1), points.includes(2)];
         commands.push({
           kind: 'pocket',
           fdi: last,
           side,
           values: [null, null, null],
           bleeding: marks,
-          label: `${last} krvavitev ${(['M', 'sredina', 'D'] as const).filter((_, idx) => marks[idx]).join(' ')}`.trim(),
+          label: `${last} ${side === 'buccal' ? 'bukalno' : 'lingvalno'} krvavitev ${(['M', 'sredina', 'D'] as const).filter((_, idx) => marks[idx]).join(' ')}`.trim(),
         });
         ctx = { ...ctx, lastPerio: { fdi: last, side } };
         findingDone();
@@ -683,8 +810,21 @@ export function parseVoiceCommand(
     const surfaceWord = surfaceOf(w);
     if (surfaceWord) {
       const side = PERIO_SIDE[surfaceWord];
+      // "labialno" on a premolar/molar is a mishearing (lingvalno?) — never guess.
+      if (/^lab/.test(w) && teeth.some((f) => TOOTH_META[f]?.type === 'post')) {
+        unknown.push(labialMessage(teeth));
+        let k = i + 1;
+        while (k < tokens.length && tokens[k].word !== '|') k++;
+        findingDone();
+        i = k;
+        continue;
+      }
       if (side) {
-        const { values, next } = readValues(i + 1);
+        // "lingvalno globine 1 4 1", "lingvalno žep: 3 2 4" — the side holds
+        // across the perio word.
+        let k = i + 1;
+        while (k < tokens.length && (tokens[k].word === '|' || PERIO_WORDS.has(tokens[k].word) || isFiller(tokens[k].word))) k++;
+        const { values, next } = readValues(k);
         if (values.length > 0) {
           const { bleeding, next: afterBleeding } = readBleeding(next);
           pushPocket(last, side, values, bleeding);
@@ -708,14 +848,17 @@ export function parseVoiceCommand(
     }
 
     // Chrome splits "endodontsko" into "in do donjsko" — the tail is enough.
-    if (ENDO.has(w) || /^endo/.test(w) || /don(t|j|c)sk/.test(w)) {
-      let stage: EndoStage = 'done';
+    if (ENDO.has(w) || /^endo/.test(w) || ENDO_TAIL.test(w)) {
+      // A stage said before ("potrebno endodontsko") or after ("endo opravljeno").
+      let stage: EndoStage = stageBefore ?? 'done';
       let j = i + 1;
-      while (j < tokens.length && ['kanal', 'zdravljenje', 'v', 'je', 'zob', 'koreninski'].includes(tokens[j].word)) j++;
+      while (j < tokens.length && ['kanal', 'zdravljenje', 'v', 'je', 'zob', 'koreninski', 'in', 'do'].includes(tokens[j].word)) j++;
       const mod = j < tokens.length ? tokens[j].word : '';
       if (PLANNED.has(mod)) stage = 'planned';
       else if (EXISTING.has(mod)) stage = 'existing';
+      else if (DONE.has(mod)) stage = 'done';
       if (PLANNED.has(mod) || EXISTING.has(mod) || DONE.has(mod)) j++;
+      stageBefore = null;
       const stageLabel = stage === 'planned' ? 'potrebno' : stage === 'existing' ? 'obstoječe' : 'opravljeno';
       for (const fdi of teeth) commands.push({ kind: 'endo', fdi, stage, label: `${fdi} endo ${stageLabel}` });
       ctx = { ...ctx, lastPerio: null };
@@ -733,11 +876,17 @@ export function parseVoiceCommand(
       continue;
     }
 
+    // "potrebno / opravljeno / obstoječe" right before endo: remember it.
+    if ((PLANNED.has(w) || EXISTING.has(w) || DONE.has(w)) && nextIsEndo(i + 1)) {
+      stageBefore = PLANNED.has(w) ? 'planned' : EXISTING.has(w) ? 'existing' : 'done';
+      i++;
+      continue;
+    }
     if (baseStatus(w) || PLANNED.has(w) || EXISTING.has(w)) {
       i = parseStatus(i, teeth);
       continue;
     }
-    if (FILLER.has(w) || w.length <= 2) {
+    if (isFiller(w) || w.length <= 2) {
       i++;
       continue;
     }
@@ -761,6 +910,7 @@ export function parseVoiceCommand(
   // modifier in any order, until a word that belongs to something else.
   function parseStatus(start: number, forTeeth: string[]): number {
     const surfaces: Surface[] = [];
+    let labialSaid = false;
     let base: ReturnType<typeof baseStatus> = null;
     let modifier: 'planned' | 'existing' | 'done' | null = null;
     let j = start;
@@ -770,6 +920,7 @@ export function parseVoiceCommand(
       if (s) {
         // A perio side followed by numbers ends the status phrase.
         if (PERIO_SIDE[s] && numberAt(j + 1) != null) break;
+        if (/^lab/.test(w)) labialSaid = true;
         if (!surfaces.includes(s)) surfaces.push(s);
       } else if (/^[mdobl]{1,4}$/.test(w) && new Set(w).size === w.length && (base || surfaces.length)) {
         // Surface letters inside a status phrase: "karies MO", "plomba MOD".
@@ -782,7 +933,7 @@ export function parseVoiceCommand(
         modifier = 'existing';
       } else if (DONE.has(w)) {
         modifier = 'done';
-      } else if (FILLER.has(w) || (w.length <= 2 && numberAt(j) == null)) {
+      } else if (isFiller(w) || (w.length <= 2 && numberAt(j) == null)) {
         // "za ekstrakcijo", "zalitje fisur", "tudi distalno", "karies z okluzalno"
       } else {
         break;
@@ -791,7 +942,7 @@ export function parseVoiceCommand(
     }
     if (!base) {
       for (const t of tokens.slice(start, Math.max(j, start + 1))) {
-        if (!surfaceOf(t.word) && !FILLER.has(t.word) && !isKeyword(t.word) && t.word.length > 2) miss(t.raw);
+        if (!surfaceOf(t.word) && !isFiller(t.word) && !isKeyword(t.word) && t.word.length > 2) miss(t.raw);
       }
       if (surfaces.length && forTeeth.length) {
         unknown.push(`${forTeeth.join(', ')} ${surfaceLetters(surfaces)} — ploskev brez izvida (npr. »${forTeeth[0]} karies mezialno«)`);
@@ -826,6 +977,10 @@ export function parseVoiceCommand(
     }
     for (const fdi of forTeeth) {
       const meta = TOOTH_META[fdi];
+      if (labialSaid && meta?.type === 'post') {
+        unknown.push(labialMessage([fdi]));
+        continue;
+      }
       const valid = PER_SURFACE.includes(status) ? surfaces.filter((s) => meta?.surfaces.includes(s)) : [];
       // Surfaces were named but none exists on this tooth (an incisor has no
       // occlusal surface): change nothing rather than mark the whole tooth.
