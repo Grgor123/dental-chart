@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { findNextFreeSlot, type BusyInterval } from '../lib/nextFreeSlot';
-import type { Schedule } from '../lib/workingHours';
+import type { PracticeSchedule, Schedule } from '../lib/workingHours';
 
 // Native scheduling calendar — supabase/migrations/013_add_appointments.sql.
 // practice_id is auto-stamped server-side by a trigger derived from
@@ -151,7 +151,8 @@ export function useNextFreeSlot(
   durationMinutes: number,
   fromIso: string,
   enabled: boolean,
-  schedule?: Schedule
+  schedule?: Schedule,
+  practice?: PracticeSchedule
 ) {
   const [slot, setSlot] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
@@ -175,14 +176,14 @@ export function useNextFreeSlot(
         busy = (data ?? []).map((r) => ({ start: new Date(r.starts_at as string).getTime(), end: new Date(r.ends_at as string).getTime() }));
       }
       if (cancelled) return;
-      setSlot(findNextFreeSlot(from, durationMinutes, busy, schedule));
+      setSlot(findNextFreeSlot(from, durationMinutes, busy, schedule, practice, !!therapistId));
       setLoading(false);
     }
     run();
     return () => {
       cancelled = true;
     };
-  }, [therapistId, durationMinutes, fromIso, enabled, schedule]);
+  }, [therapistId, durationMinutes, fromIso, enabled, schedule, practice]);
 
   return { slot, loading };
 }

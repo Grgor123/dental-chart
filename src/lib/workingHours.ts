@@ -1,8 +1,11 @@
-// Working hours per team member (migration 047) — pure, no React/Supabase.
-// A date's hours: an absence → none; else that date's own periods (a manual
-// edit for one day) if any; else the weekly template for its weekday — per
-// odd/even ISO week when the therapist works alternating weeks. A therapist
-// with no weekly template at all gets the practice default below.
+// Working hours per team member (migration 047) and of the clinic (048) —
+// pure, no React/Supabase. A therapist's date: clinic closed → none; an
+// absence → none; else that date's own periods (a manual edit for one day)
+// if any; else the weekly template for its weekday — per odd/even ISO week
+// when the therapist works alternating weeks. A therapist with no weekly
+// template gets the clinic's hours, or — none set either — Mon–Fri 08–19.
+// What can actually be booked (bookableHours) is a therapist's hours cut to
+// the clinic's.
 
 export interface Period {
   startMin: number; // minutes from midnight
@@ -36,6 +39,20 @@ export interface Absence {
   dateFrom: string;
   dateTo: string;
   reason: AbsenceReason;
+  note: string | null;
+}
+
+/** The clinic's own hours (migration 048). Empty `weekly` = not set. */
+export interface PracticeSchedule {
+  weekly: { weekday: number; startMin: number; endMin: number }[];
+  closed: ClosedDay[];
+  blockOutsideHours: boolean;
+}
+
+export interface ClosedDay {
+  id: string;
+  dateFrom: string;
+  dateTo: string;
   note: string | null;
 }
 
@@ -89,22 +106,42 @@ export function weekParity(dateIso: string): 'odd' | 'even' {
 
 export interface DayHours {
   periods: Period[];
-  /** Where they came from — 'default' = no weekly hours set yet. */
-  source: 'absence' | 'day' | 'weekly' | 'default';
+  /** Where they came from — 'default' = the therapist has no weekly hours
+   *  (clinic hours or Mon–Fri 08–19 apply); 'practice' = the clinic's own. */
+  source: 'closed' | 'absence' | 'day' | 'weekly' | 'default' | 'practice';
   absence?: Absence;
+  closed?: ClosedDay;
 }
 
-export function hoursForDate(schedule: Schedule | undefined, dateIso: string): DayHours {
-  const absence = schedule?.absences.find((a) => a.dateFrom <= dateIso && dateIso <= a.dateTo);
-  if (absence) return { periods: [], source: 'absence', absence };
-  const own = schedule?.days.filter((d) => d.date === dateIso) ?? [];
-  if (own.length > 0) return { periods: sortPeriods(own), source: 'day' };
-  const weekday = ((parseDate(dateIso).getDay() + 6) % 7) + 1;
-  if (!schedule || schedule.weekly.length === 0) {
+function weekdayOf(dateIso: string): number {
+  return ((parseDate(dateIso).getDay() + 6) % 7) + 1;
+}
+
+/** The clinic's hours on a date; Mon–Fri 08–19 while none are set. */
+export function practiceHoursForDate(practice: PracticeSchedule | undefined, dateIso: string): DayHours {
+  const closed = practice?.closed.find((c) => c.dateFrom <= dateIso && dateIso <= c.dateTo);
+  if (closed) return { periods: [], source: 'closed', closed };
+  const weekday = weekdayOf(dateIso);
+  if (!practice || practice.weekly.length === 0) {
     return {
       periods: DEFAULT_WEEKDAYS.includes(weekday) ? [{ startMin: DEFAULT_START_MIN, endMin: DEFAULT_END_MIN }] : [],
       source: 'default',
     };
+  }
+  return { periods: sortPeriods(practice.weekly.filter((w) => w.weekday === weekday)), source: 'practice' };
+}
+
+/** A therapist's own hours on a date (see the file comment). */
+export function hoursForDate(schedule: Schedule | undefined, dateIso: string, practice?: PracticeSchedule): DayHours {
+  const closed = practice?.closed.find((c) => c.dateFrom <= dateIso && dateIso <= c.dateTo);
+  if (closed) return { periods: [], source: 'closed', closed };
+  const absence = schedule?.absences.find((a) => a.dateFrom <= dateIso && dateIso <= a.dateTo);
+  if (absence) return { periods: [], source: 'absence', absence };
+  const own = schedule?.days.filter((d) => d.date === dateIso) ?? [];
+  if (own.length > 0) return { periods: sortPeriods(own), source: 'day' };
+  const weekday = weekdayOf(dateIso);
+  if (!schedule || schedule.weekly.length === 0) {
+    return { periods: practiceHoursForDate(practice, dateIso).periods, source: 'default' };
   }
   const parity: WeekParity = schedule.alternatingWeeks ? weekParity(dateIso) : 'all';
   return {
@@ -115,6 +152,16 @@ export function hoursForDate(schedule: Schedule | undefined, dateIso: string): D
 
 function sortPeriods(periods: Period[]): Period[] {
   return periods.map((p) => ({ startMin: p.startMin, endMin: p.endMin })).sort((a, b) => a.startMin - b.startMin);
+}
+
+/** What can be booked with a therapist: their hours cut to the clinic's
+ *  (once the clinic has hours set). Without a therapist, the clinic's hours. */
+export function bookableHours(schedule: Schedule | undefined, dateIso: string, practice?: PracticeSchedule, withTherapist = true): DayHours {
+  const clinic = practiceHoursForDate(practice, dateIso);
+  if (!withTherapist) return clinic;
+  const own = hoursForDate(schedule, dateIso, practice);
+  if (clinic.source !== 'practice') return own;
+  return { ...own, periods: overlapPeriods(own.periods, clinic.periods) };
 }
 
 /** True if [startMin, endMin) lies inside one of the periods. */

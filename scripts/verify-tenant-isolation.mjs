@@ -466,6 +466,21 @@ async function main() {
     }
   }
 
+  // 4q. Clinic hours (048_practice_hours.sql) — account 2 can't set account
+  // 1's hours or settings, or read them.
+  if (account1PracticeId) {
+    const { error: hoursSpoofError } = await client2
+      .from('practice_hours')
+      .insert({ practice_id: account1PracticeId, weekday: 1, start_time: '08:00', end_time: '09:00' });
+    check("account 2 cannot set account 1's clinic hours", !!hoursSpoofError, hoursSpoofError ? hoursSpoofError.message : 'insert unexpectedly succeeded');
+    const { error: settingsSpoofError } = await client2
+      .from('practice_settings')
+      .upsert({ practice_id: account1PracticeId, block_outside_hours: true });
+    check("account 2 cannot change account 1's booking settings", !!settingsSpoofError, settingsSpoofError ? settingsSpoofError.message : 'upsert unexpectedly succeeded');
+    const { data: leakedClosed } = await client2.from('practice_closed_days').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's closed days", !leakedClosed || leakedClosed.length === 0, `${leakedClosed?.length ?? 0} row(s) visible`);
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

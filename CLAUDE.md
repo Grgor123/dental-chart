@@ -144,6 +144,9 @@ src/
                                 # see "Team and rooms" below
       WorkingHoursDialog.tsx   # Ekipa → Delovni čas (weekly, special days,
                                 # absences) — same section
+      PracticeHoursSection.tsx # Nastavitve → Delovni čas: clinic hours,
+                                # closed days, "no booking outside hours"
+      PeriodsEditor.tsx        # One day's [od]–[do] periods, shared by both
       IntegrationsSection.tsx  # Nastavitve → Integracije (owners): outbound
                                 # webhooks — see "Outbound webhooks" below
       ApiKeysSection.tsx       # Integracije → API ključi (inbound API)
@@ -204,6 +207,7 @@ src/
                                 # "Team and rooms" below
     useRooms.ts                 # Ordinacije (rooms) — same section
     useWorkingHours.ts          # The team's working hours — same section
+    usePracticeHours.ts         # The clinic's hours/closed days/settings
     useAppointments.ts          # Appointment CRUD + range queries (one day,
                                 # one week, or an arbitrary range for Month)
                                 # — see "Native scheduling calendar" below
@@ -515,7 +519,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`047_working_hours.sql` — all confirmed run (016–019 are the
+`048_practice_hours.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -526,10 +530,10 @@ see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
 below; 037–043 outbound webhooks, marketing consent requests and the inbound
 API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
-projects"; 045 voice entry's taught words, see "Voice entry"; 046–047 team, rooms
-and working hours, see "Team and rooms"). `supabase/schema.sql`
+projects"; 045 voice entry's taught words, see "Voice entry"; 046–048 team, rooms,
+working hours and clinic hours, see "Team and rooms"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(047 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(048 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -4688,11 +4692,38 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
     an absence ("Dopust") or a day off ("Ne dela") in the header; Week view
     does the same while one therapist is shown alone. Free-slot search and the
     booking warning use the same hours.
+- **Clinic hours** (migration 048, Gregor 2026-10-22) — Nastavitve →
+  **Delovni čas** (`PracticeHoursSection.tsx`, `usePracticeHours.ts`):
+  weekly periods for the whole clinic (`practice_hours`), **Ambulanta
+  zaprta** dates (`practice_closed_days` — holidays, collective leave; apply
+  to everyone) and the switch **"Naročanje izven delovnega časa ni mogoče"**
+  (`practice_settings.block_outside_hours`). Owners edit.
+  - Clinic hours are the **fallback** for a team member without their own
+    (then Mon–Fri 08–19 only while the clinic has none either), and **bound
+    what's bookable**: `bookableHours()` = the therapist's hours cut to the
+    clinic's. Shading, free-slot search and the checks all use it; the
+    "Nedodeljen" column (and Week view when not filtered) shades the clinic's
+    hours, a closed day shows "Zaprto".
+  - **Staff bookings**: outside clinic or therapist hours → amber warning +
+    "Vseeno shrani"; with the switch on → red message, button disabled.
+    Editing an existing appointment without changing its time is never
+    blocked (e.g. marking a past visit "Opravljen").
+  - **Database rule** (trigger `check_appointment_hours`, function
+    `within_practice_hours`, Europe/Ljubljana time): new column
+    `appointments.source` ('staff' default | 'online'). Online bookings by
+    patients are **always** refused outside clinic hours or on a closed day;
+    staff bookings only while the switch is on. Only the clinic window is
+    enforced in the database — therapist hours are checked in the app. A
+    practice with no clinic hours accepts everything. Online booking itself
+    doesn't exist in this app yet (roadmap item 6; the separate booking widget
+    writes to Google Calendar, not here) — it must insert with
+    `source = 'online'`.
 - **Tenant isolation**: section 4o (rooms not addable/readable across
   practices) and 7b (a team member can't be linked to another practice's
   login; a patient can't be assigned another practice's therapist) — passed
   2026-10-22 (55/55); 4p (working hours/absences not readable or addable
-  across practices) — added with 047, not yet run.
+  across practices) and 4q (clinic hours, closed days, booking settings) —
+  added with 047/048, not yet run.
 
 ### Outbound webhooks and marketing consent (Nastavitve → Integracije)
 
@@ -5384,8 +5415,10 @@ Gregor before starting each item.
 calendar's "+", rooms (ordinacije), "Izbran terapevt" picked from the team,
 working hours per therapist (weekly, split shifts, odd/even weeks, special
 days, absences) used by the calendar — migrations 046–047; therapist filter
-chips, first free slot and 5-minute times in "Nov termin"; see "Team and
-rooms" and "Native scheduling calendar". Earlier the same day:
+chips, first free slot and 5-minute times in "Nov termin"; clinic hours,
+closed days and "no booking outside working hours" (online bookings always
+refused outside them) — migration 048; see "Team and rooms" and "Native
+scheduling calendar". Earlier the same day:
 the roadmap agreed from Gregor's product specification — see "Roadmap" under
 "Current Status & Next Steps".)*
 

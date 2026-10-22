@@ -1,8 +1,8 @@
 // "Nov termin" proposes the first free slot (Gregor, 2026-10-22). Pure, no
 // React/Supabase — useNextFreeSlot() (hooks/useAppointments.ts) feeds it the
-// therapist's booked intervals and working hours (lib/workingHours.ts, which
-// falls back to Mon–Fri 08:00–19:00 while none are set).
-import { hoursForDate, toDateIso, type Schedule } from './workingHours';
+// therapist's booked intervals and the bookable hours (lib/workingHours.ts:
+// the therapist's hours cut to the clinic's; Mon–Fri 08–19 while none are set).
+import { bookableHours, toDateIso, type PracticeSchedule, type Schedule } from './workingHours';
 
 export const SLOT_STEP_MINUTES = 5;
 const SEARCH_DAYS = 60;
@@ -23,7 +23,9 @@ export function findNextFreeSlot(
   from: Date,
   durationMinutes: number,
   busy: BusyInterval[],
-  schedule?: Schedule
+  schedule?: Schedule,
+  practice?: PracticeSchedule,
+  withTherapist = true
 ): Date | null {
   const duration = durationMinutes * 60000;
   const sorted = [...busy].sort((a, b) => a.start - b.start);
@@ -32,7 +34,7 @@ export function findNextFreeSlot(
   day.setHours(0, 0, 0, 0);
 
   for (let i = 0; i < SEARCH_DAYS; i++, day.setDate(day.getDate() + 1)) {
-    for (const period of hoursForDate(schedule, toDateIso(day)).periods) {
+    for (const period of bookableHours(schedule, toDateIso(day), practice, withTherapist).periods) {
       const periodStart = new Date(day).setHours(0, period.startMin, 0, 0);
       const periodEnd = new Date(day).setHours(0, period.endMin, 0, 0);
       let cursor = Math.max(periodStart, fromMs);

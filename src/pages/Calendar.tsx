@@ -16,7 +16,18 @@ import {
 } from '../hooks/useAppointments';
 import { TimeSelect } from '../components/ui/TimeSelect';
 import { useWorkingHours } from '../hooks/useWorkingHours';
-import { ABSENCE_LABELS, describePeriods, fitsInPeriods, hoursForDate, timeToMin, type Schedule } from '../lib/workingHours';
+import { usePracticeHours } from '../hooks/usePracticeHours';
+import {
+  ABSENCE_LABELS,
+  bookableHours,
+  describePeriods,
+  fitsInPeriods,
+  practiceHoursForDate,
+  timeToMin,
+  type DayHours,
+  type PracticeSchedule,
+  type Schedule,
+} from '../lib/workingHours';
 import { isBookable, useTherapists, type Therapist } from '../hooks/useTherapists';
 import { APPOINTMENT_STATUS_META, APPOINTMENT_STATUS_ORDER } from '../lib/appointmentStatus';
 import { TimeGrid, type TimeGridColumn } from '../components/calendar/TimeGrid';
@@ -209,6 +220,8 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
   const { therapists: allTherapists } = useTherapists();
   // Working hours (migration 047): shading, free-slot search, booking warning.
   const { schedules } = useWorkingHours();
+  // The clinic's hours and closed days (migration 048).
+  const { practice } = usePracticeHours();
   const therapists = useMemo(() => allTherapists.filter((t) => !t.archived && isBookable(t)), [allTherapists]);
   const { practiceName, role } = usePracticeContext();
 
@@ -331,12 +344,26 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     return !therapistId || !hiddenTherapistIds.has(therapistId);
   }
 
-  function columnHours(therapistId: string, day: string): Pick<TimeGridColumn, 'workingPeriods' | 'offLabel'> {
-    const hours = hoursForDate(schedules.get(therapistId), day);
+  function shading(hours: DayHours): Pick<TimeGridColumn, 'workingPeriods' | 'offLabel'> {
     return {
       workingPeriods: hours.periods,
-      offLabel: hours.absence ? ABSENCE_LABELS[hours.absence.reason] : hours.periods.length === 0 ? 'Ne dela' : undefined,
+      offLabel: hours.closed
+        ? 'Zaprto'
+        : hours.absence
+          ? ABSENCE_LABELS[hours.absence.reason]
+          : hours.periods.length === 0
+            ? 'Ne dela'
+            : undefined,
     };
+  }
+  /** A therapist's bookable hours (their own, cut to the clinic's). */
+  function columnHours(therapistId: string, day: string): Pick<TimeGridColumn, 'workingPeriods' | 'offLabel'> {
+    return shading(bookableHours(schedules.get(therapistId), day, practice));
+  }
+  /** The clinic's hours — only once they're set (or a closed day). */
+  function clinicHours(day: string): Pick<TimeGridColumn, 'workingPeriods' | 'offLabel'> {
+    const hours = practiceHoursForDate(practice, day);
+    return hours.source === 'default' ? {} : shading(hours);
   }
 
   const dayColumns: TimeGridColumn[] =
@@ -359,6 +386,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
                   label: 'Nedodeljen',
                   dateIso,
                   events: dayData.appointments.filter((a) => !a.therapistId || !therapists.some((t) => t.id === a.therapistId)),
+                  ...clinicHours(dateIso),
                 },
               ]),
         ];
@@ -375,7 +403,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     dateIso: d,
     events: weekData.appointments.filter((a) => a.startsAt.slice(0, 10) === d && isTherapistVisible(a.therapistId)),
     // With one therapist shown alone, Week view shades their hours too.
-    ...(therapistFilter.kind === 'only' ? columnHours(therapistFilter.id, d) : {}),
+    ...(therapistFilter.kind === 'only' ? columnHours(therapistFilter.id, d) : clinicHours(d)),
   }));
 
   const loadError = dayData.error || weekData.error || monthData.error;
@@ -525,6 +553,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
                 : therapists
             }
             schedules={schedules}
+            practice={practice}
             onCreate={createAppointmentEverywhere}
             onUpdate={updateAppointmentEverywhere}
             onCreatePatient={createPatient}
@@ -623,6 +652,7 @@ interface AppointmentModalProps {
   patients: PatientListItem[];
   therapists: Therapist[];
   schedules: Map<string, Schedule>;
+  practice: PracticeSchedule;
   onCreate: (input: AppointmentFields & { patientId: string }) => Promise<{ appointment: Appointment } | { error: string }>;
   onUpdate: (id: string, fields: Partial<AppointmentFields>) => Promise<{ appointment: Appointment } | { error: string }>;
   onCreatePatient: (input: NewPatientInput) => Promise<{ patientId: string } | { error: string }>;
@@ -644,6 +674,7 @@ function AppointmentModal({
   patients,
   therapists,
   schedules,
+  practice,
   onCreate,
   onUpdate,
   onCreatePatient,
@@ -695,15 +726,35 @@ function AppointmentModal({
   const [slotAuto, setSlotAuto] = useState(mode === 'create' && defaultTime === undefined);
   const [slotFromIso] = useState(() => new Date(`${defaultDateIso}T00:00:00`).toISOString());
   const therapistSchedule = therapistId ? schedules.get(therapistId) : undefined;
-  const nextSlot = useNextFreeSlot(therapistId || null, duration, slotFromIso, slotAuto, therapistSchedule);
-  // Booking outside the therapist's hours is allowed, with a warning.
-  const dayHours = therapistId ? hoursForDate(therapistSchedule, date) : null;
-  const outsideHours =
-    dayHours && date && time && !fitsInPeriods(dayHours.periods, timeToMin(time), timeToMin(time) + duration)
-      ? dayHours.absence
-        ? `${therapists.find((t) => t.id === therapistId)?.name ?? 'Terapevt'} je ta dan odsoten (${ABSENCE_LABELS[dayHours.absence.reason].toLowerCase()}).`
-        : `Izven delovnega časa (${describePeriods(dayHours.periods)}).`
-      : null;
+  const nextSlot = useNextFreeSlot(therapistId || null, duration, slotFromIso, slotAuto, therapistSchedule, practice);
+  // Outside the clinic's or the therapist's hours: a warning, or — with
+  // "Naročanje izven delovnega časa ni mogoče" — not saveable. The database
+  // enforces the clinic window as well (migration 048).
+  const outsideHours = ((): string | null => {
+    if (!date || !time || status === 'cancelled') return null;
+    const startMin = timeToMin(time);
+    const endMin = startMin + duration;
+    const clinic = practiceHoursForDate(practice, date);
+    if (clinic.closed) return `Ambulanta je ta dan zaprta${clinic.closed.note ? ` (${clinic.closed.note})` : ''}.`;
+    if (clinic.source === 'practice' && !fitsInPeriods(clinic.periods, startMin, endMin)) {
+      return `Izven delovnega časa ambulante (${describePeriods(clinic.periods)}).`;
+    }
+    if (!therapistId) return null;
+    const own = bookableHours(therapistSchedule, date, practice);
+    if (fitsInPeriods(own.periods, startMin, endMin)) return null;
+    const name = therapists.find((t) => t.id === therapistId)?.name ?? 'Terapevt';
+    if (own.absence) return `${name} je ta dan odsoten (${ABSENCE_LABELS[own.absence.reason].toLowerCase()}).`;
+    return `Izven delovnega časa terapevta (${describePeriods(own.periods)}).`;
+  })();
+  // An existing appointment whose time isn't changed can still be edited
+  // (e.g. marked "Opravljen") even if it lies outside the hours.
+  const timeChanged =
+    mode === 'create' ||
+    (appointment != null &&
+      (date !== toDateInputValue(appointment.startsAt) ||
+        time !== toTimeInputValue(appointment.startsAt) ||
+        duration !== durationMinutes(appointment.startsAt, appointment.endsAt)));
+  const blockedByHours = practice.blockOutsideHours && outsideHours != null && timeChanged;
   useEffect(() => {
     if (!slotAuto || !nextSlot.slot) return;
     setDate(toDateInputValue(nextSlot.slot.toISOString()));
@@ -976,9 +1027,11 @@ function AppointmentModal({
               ? 'Iščem prvi prosti termin …'
               : nextSlot.slot
                 ? `Prvi prosti termin${therapistId ? ` za ${therapists.find((t) => t.id === therapistId)?.name ?? 'terapevta'}` : ''}${
-                    !therapistId || !therapistSchedule || therapistSchedule.weekly.length === 0
-                      ? ' (delovni čas ni nastavljen — privzeto pon–pet 8–19 h).'
-                      : ' v njegovem delovnem času.'
+                    therapistId && therapistSchedule && therapistSchedule.weekly.length > 0
+                      ? ' v njegovem delovnem času.'
+                      : practice.weekly.length > 0
+                        ? ' v delovnem času ambulante.'
+                        : ' (delovni čas ni nastavljen — privzeto pon–pet 8–19 h).'
                   }`
                 : 'V naslednjih 60 dneh ni prostega termina — izberite ga ročno.'}
           </p>
@@ -1058,18 +1111,29 @@ function AppointmentModal({
           />
         </label>
 
-        {outsideHours && (
-          <p className="rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">⚠ {outsideHours} Termin lahko vseeno shranite.</p>
-        )}
+        {outsideHours &&
+          (blockedByHours ? (
+            <p className="rounded bg-[#fdecea] px-3 py-2 text-sm text-[var(--danger,#b3261e)]">
+              {outsideHours} Naročanje izven delovnega časa ni mogoče — izberite drug čas.
+            </p>
+          ) : (
+            <p className="rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">⚠ {outsideHours} Termin lahko vseeno shranite.</p>
+          ))}
 
         {formError && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka: {formError}</p>}
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || blockedByHours}
           className="self-start rounded bg-[var(--accent,#2e6e62)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
-          {submitting ? 'Shranjujem …' : outsideHours ? 'Vseeno shrani' : mode === 'create' ? 'Ustvari termin' : 'Shrani spremembe'}
+          {submitting
+            ? 'Shranjujem …'
+            : outsideHours && !blockedByHours
+              ? 'Vseeno shrani'
+              : mode === 'create'
+                ? 'Ustvari termin'
+                : 'Shrani spremembe'}
         </button>
       </form>
     </div>
