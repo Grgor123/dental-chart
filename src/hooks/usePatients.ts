@@ -38,6 +38,9 @@ export type PatientListItem = Pick<
 > & {
   sex: Patient['sex'] | null;
   assignedDentist?: string;
+  /** "Izbran terapevt" as a team member (migration 046); assignedDentist
+      keeps the name too, for records typed before the team existed. */
+  assignedTherapistId?: string | null;
   internalRecordNumber?: string;
   /** SMS reminder consent (migration 015_add_sms_reminders.sql) — a double
       opt-in: 'unknown' until a phone is ever set, 'pending' from the
@@ -70,7 +73,7 @@ export type PatientListItem = Pick<
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, internal_record_number, sms_consent_status, email_opt_out, email_bounced, marketing_consent';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, assigned_therapist_id, internal_record_number, sms_consent_status, email_opt_out, email_bounced, marketing_consent';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
@@ -86,6 +89,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     city: (row.city as string | null) ?? undefined,
     healthCardNumber: (row.health_card_number as string | null) ?? undefined,
     assignedDentist: (row.assigned_dentist as string | null) ?? undefined,
+    assignedTherapistId: (row.assigned_therapist_id as string | null) ?? null,
     internalRecordNumber: (row.internal_record_number as string | null) ?? undefined,
     smsConsentStatus: (row.sms_consent_status as PatientListItem['smsConsentStatus']) ?? 'unknown',
     emailOptOut: (row.email_opt_out as boolean | null) ?? false,
@@ -202,6 +206,7 @@ export function usePatients() {
         city: string | null;
         healthCardNumber: string | null;
         assignedDentist: string | null;
+        assignedTherapistId: string | null;
         internalRecordNumber: string | null;
       }>
     ): Promise<{ patient: PatientListItem } | { error: string }> => {
@@ -217,6 +222,7 @@ export function usePatients() {
       if (fields.city !== undefined) columnUpdates.city = fields.city || null;
       if (fields.healthCardNumber !== undefined) columnUpdates.health_card_number = fields.healthCardNumber || null;
       if (fields.assignedDentist !== undefined) columnUpdates.assigned_dentist = fields.assignedDentist || null;
+      if (fields.assignedTherapistId !== undefined) columnUpdates.assigned_therapist_id = fields.assignedTherapistId;
       if (fields.internalRecordNumber !== undefined)
         columnUpdates.internal_record_number = fields.internalRecordNumber || null;
 

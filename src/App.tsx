@@ -172,6 +172,7 @@ function SignedInApp({ onSignOut }: { onSignOut: () => void }) {
         onNavigateCalendar={goCalendar}
         onNavigateEmail={goEmail}
         onNavigateSettings={goSettings}
+        onNavigateTeamSettings={() => go({ page: 'settings', section: 'ekipa' })}
         onNavigateInvoices={goInvoices}
       />
     );

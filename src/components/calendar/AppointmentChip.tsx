@@ -4,7 +4,7 @@ import { appointmentBadge, appointmentChipStyle } from '../../lib/appointmentSta
 
 interface AppointmentChipProps {
   appointment: AppointmentWithPatient;
-  /** Therapist color (or undefined for "Neuvrščeno" — falls back to a
+  /** Therapist color (or undefined for "Nedodeljen" — falls back to a
       neutral grey so an unassigned appointment still reads as a chip, not
       a blank box). */
   color?: string;

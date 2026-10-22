@@ -440,6 +440,32 @@ async function main() {
     check("account 2 cannot read account 1's voice words", !leakedAliases || leakedAliases.length === 0, `${leakedAliases?.length ?? 0} row(s) visible`);
   }
 
+  // 4o. Team and rooms (046_team_and_rooms.sql) — account 2 can't add a room
+  // to account 1's practice or read its rooms.
+  if (account1PracticeId) {
+    const { error: roomSpoofError } = await client2.from('rooms').insert({ practice_id: account1PracticeId, name: 'Spoof' });
+    check("account 2 cannot add a room to account 1's practice", !!roomSpoofError, roomSpoofError ? roomSpoofError.message : 'insert unexpectedly succeeded');
+    const { data: leakedRooms } = await client2.from('rooms').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's rooms", !leakedRooms || leakedRooms.length === 0, `${leakedRooms?.length ?? 0} row(s) visible`);
+  }
+
+  // 4p. Working hours (047_working_hours.sql) — account 2 can't read account
+  // 1's hours or absences, and can't add any to account 1's therapists
+  // (practice_id comes from the therapist row, and RLS hides that row).
+  if (account1PracticeId) {
+    const { data: leakedHours } = await client2.from('therapist_hours').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's working hours", !leakedHours || leakedHours.length === 0, `${leakedHours?.length ?? 0} row(s) visible`);
+    const { data: leakedAbsences } = await client2.from('therapist_absences').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's absences", !leakedAbsences || leakedAbsences.length === 0, `${leakedAbsences?.length ?? 0} row(s) visible`);
+    const { data: account1Therapist } = await client1.from('therapists').select('id').limit(1).maybeSingle();
+    if (account1Therapist) {
+      const { error: absenceSpoofError } = await client2
+        .from('therapist_absences')
+        .insert({ therapist_id: account1Therapist.id, date_from: '2030-01-01', date_to: '2030-01-02' });
+      check("account 2 cannot add an absence to account 1's therapist", !!absenceSpoofError, absenceSpoofError ? absenceSpoofError.message : 'insert unexpectedly succeeded');
+    }
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via
@@ -524,6 +550,23 @@ async function main() {
         !account1SeesTherapistError && (account1SeesTherapist?.length ?? 0) === 0,
         account1SeesTherapistError?.message ?? `returned ${account1SeesTherapist?.length ?? 0} rows`
       );
+
+      // 7b. (046) Account 2's team member can't be linked to account 1's
+      // login, and account 2's patient can't be assigned account 1's therapist.
+      const { data: session1 } = await client1.auth.getSession();
+      const account1UserId = session1.session?.user.id;
+      if (account1UserId) {
+        const { error: linkError } = await client2.from('therapists').update({ user_id: account1UserId }).eq('id', newTherapist.id);
+        check("account 2 cannot link its team member to account 1's login", !!linkError, linkError ? linkError.message : 'update unexpectedly succeeded');
+      }
+      const { data: account1Therapists } = await client1.from('therapists').select('id').limit(1);
+      if (newPatient && account1Therapists && account1Therapists.length > 0) {
+        const { error: assignError } = await client2
+          .from('patients')
+          .update({ assigned_therapist_id: account1Therapists[0].id })
+          .eq('id', newPatient.id);
+        check("account 2 cannot assign account 1's therapist to its patient", !!assignError, assignError ? assignError.message : 'update unexpectedly succeeded');
+      }
     }
   }
 

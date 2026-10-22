@@ -19,6 +19,7 @@ import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
+import { isBookable, useTherapists } from '../hooks/useTherapists';
 import { usePatientConsentStatus } from '../hooks/usePatientConsentStatus';
 import { useHealthQuestionnaire } from '../hooks/useHealthQuestionnaire';
 import { formatMessageTime, usePatientMessages, type MessageChannel, type MessageTone, type PatientMessage } from '../hooks/usePatientMessages';
@@ -303,6 +304,10 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // flipping editMode off.
   const [editMode, setEditMode] = useState(false);
   const [patientDraft, setPatientDraft] = useState(patient);
+  // "Izbran terapevt" — picked from Nastavitve → Ekipa (migration 046).
+  const { therapists } = useTherapists();
+  const assignedTherapist = therapists.find((t) => t.id === patientDraft.assignedTherapistId);
+  const assignedTherapistText = assignedTherapist ? assignedTherapist.name : patientDraft.assignedDentist || '—';
   const [savingPatient, setSavingPatient] = useState(false);
   const [patientSaveError, setPatientSaveError] = useState<string | null>(null);
   function updatePatientDraft<K extends keyof PatientListItem>(key: K, value: PatientListItem[K]) {
@@ -323,6 +328,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
       city: patientDraft.city ?? null,
       healthCardNumber: patientDraft.healthCardNumber ?? null,
       assignedDentist: patientDraft.assignedDentist ?? null,
+      assignedTherapistId: patientDraft.assignedTherapistId ?? null,
       internalRecordNumber: patientDraft.internalRecordNumber ?? null,
     });
     setSavingPatient(false);
@@ -1301,13 +1307,33 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                 <div className="flex flex-col gap-1">
                   <span className={VIEW_LABEL_CLASSES}>Izbran terapevt</span>
                   {editMode ? (
-                    <input
-                      value={patientDraft.assignedDentist ?? ''}
-                      onChange={(e) => updatePatientDraft('assignedDentist', e.target.value)}
+                    <select
+                      value={patientDraft.assignedTherapistId ?? ''}
+                      onChange={(e) => {
+                        const t = therapists.find((x) => x.id === e.target.value);
+                        setPatientDraft((prev) => ({
+                          ...prev,
+                          assignedTherapistId: t?.id ?? null,
+                          // The name is kept as text too (older app versions show it).
+                          assignedDentist: t ? t.name : undefined,
+                        }));
+                      }}
                       className={FIELD_INPUT_CLASSES}
-                    />
+                    >
+                      <option value="">
+                        {!patientDraft.assignedTherapistId && patientDraft.assignedDentist ? `${patientDraft.assignedDentist} (ni v ekipi)` : '—'}
+                      </option>
+                      {therapists
+                        .filter((t) => (!t.archived && isBookable(t)) || t.id === patientDraft.assignedTherapistId)
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                            {t.archived ? ' (arhiviran)' : ''}
+                          </option>
+                        ))}
+                    </select>
                   ) : (
-                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.assignedDentist || '—'}</span>
+                    <span className={VIEW_VALUE_CLASSES}>{assignedTherapistText}</span>
                   )}
                 </div>
 

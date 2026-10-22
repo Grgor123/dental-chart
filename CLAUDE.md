@@ -113,8 +113,8 @@ src/
       TherapistPanel.tsx       # Sidebar "Terapevti:" panel — solid-color
                                 # name chips (click to hide/show that
                                 # therapist everywhere, not just Day), its
-                                # own scrollable overflow, "+" add-
-                                # therapist modal (fixed color palette)
+                                # own scrollable overflow, "Uredi ekipo →"
+                                # link (owners) — see "Team and rooms"
       CalendarSearch.tsx       # Persistent, always-visible cross-date
                                 # patient-name search box
       MonthOverview.tsx        # Lightweight month grid — day cells with
@@ -140,6 +140,10 @@ src/
                                 # number (FURS operator) — see "FURS" below
       PracticeUsersSection.tsx # Nastavitve → Uporabniki: users, invite,
                                 # roles, remove — see "Staff users" below
+      TeamSection.tsx          # Nastavitve → Ekipa: team members + rooms —
+                                # see "Team and rooms" below
+      WorkingHoursDialog.tsx   # Ekipa → Delovni čas (weekly, special days,
+                                # absences) — same section
       IntegrationsSection.tsx  # Nastavitve → Integracije (owners): outbound
                                 # webhooks — see "Outbound webhooks" below
       ApiKeysSection.tsx       # Integracije → API ključi (inbound API)
@@ -196,8 +200,10 @@ src/
                                 # by visit instead — backs Frame 8 on the
                                 # Patient Record page — see "Visit
                                 # lifecycle" below
-    useTherapists.ts            # Practice-scoped therapist list + create —
-                                # see "Native scheduling calendar" below
+    useTherapists.ts            # The practice's team (therapists) — see
+                                # "Team and rooms" below
+    useRooms.ts                 # Ordinacije (rooms) — same section
+    useWorkingHours.ts          # The team's working hours — same section
     useAppointments.ts          # Appointment CRUD + range queries (one day,
                                 # one week, or an arbitrary range for Month)
                                 # — see "Native scheduling calendar" below
@@ -270,6 +276,8 @@ src/
     aftercarePrint.ts           # "Natisni navodila" A4 printout
     voice/parseVoiceCommand.ts  # Spoken phrase → chart commands (pure) —
                                 # see "Voice entry" below
+    workingHours.ts             # A date's working hours per therapist (pure)
+    nextFreeSlot.ts             # First free slot for "+ Nov termin" (pure)
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -507,7 +515,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`045_voice_aliases.sql` — all confirmed run (016–019 are the
+`047_working_hours.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -518,9 +526,10 @@ see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
 below; 037–043 outbound webhooks, marketing consent requests and the inbound
 API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
-projects"; 045 voice entry's taught words, see "Voice entry"). `supabase/schema.sql`
+projects"; 045 voice entry's taught words, see "Voice entry"; 046–047 team, rooms
+and working hours, see "Team and rooms"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(045 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(047 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -653,7 +662,7 @@ create table appointments (
   id uuid primary key default gen_random_uuid(),
   practice_id uuid not null references practices(id),  -- auto-stamped, see trigger below
   patient_id uuid not null references patients(id) on delete cascade,
-  therapist_id uuid references therapists(id) on delete set null,  -- nullable — "Neuvrščeno" if unset
+  therapist_id uuid references therapists(id) on delete set null,  -- nullable — "Nedodeljen" if unset
   starts_at timestamptz not null,
   ends_at timestamptz not null check (ends_at > starts_at),
   status text not null default 'scheduled'
@@ -3290,7 +3299,7 @@ fed from one another in any way; don't conflate them.
   appointment should look like any other chip, marked only by its cross
   badge, not visually degraded.
 - **Day view**: one resource column per therapist (plus a trailing
-  "Neuvrščeno" column for appointments with no therapist, or with none at
+  "Nedodeljen" column for appointments with no therapist, or with none at
   all if no therapists exist yet) — a multi-chair scheduling layout, not a
   Google-style single overlaid column. **Week view**: one column per
   visible day instead, Monday-first with Saturday/Sunday as the two
@@ -3339,19 +3348,18 @@ fed from one another in any way; don't conflate them.
   fixed after Day/Week already had it, since `MonthOverview.tsx`'s chips
   originally rendered as a flat, uncolored grey pill.
 - **`TherapistPanel.tsx`** ("Terapevti:") — solid-color name chips in a
-  wrapping grid, not a checkbox+dot row; clicking a chip toggles that
-  therapist hidden (dimmed to 35% opacity) from the calendar. **Shown on
+  wrapping grid, not a checkbox+dot row. **Clicking a chip cycles a filter**
+  (Gregor, 2026-10-22, replacing a plain hide toggle): everyone → **only this
+  therapist** (chip outlined; "Nedodeljen" hidden too) → **everyone except
+  this one** (chip dimmed to 35%) → everyone; clicking another chip while
+  filtered shows only that one (`TherapistFilter` in `Calendar.tsx`). A small
+  hint under the chips explains the clicks. **Shown on
   every view now (Day/Week/Month), not just Day** — and the hide-toggle now
   actually filters Week's/Month's own appointment lists too
   (`isTherapistVisible()` in `Calendar.tsx`), not just Day's per-therapist
-  columns, once the panel became visible everywhere. A "+" button opens a
-  small modal (name + a fixed 8-color palette, not a raw color picker) to
-  add a new therapist (`createTherapist`, `useTherapists.ts`) — editing or
-  deleting a therapist isn't built. **The "+" button is a small drawn SVG
-  cross, not a text "+" glyph** — a text glyph sits visibly off-center
-  inside a circular button in most fonts (its own glyph box isn't
-  vertically symmetric the way a drawn cross is); this was a real bug
-  Gregor caught and asked to be fixed. **The chip list is its own
+  columns, once the panel became visible everywhere. Therapists are added
+  and edited in Nastavitve → Ekipa (see "Team and rooms"); the panel's old
+  "+" modal was replaced by an "Uredi ekipo →" link for owners. **The chip list is its own
   `overflow-y-auto` region** (`min-h-0 flex-1`) inside the panel's fixed-
   height frame, so a 13"-screen practice with many therapists scrolls
   internally instead of spilling the whole panel (and the fixed-height
@@ -3379,7 +3387,22 @@ fed from one another in any way; don't conflate them.
   novega pacienta" mini-form) on create, a fixed link to the patient's own
   chart on edit (an appointment's patient isn't meant to change after the
   fact). Date/time/duration, a free-text "Predvidena storitev", a therapist
-  `<select>` ("Neuvrščeno" as the null option), status, and notes.
+  `<select>` ("Nedodeljen" as the null option — renamed from "Neuvrščeno",
+  Gregor 2026-10-22, the Day column too), status, and notes.
+  - **"+ Nov termin" proposes the first free slot** (Gregor, 2026-10-22):
+    date and time start at the earliest slot from now (or from the day being
+    viewed, if later) where the chosen duration fits inside the chosen
+    therapist's working hours and around their appointments (cancelled/no-show
+    don't block), and move again when therapist or duration changes — until
+    date or time is edited by hand. No therapist, or no hours set → the default
+    Mon–Fri 08:00–19:00. A hint says which (`lib/nextFreeSlot.ts`,
+    `useNextFreeSlot` in `useAppointments.ts`); 60 days searched. A clicked grid
+    slot keeps its own time. Booking outside the therapist's hours (or on an
+    absence) shows an amber warning and the button reads "Vseeno shrani" —
+    allowed, not blocked.
+  - **Ura** is two dropdowns (hour, minutes in 5-minute steps — the browser's
+    time input offered every minute); an existing odd minute stays as an
+    option.
   - **The inline new-patient mini-form now also collects Telefon and
     E-pošta** (both optional, same as Storitve's own form) alongside the
     always-required Ime/Priimek/Datum rojstva — added per Gregor's explicit
@@ -4592,6 +4615,85 @@ everything except manage users; "Pozabljeno geslo?" included.
 **Deploy**: `practice-users`, `request-password-reset` (default JWT
 verification ON — the reset request is sent with the public anon key).
 
+### Team and rooms (Nastavitve → Ekipa)
+
+**Status: built and confirmed by Gregor on localhost (2026-10-22)** —
+migration 046 run, isolation 55/55. Gregor's choices: therapists are managed
+in Settings, not the calendar; "office" means rooms/chairs inside one clinic
+(not separate addresses); owners only.
+
+- **Ekipa** (`TeamSection.tsx`, `useTherapists.ts`, `useRooms.ts`): one
+  table, saved on blur/change like Cenik — colour (fixed palette
+  `THERAPIST_COLORS`), name, naziv (title, e.g. "dr. dent. med."), vloga
+  (`kind`: zobozdravnik / specialist / ustni higienik / asistent), ordinacija
+  (`room_id`, the person's usual room), **Uporabniški račun** (`user_id`,
+  optional link to a login from Uporabniki — stored only, nothing uses it yet;
+  meant for Google Calendar sync, "my schedule" and who signed a record).
+  "Dodaj člana ekipe" below; "Arhiviraj" (confirm) / "Obnovi" — archived,
+  never deleted, since appointments and patients point at them. Under it
+  **Ordinacije**: add, rename, archive. Staff see everything read-only.
+- **Team ≠ users**: a receptionist has a login and no team row; an assistant
+  may have a team row and no login.
+- **RLS**: `rooms` and `therapists` writes need `current_practice_role() =
+  'owner'`; triggers `check_therapist_refs` (room and login must belong to the
+  same practice) and `check_patient_therapist`.
+- **Calendar**: the "+" add-therapist modal is gone; owners see "Uredi ekipo
+  →" (opens the Ekipa tab). Only active, non-assistant members get a column
+  and appear in the appointment's Terapevt list (name only, no naziv —
+  Gregor). Appointments of an archived member fall into "Nedodeljen" and keep
+  their colour. Assistants and room booking per appointment come with roadmap
+  item 5.
+- **Patient record**: "Izbran terapevt" is a dropdown of the team
+  (`patients.assigned_therapist_id`), names only, no naziv (Gregor); the name
+  is also written to the old `assigned_dentist` text so older app versions
+  still show it. A typed name that matches no team member shows as "… (ni v
+  ekipi)". The migration linked existing typed names that match exactly one
+  therapist.
+- **Appointment ↔ patient therapist** (`Calendar.tsx` modal): an empty
+  Terapevt field is filled with the patient's own therapist (on picking the
+  patient, or opening an appointment without one). A Day-view column click
+  keeps that column's therapist, with a hint "Izbrani terapevt pacienta: X —
+  Izberi". Saving an appointment for a patient with no therapist yet makes the
+  appointment's therapist theirs (`assignTherapistIfMissing`); an existing
+  choice is never overwritten from the calendar.
+- **Working hours** (migration 047, Gregor's choices 2026-10-22: all
+  patterns + all calendar uses) — Ekipa's "Delovni čas" column opens
+  `WorkingHoursDialog.tsx`:
+  - **Tedenski urnik**: per weekday any number of periods (a split shift =
+    two), "Kopiraj ponedeljek na torek–petek"; **Izmenični tedni** switches to
+    separate **lihi / sodi** schedules by ISO week number (the dialog says
+    which one this week is; note a year with 53 weeks gives two odd weeks in a
+    row). Table `therapist_hours` + `therapists.alternating_weeks`; saving
+    inserts the new rows before deleting the old.
+  - **Posebni dnevi** (`therapist_day_hours`): a date's own periods, replacing
+    its weekly hours ("ročni popravek"); prefilled with what applies that day.
+  - **Odsotnosti** (`therapist_absences`): od–do, dopust / bolniška /
+    izobraževanje / drugo, note.
+  - Resolution (`lib/workingHours.ts` `hoursForDate`): absence → none; else
+    the date's own periods; else the weekly template; no template at all →
+    default Mon–Fri 08:00–19:00. `practice_id` is stamped from the therapist
+    (trigger `set_practice_id_from_therapist`); owners write, everyone reads.
+  - **Shared rooms** (Gregor: two therapists on one chair must not overlap):
+    saving weekly hours or a special day compares them with everyone else
+    assigned the same ordinacija — the next 8 weeks (both week parities) plus
+    every later special day, absences respected (`scheduleConflicts` in
+    `lib/workingHours.ts`). Overlaps are listed ("Ana Novak — čet 29. 10.
+    12:00–14:00") with "Popravim" / "Vseeno shrani" — a warning, not a block.
+    The Ekipa table shows a red "⚠ Prekrivanje z …" under anyone who clashes
+    (also catches a clash made by changing someone's room). A therapist
+    without weekly hours (only the assumed default) is never counted.
+    Appointments aren't checked per room: inside non-overlapping hours they
+    can't collide, and booking outside hours already warns.
+  - **Calendar**: Day view stripes each column outside its hours and labels
+    an absence ("Dopust") or a day off ("Ne dela") in the header; Week view
+    does the same while one therapist is shown alone. Free-slot search and the
+    booking warning use the same hours.
+- **Tenant isolation**: section 4o (rooms not addable/readable across
+  practices) and 7b (a team member can't be linked to another practice's
+  login; a patient can't be assigned another practice's therapist) — passed
+  2026-10-22 (55/55); 4p (working hours/absences not readable or addable
+  across practices) — added with 047, not yet run.
+
 ### Outbound webhooks and marketing consent (Nastavitve → Integracije)
 
 **Status: built, deployed and confirmed by Gregor (2026-10-15)** — migrations
@@ -5232,9 +5334,62 @@ next:
    (staff invitations are built — see "Staff users and invitations") — see "Multi-tenancy" and
    "Out of Scope for Phase 1" above
 
+### Roadmap (agreed with Gregor, 2026-10-22)
+
+Chosen from Gregor's product specification ("Dental Clinic Software —
+Product Specification", Oct 5 2026, kept outside the repo in his Downloads)
+after comparing it with what's built. Build in this order; confirm scope with
+Gregor before starting each item.
+
+1. **Production basics** — the Pro production project with backups (see
+   "Development and production projects"), plus an **audit log**: who
+   viewed, created, changed or exported which patient data, when — required
+   for traceability in public health (spec 7.2). 2FA for staff alongside.
+2. **Deciduous teeth (51–85) and mixed dentition** — Monika treats children
+   (spec 2.2; currently "Out of Scope for Phase 1").
+3. **Clinical notes + MDR/IVDR traceability per ZMedPri-1** (spec 2.5) —
+   structured visit notes, signed and then locked (changes only as an
+   addendum), and materials/devices recorded per procedure (GS1 / HIBC UDI
+   scan: GTIN, lot, expiry, serial) linked to patient, tooth, visit and
+   dentist, so a recalled lot lists every patient who received it. A
+   one-dentist paper-records version exists in
+   `C:\Users\Uporabnik\Documents\MDR UDI Traceability` (Telegram bot → n8n →
+   Google Sheet; `parser.js` is the tested GS1/HIBC parser to reuse) — this
+   one is built in the app, per practice, at clinic scale.
+4. **Treatment plans and predračun** (spec 2.4) — from the chart's planned
+   findings, priced from Cenik, alternative plans, patient acceptance,
+   unscheduled-accepted-treatment worklist.
+5. **Calendar for several dentists + Google Calendar sync** (spec 3.1) —
+   working hours, durations, rooms; each practitioner and nurse sees their own
+   schedule in their own Google Calendar with **no patient details, initials
+   only**.
+6. **Online booking like the separate booking widget** (spec 3.2), built into
+   this app on its own calendar.
+7. **More roles** (spec 1) — e.g. reception without clinical notes.
+8. **ZZZS insurance** (spec 4.3) — eligibility (KZZ), split ZZZS /
+   supplementary / patient, monthly billing files, programme tracking (fields
+   already reserved, see "ZZZS šifrant").
+9. **eRecept, eNapotnica, certificates** (spec 2.6) — needs a certified
+   eZdravje/NIJZ connection.
+10. **Imaging** (spec 2.7) — X-rays and photos per tooth, viewer, devices.
+11. **Accounting export and dentist commissions** (spec 4.5).
+12. **KPI dashboard** (spec 6.1).
+13. **Data import from other systems** (spec 7.4).
+
+**Later**: specialty modules (spec 2.8).
+
 ---
 
-*Last updated: 2026-10-21 (Voice entry on the dental chart — browser
+*Last updated: 2026-10-22 (Team and rooms — Nastavitve → Ekipa replaces the
+calendar's "+", rooms (ordinacije), "Izbran terapevt" picked from the team,
+working hours per therapist (weekly, split shifts, odd/even weeks, special
+days, absences) used by the calendar — migrations 046–047; therapist filter
+chips, first free slot and 5-minute times in "Nov termin"; see "Team and
+rooms" and "Native scheduling calendar". Earlier the same day:
+the roadmap agreed from Gregor's product specification — see "Roadmap" under
+"Current Status & Next Steps".)*
+
+*Previous entry: 2026-10-21 (Voice entry on the dental chart — browser
 recognition, Slovene phrase parser with Chrome's mishearings built in, safety
 rules, undo, the practice's taught words (migration 045); a cloud engine was
 tried and removed; see "Voice entry (Glasovni vnos)".)*

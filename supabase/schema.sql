@@ -2934,3 +2934,212 @@ create policy voice_aliases_update on public.voice_aliases for update
   with check (practice_id = public.current_practice_id());
 create policy voice_aliases_delete on public.voice_aliases for delete
   using (practice_id = public.current_practice_id());
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/046_team_and_rooms.sql.
+-- ---------------------------------------------------------------------------
+create table public.rooms (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  name text not null check (length(trim(name)) between 1 and 60),
+  sort_order integer not null default 0,
+  archived_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index rooms_practice_id_idx on public.rooms(practice_id);
+
+alter table public.rooms enable row level security;
+create policy rooms_select on public.rooms for select
+  using (practice_id = public.current_practice_id());
+create policy rooms_insert on public.rooms for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy rooms_update on public.rooms for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy rooms_delete on public.rooms for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+-- Team members. A therapist row is a person who treats or assists; a login
+-- (practice_members) is optional and linked by user_id — reception has a login
+-- but no row here, an assistant may have a row but no login.
+alter table public.therapists
+  add column title text check (title is null or length(title) <= 60),
+  add column kind text not null default 'dentist'
+    check (kind in ('dentist', 'specialist', 'hygienist', 'assistant')),
+  add column user_id uuid references auth.users(id) on delete set null,
+  add column room_id uuid references public.rooms(id) on delete set null,
+  add column sort_order integer not null default 0,
+  add column archived_at timestamptz;
+create unique index therapists_practice_user_unique
+  on public.therapists(practice_id, user_id) where user_id is not null;
+
+-- A therapist's room and login must belong to the same practice
+-- (practice_members is only readable row-by-own-row, hence security definer).
+create or replace function public.check_therapist_refs()
+returns trigger
+language plpgsql security definer set search_path = public, pg_temp
+as $$
+begin
+  if new.room_id is not null and not exists (
+    select 1 from public.rooms where id = new.room_id and practice_id = new.practice_id
+  ) then
+    raise exception 'Ordinacija ne pripada tej ordinaciji.';
+  end if;
+  if new.user_id is not null and not exists (
+    select 1 from public.practice_members where user_id = new.user_id and practice_id = new.practice_id
+  ) then
+    raise exception 'Uporabnik ni član te ordinacije.';
+  end if;
+  return new;
+end;
+$$;
+create trigger check_therapist_refs_trigger
+  before insert or update of room_id, user_id, practice_id on public.therapists
+  for each row execute function public.check_therapist_refs();
+
+drop policy therapists_insert on public.therapists;
+drop policy therapists_update on public.therapists;
+drop policy therapists_delete on public.therapists;
+create policy therapists_insert on public.therapists for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapists_update on public.therapists for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapists_delete on public.therapists for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+-- "Izbran terapevt" on the patient record becomes a pick from the team. The
+-- old free-text assigned_dentist stays (the app writes the name there too, so
+-- older app versions still show it).
+alter table public.patients
+  add column assigned_therapist_id uuid references public.therapists(id) on delete set null;
+
+create or replace function public.check_patient_therapist()
+returns trigger
+language plpgsql security definer set search_path = public, pg_temp
+as $$
+begin
+  if new.assigned_therapist_id is not null and not exists (
+    select 1 from public.therapists where id = new.assigned_therapist_id and practice_id = new.practice_id
+  ) then
+    raise exception 'Terapevt ne pripada tej ordinaciji.';
+  end if;
+  return new;
+end;
+$$;
+create trigger check_patient_therapist_trigger
+  before insert or update of assigned_therapist_id, practice_id on public.patients
+  for each row execute function public.check_patient_therapist();
+
+-- Backfill: link where the typed name matches exactly one therapist.
+update public.patients p
+set assigned_therapist_id = t.id
+from public.therapists t
+where p.assigned_therapist_id is null
+  and p.assigned_dentist is not null
+  and t.practice_id = p.practice_id
+  and lower(trim(t.name)) = lower(trim(p.assigned_dentist))
+  and (select count(*) from public.therapists t2
+       where t2.practice_id = p.practice_id and lower(trim(t2.name)) = lower(trim(p.assigned_dentist))) = 1;
+
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/047_working_hours.sql.
+-- ---------------------------------------------------------------------------
+alter table public.therapists
+  add column alternating_weeks boolean not null default false;
+
+create table public.therapist_hours (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  therapist_id uuid not null references public.therapists(id) on delete cascade,
+  -- 'all' unless the therapist works alternating weeks ('odd' / 'even' ISO week).
+  week_parity text not null default 'all' check (week_parity in ('all', 'odd', 'even')),
+  weekday smallint not null check (weekday between 1 and 7), -- 1 = Monday (ISO)
+  start_time time not null,
+  end_time time not null,
+  check (end_time > start_time),
+  created_at timestamptz not null default now()
+);
+create index therapist_hours_therapist_idx on public.therapist_hours(therapist_id);
+
+create table public.therapist_day_hours (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  therapist_id uuid not null references public.therapists(id) on delete cascade,
+  date date not null,
+  start_time time not null,
+  end_time time not null,
+  check (end_time > start_time),
+  note text check (note is null or length(note) <= 200),
+  created_at timestamptz not null default now()
+);
+create index therapist_day_hours_therapist_date_idx on public.therapist_day_hours(therapist_id, date);
+
+create table public.therapist_absences (
+  id uuid primary key default gen_random_uuid(),
+  practice_id uuid not null references public.practices(id),
+  therapist_id uuid not null references public.therapists(id) on delete cascade,
+  date_from date not null,
+  date_to date not null,
+  check (date_to >= date_from),
+  reason text not null default 'dopust' check (reason in ('dopust', 'bolniska', 'izobrazevanje', 'drugo')),
+  note text check (note is null or length(note) <= 200),
+  created_at timestamptz not null default now()
+);
+create index therapist_absences_therapist_idx on public.therapist_absences(therapist_id, date_from);
+
+create or replace function public.set_practice_id_from_therapist()
+returns trigger
+language plpgsql security definer set search_path = public, pg_temp
+as $$
+begin
+  select practice_id into new.practice_id from public.therapists where id = new.therapist_id;
+  if new.practice_id is null then
+    raise exception 'Terapevt ne obstaja.';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger set_therapist_hours_practice_id before insert or update on public.therapist_hours
+  for each row execute function public.set_practice_id_from_therapist();
+create trigger set_therapist_day_hours_practice_id before insert or update on public.therapist_day_hours
+  for each row execute function public.set_practice_id_from_therapist();
+create trigger set_therapist_absences_practice_id before insert or update on public.therapist_absences
+  for each row execute function public.set_practice_id_from_therapist();
+
+alter table public.therapist_hours enable row level security;
+alter table public.therapist_day_hours enable row level security;
+alter table public.therapist_absences enable row level security;
+
+create policy therapist_hours_select on public.therapist_hours for select
+  using (practice_id = public.current_practice_id());
+create policy therapist_hours_insert on public.therapist_hours for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_hours_update on public.therapist_hours for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_hours_delete on public.therapist_hours for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+create policy therapist_day_hours_select on public.therapist_day_hours for select
+  using (practice_id = public.current_practice_id());
+create policy therapist_day_hours_insert on public.therapist_day_hours for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_day_hours_update on public.therapist_day_hours for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_day_hours_delete on public.therapist_day_hours for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+
+create policy therapist_absences_select on public.therapist_absences for select
+  using (practice_id = public.current_practice_id());
+create policy therapist_absences_insert on public.therapist_absences for insert
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_absences_update on public.therapist_absences for update
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner')
+  with check (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+create policy therapist_absences_delete on public.therapist_absences for delete
+  using (practice_id = public.current_practice_id() and public.current_practice_role() = 'owner');
+

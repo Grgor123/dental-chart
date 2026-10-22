@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
 import type { AppointmentWithPatient } from '../../hooks/useAppointments';
 import { layoutOverlappingEvents } from '../../lib/calendarLayout';
+import type { Period } from '../../lib/workingHours';
 import { AppointmentChip } from './AppointmentChip';
 
 // Full 24-hour range, Google-Calendar-style — the grid used to stop at
@@ -29,6 +30,11 @@ export interface TimeGridColumn {
       colors there come from `resolveEventColor` (per-appointment therapist
       lookup) instead, since a Week column is a day, not a resource. */
   accentColor?: string;
+  /** Working hours for this column's day (lib/workingHours.ts) — the rest of
+      the day is shaded. Undefined = no shading (e.g. Week view, everyone). */
+  workingPeriods?: Period[];
+  /** Shown under the header, e.g. "Dopust" on an absence day. */
+  offLabel?: string;
 }
 
 interface TimeGridProps {
@@ -46,6 +52,18 @@ interface TimeGridProps {
       never actually be saved (see AppointmentModal's own handleSubmit
       guard). */
   onPastSlotClick?: () => void;
+}
+
+/** The parts of the day outside the working periods (shaded in the grid). */
+function offHourBands(periods: Period[]): Period[] {
+  const bands: Period[] = [];
+  let cursor = GRID_START_HOUR * 60;
+  for (const p of [...periods].sort((a, b) => a.startMin - b.startMin)) {
+    if (p.startMin > cursor) bands.push({ startMin: cursor, endMin: p.startMin });
+    cursor = Math.max(cursor, p.endMin);
+  }
+  if (cursor < GRID_END_HOUR * 60) bands.push({ startMin: cursor, endMin: GRID_END_HOUR * 60 });
+  return bands;
 }
 
 function minutesOfDay(iso: string): number {
@@ -125,11 +143,14 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
                 {column.accentColor && (
                   <span className="h-2 w-2 flex-none rounded-full" style={{ backgroundColor: column.accentColor }} />
                 )}
-                {typeof column.label === 'string' ? (
-                  <span className="truncate text-xs font-semibold text-[var(--ink,#1c2624)]">{column.label}</span>
-                ) : (
-                  column.label
-                )}
+                <div className="flex min-w-0 flex-col items-center">
+                  {typeof column.label === 'string' ? (
+                    <span className="truncate text-xs font-semibold text-[var(--ink,#1c2624)]">{column.label}</span>
+                  ) : (
+                    column.label
+                  )}
+                  {column.offLabel && <span className="text-[10px] font-semibold text-[var(--danger,#b3261e)]">{column.offLabel}</span>}
+                </div>
               </div>
             ))}
           </div>
@@ -166,6 +187,18 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
                   style={{ height: gridHeight }}
                   onClick={(e) => handleColumnClick(e, column)}
                 >
+                  {column.workingPeriods &&
+                    offHourBands(column.workingPeriods).map((band) => (
+                      <div
+                        key={band.startMin}
+                        className="pointer-events-none absolute left-0 right-0"
+                        style={{
+                          top: ((band.startMin - GRID_START_HOUR * 60) / 60) * HOUR_HEIGHT,
+                          height: ((band.endMin - band.startMin) / 60) * HOUR_HEIGHT,
+                          background: 'repeating-linear-gradient(135deg, rgba(28,38,36,0.07) 0 6px, rgba(28,38,36,0.03) 6px 12px)',
+                        }}
+                      />
+                    ))}
                   {pastBoundaryY > 0 && (
                     <div
                       className="pointer-events-none absolute left-0 right-0 top-0 bg-[rgba(28,38,36,0.04)]"

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { findNextFreeSlot, type BusyInterval } from '../lib/nextFreeSlot';
+import type { Schedule } from '../lib/workingHours';
 
 // Native scheduling calendar — supabase/migrations/013_add_appointments.sql.
 // practice_id is auto-stamped server-side by a trigger derived from
@@ -139,6 +141,52 @@ function dayRange(dateIso: string): { start: string; end: string } {
 // embeds as a single object, not an array, since appointments.patient_id
 // -> patients is many-to-one (same convention noted for visits/
 // tooth_records elsewhere in this codebase).
+/** The first free slot for a new appointment (see lib/nextFreeSlot.ts):
+ *  with a therapist, inside their working hours and around their booked
+ *  appointments (cancelled and no-show ones don't block); without one, the
+ *  next slot in the default hours.
+ *  `enabled` false skips the lookup (e.g. once the time was picked by hand). */
+export function useNextFreeSlot(
+  therapistId: string | null,
+  durationMinutes: number,
+  fromIso: string,
+  enabled: boolean,
+  schedule?: Schedule
+) {
+  const [slot, setSlot] = useState<Date | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const from = new Date(Math.max(Date.now(), new Date(fromIso).getTime()));
+    async function run() {
+      setLoading(true);
+      let busy: BusyInterval[] = [];
+      if (therapistId) {
+        const until = new Date(from.getTime() + 61 * 86400000).toISOString();
+        const { data } = await supabase
+          .from('appointments')
+          .select('starts_at, ends_at')
+          .eq('therapist_id', therapistId)
+          .not('status', 'in', '(cancelled,no_show)')
+          .gt('ends_at', from.toISOString())
+          .lt('starts_at', until);
+        busy = (data ?? []).map((r) => ({ start: new Date(r.starts_at as string).getTime(), end: new Date(r.ends_at as string).getTime() }));
+      }
+      if (cancelled) return;
+      setSlot(findNextFreeSlot(from, durationMinutes, busy, schedule));
+      setLoading(false);
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [therapistId, durationMinutes, fromIso, enabled, schedule]);
+
+  return { slot, loading };
+}
+
 export function useAppointmentsForRange(startIso: string, endIsoExclusive: string) {
   const [appointments, setAppointments] = useState<AppointmentWithPatient[]>([]);
   const [loading, setLoading] = useState(true);

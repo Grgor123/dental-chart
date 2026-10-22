@@ -12,8 +12,12 @@ import {
   type AppointmentFields,
   type AppointmentStatus,
   type AppointmentWithPatient,
+  useNextFreeSlot,
 } from '../hooks/useAppointments';
-import { useTherapists, type Therapist } from '../hooks/useTherapists';
+import { TimeSelect } from '../components/ui/TimeSelect';
+import { useWorkingHours } from '../hooks/useWorkingHours';
+import { ABSENCE_LABELS, describePeriods, fitsInPeriods, hoursForDate, timeToMin, type Schedule } from '../lib/workingHours';
+import { isBookable, useTherapists, type Therapist } from '../hooks/useTherapists';
 import { APPOINTMENT_STATUS_META, APPOINTMENT_STATUS_ORDER } from '../lib/appointmentStatus';
 import { TimeGrid, type TimeGridColumn } from '../components/calendar/TimeGrid';
 import { TherapistPanel } from '../components/calendar/TherapistPanel';
@@ -32,6 +36,8 @@ interface CalendarProps {
   onSignOut: () => void;
   onNavigateEmail: () => void;
   onNavigateSettings: () => void;
+  /** Nastavitve → Ekipa, where therapists are managed (owners). */
+  onNavigateTeamSettings: () => void;
   onNavigateInvoices: () => void;
   /** Its own menu item: starts this page afresh. */
   onNavigateCalendar: () => void;
@@ -129,6 +135,8 @@ function formatMonthHeading(dateIso: string): string {
   return d.toLocaleDateString('sl-SI', { month: 'long', year: 'numeric' });
 }
 
+type TherapistFilter = { kind: 'all' } | { kind: 'only'; id: string } | { kind: 'except'; id: string };
+
 type ModalState =
   | { mode: 'create'; prefillDateIso: string; prefillTime?: string; prefillTherapistId?: string | null }
   | { mode: 'edit'; appointment: AppointmentWithPatient };
@@ -161,11 +169,14 @@ function WeekColumnHeader({ dateIso, isToday }: { dateIso: string; isToday: bool
 // empty grid slot. Built on top of the same appointments table/RLS pattern
 // as the original day-agenda slice (supabase/migrations/013_add_appointments.sql,
 // 014_add_therapists.sql).
-export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, onNavigateSettings, onNavigateInvoices, onNavigateCalendar }: CalendarProps) {
+export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, onNavigateSettings, onNavigateTeamSettings, onNavigateInvoices, onNavigateCalendar }: CalendarProps) {
   const [view, setView] = useState<CalendarView>(loadStoredView);
   const [showWeekends, setShowWeekends] = useState(loadStoredShowWeekends);
   const [dateIso, setDateIso] = useState(todayIso());
-  const [hiddenTherapistIds, setHiddenTherapistIds] = useState<Set<string>>(new Set());
+  // Therapist filter (Gregor, 2026-10-22) — clicking a chip cycles: everyone
+  // → only this one → everyone except this one → everyone again. Clicking a
+  // different chip while filtered shows only that one.
+  const [therapistFilter, setTherapistFilter] = useState<TherapistFilter>({ kind: 'all' });
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [pastSlotNotice, setPastSlotNotice] = useState(false);
   const pastSlotNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -191,9 +202,15 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     }
   }, [showWeekends]);
 
-  const { patients, createPatient } = usePatients();
-  const { therapists, createTherapist } = useTherapists();
-  const { practiceName } = usePracticeContext();
+  const { patients, createPatient, updatePatient } = usePatients();
+  // The team is managed in Nastavitve → Ekipa (migration 046). Archived
+  // members and assistants get no column; their appointments fall into
+  // "Nedodeljen" but keep their color.
+  const { therapists: allTherapists } = useTherapists();
+  // Working hours (migration 047): shading, free-slot search, booking warning.
+  const { schedules } = useWorkingHours();
+  const therapists = useMemo(() => allTherapists.filter((t) => !t.archived && isBookable(t)), [allTherapists]);
+  const { practiceName, role } = usePracticeContext();
 
   const weekStartIso = startOfWeekIso(dateIso);
   const monthRangeStart = `${dateIso.slice(0, 7)}-01`;
@@ -213,26 +230,36 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     input: AppointmentFields & { patientId: string }
   ): Promise<{ appointment: Appointment } | { error: string }> {
     const result = await dayData.createAppointment(input);
+    if ('appointment' in result) await assignTherapistIfMissing(input.patientId, input.therapistId ?? null);
     weekData.reload();
     monthData.reload();
     return result;
+  }
+  // "Izbran terapevt": a patient who has none yet gets the therapist of the
+  // appointment just saved (Gregor, 2026-10-22). An existing choice is never
+  // overwritten from the calendar.
+  async function assignTherapistIfMissing(patientId: string, therapistId: string | null) {
+    if (!therapistId) return;
+    const patient = patients.find((p) => p.patientId === patientId);
+    const therapist = allTherapists.find((t) => t.id === therapistId);
+    if (!patient || patient.assignedTherapistId || !therapist) return;
+    await updatePatient(patientId, { assignedTherapistId: therapist.id, assignedDentist: therapist.name });
   }
   async function updateAppointmentEverywhere(
     id: string,
     fields: Partial<AppointmentFields>
   ): Promise<{ appointment: Appointment } | { error: string }> {
     const result = await dayData.updateAppointment(id, fields);
+    if ('appointment' in result) await assignTherapistIfMissing(result.appointment.patientId, result.appointment.therapistId ?? null);
     weekData.reload();
     monthData.reload();
     return result;
   }
 
   function toggleTherapistVisibility(id: string) {
-    setHiddenTherapistIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+    setTherapistFilter((prev) => {
+      if (prev.kind !== 'all' && prev.id === id) return prev.kind === 'only' ? { kind: 'except', id } : { kind: 'all' };
+      return { kind: 'only', id };
     });
   }
 
@@ -285,14 +312,31 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     setModalState({ mode: 'edit', appointment: appt });
   }
 
+  const hiddenTherapistIds = new Set(
+    therapistFilter.kind === 'only'
+      ? therapists.filter((t) => t.id !== therapistFilter.id).map((t) => t.id)
+      : therapistFilter.kind === 'except'
+        ? [therapistFilter.id]
+        : []
+  );
   const visibleTherapists = therapists.filter((t) => !hiddenTherapistIds.has(t.id));
-  const therapistColorById = new Map(therapists.map((t) => [t.id, t.color] as const));
+  const therapistColorById = new Map(allTherapists.map((t) => [t.id, t.color] as const));
   // Now that TherapistPanel's visibility toggle shows on every view (not
   // just Day, whose per-therapist columns already implied it), Week/Month
   // need to honor it too — an unassigned appointment (no therapistId, or
-  // one pointing at a deleted therapist) always stays visible.
+  // one pointing at a deleted therapist) stays visible — except while only
+  // one therapist is shown.
   function isTherapistVisible(therapistId: string | null): boolean {
+    if (therapistFilter.kind === 'only') return therapistId === therapistFilter.id;
     return !therapistId || !hiddenTherapistIds.has(therapistId);
+  }
+
+  function columnHours(therapistId: string, day: string): Pick<TimeGridColumn, 'workingPeriods' | 'offLabel'> {
+    const hours = hoursForDate(schedules.get(therapistId), day);
+    return {
+      workingPeriods: hours.periods,
+      offLabel: hours.absence ? ABSENCE_LABELS[hours.absence.reason] : hours.periods.length === 0 ? 'Ne dela' : undefined,
+    };
   }
 
   const dayColumns: TimeGridColumn[] =
@@ -305,13 +349,18 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
             accentColor: t.color,
             dateIso,
             events: dayData.appointments.filter((a) => a.therapistId === t.id),
+            ...columnHours(t.id, dateIso),
           })),
-          {
-            key: 'unassigned',
-            label: 'Neuvrščeno',
-            dateIso,
-            events: dayData.appointments.filter((a) => !a.therapistId || !therapists.some((t) => t.id === a.therapistId)),
-          },
+          ...(therapistFilter.kind === 'only'
+            ? []
+            : [
+                {
+                  key: 'unassigned',
+                  label: 'Nedodeljen',
+                  dateIso,
+                  events: dayData.appointments.filter((a) => !a.therapistId || !therapists.some((t) => t.id === a.therapistId)),
+                },
+              ]),
         ];
 
   const weekDayIsos = (() => {
@@ -325,6 +374,8 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
     label: <WeekColumnHeader dateIso={d} isToday={d === today} />,
     dateIso: d,
     events: weekData.appointments.filter((a) => a.startsAt.slice(0, 10) === d && isTherapistVisible(a.therapistId)),
+    // With one therapist shown alone, Week view shades their hours too.
+    ...(therapistFilter.kind === 'only' ? columnHours(therapistFilter.id, d) : {}),
   }));
 
   const loadError = dayData.error || weekData.error || monthData.error;
@@ -422,8 +473,9 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
               <TherapistPanel
                 therapists={therapists}
                 hiddenIds={hiddenTherapistIds}
+                filter={therapistFilter}
                 onToggleVisibility={toggleTherapistVisibility}
-                onCreateTherapist={createTherapist}
+                onEditTeam={role === 'owner' ? onNavigateTeamSettings : undefined}
               />
             </div>
             <div className="mt-3">
@@ -467,7 +519,12 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
             defaultTime={modalState.mode === 'create' ? modalState.prefillTime : undefined}
             defaultTherapistId={modalState.mode === 'create' ? (modalState.prefillTherapistId ?? null) : null}
             patients={patients}
-            therapists={therapists}
+            therapists={
+              modalState.mode === 'edit' && modalState.appointment.therapistId && !therapists.some((t) => t.id === modalState.appointment.therapistId)
+                ? [...therapists, ...allTherapists.filter((t) => t.id === modalState.appointment.therapistId)]
+                : therapists
+            }
+            schedules={schedules}
             onCreate={createAppointmentEverywhere}
             onUpdate={updateAppointmentEverywhere}
             onCreatePatient={createPatient}
@@ -565,6 +622,7 @@ interface AppointmentModalProps {
   defaultTherapistId: string | null;
   patients: PatientListItem[];
   therapists: Therapist[];
+  schedules: Map<string, Schedule>;
   onCreate: (input: AppointmentFields & { patientId: string }) => Promise<{ appointment: Appointment } | { error: string }>;
   onUpdate: (id: string, fields: Partial<AppointmentFields>) => Promise<{ appointment: Appointment } | { error: string }>;
   onCreatePatient: (input: NewPatientInput) => Promise<{ patientId: string } | { error: string }>;
@@ -585,13 +643,19 @@ function AppointmentModal({
   defaultTherapistId,
   patients,
   therapists,
+  schedules,
   onCreate,
   onUpdate,
   onCreatePatient,
   onOpenPatientChart,
   onClose,
 }: AppointmentModalProps) {
-  const [patientId, setPatientId] = useState(appointment?.patientId ?? '');
+  const [patientId, setPatientIdState] = useState(appointment?.patientId ?? '');
+  /** The patient's "Izbran terapevt", if they have one and it's bookable. */
+  function patientTherapistId(id: string): string {
+    const assigned = patients.find((p) => p.patientId === id)?.assignedTherapistId;
+    return assigned && therapists.some((t) => t.id === assigned) ? assigned : '';
+  }
   const [patientQuery, setPatientQuery] = useState('');
   const [showNewPatientForm, setShowNewPatientForm] = useState(false);
   const [newFirstName, setNewFirstName] = useState('');
@@ -607,10 +671,44 @@ function AppointmentModal({
   const [duration, setDuration] = useState(appointment ? durationMinutes(appointment.startsAt, appointment.endsAt) : 30);
   const [service, setService] = useState(appointment?.service ?? '');
   const [status, setStatus] = useState<AppointmentStatus>(appointment?.status ?? 'scheduled');
-  const [therapistId, setTherapistId] = useState(appointment?.therapistId ?? defaultTherapistId ?? '');
+  // Empty field → the patient's own therapist (an edit of an appointment
+  // without one too). A Day-view column click keeps that column's therapist;
+  // a hint below offers the patient's own one instead.
+  const [therapistId, setTherapistId] = useState(
+    appointment?.therapistId ?? defaultTherapistId ?? (appointment ? patientTherapistId(appointment.patientId) : '')
+  );
+  const [therapistTouched, setTherapistTouched] = useState(false);
+  function setPatientId(id: string) {
+    setPatientIdState(id);
+    const own = patientTherapistId(id);
+    if (own && !therapistTouched && !therapistId) setTherapistId(own);
+  }
+  const ownTherapistId = patientId ? patientTherapistId(patientId) : '';
+  const ownTherapist = therapists.find((t) => t.id === ownTherapistId);
   const [notes, setNotes] = useState(appointment?.notes ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // "+ Nov termin" (no slot clicked): propose the first free slot for the
+  // chosen therapist and duration, from today or the day being viewed —
+  // until date or time is changed by hand. A clicked slot keeps its time.
+  const [slotAuto, setSlotAuto] = useState(mode === 'create' && defaultTime === undefined);
+  const [slotFromIso] = useState(() => new Date(`${defaultDateIso}T00:00:00`).toISOString());
+  const therapistSchedule = therapistId ? schedules.get(therapistId) : undefined;
+  const nextSlot = useNextFreeSlot(therapistId || null, duration, slotFromIso, slotAuto, therapistSchedule);
+  // Booking outside the therapist's hours is allowed, with a warning.
+  const dayHours = therapistId ? hoursForDate(therapistSchedule, date) : null;
+  const outsideHours =
+    dayHours && date && time && !fitsInPeriods(dayHours.periods, timeToMin(time), timeToMin(time) + duration)
+      ? dayHours.absence
+        ? `${therapists.find((t) => t.id === therapistId)?.name ?? 'Terapevt'} je ta dan odsoten (${ABSENCE_LABELS[dayHours.absence.reason].toLowerCase()}).`
+        : `Izven delovnega časa (${describePeriods(dayHours.periods)}).`
+      : null;
+  useEffect(() => {
+    if (!slotAuto || !nextSlot.slot) return;
+    setDate(toDateInputValue(nextSlot.slot.toISOString()));
+    setTime(toTimeInputValue(nextSlot.slot.toISOString()));
+  }, [slotAuto, nextSlot.slot]);
 
   const selectedPatient = patients.find((p) => p.patientId === patientId) ?? null;
   const todayDateValue = toDateInputValue(new Date().toISOString());
@@ -840,18 +938,21 @@ function AppointmentModal({
               // handleSubmit's own check below is what actually enforces
               // this for every case, including a past time on today's date.
               min={mode === 'create' ? todayDateValue : undefined}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => {
+                setDate(e.target.value);
+                setSlotAuto(false);
+              }}
               className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+          <label className="flex flex-none flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
             Ura
-            <input
-              type="time"
-              required
+            <TimeSelect
               value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+              onChange={(next) => {
+                setTime(next);
+                setSlotAuto(false);
+              }}
             />
           </label>
           <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
@@ -869,6 +970,19 @@ function AppointmentModal({
             </select>
           </label>
         </div>
+        {slotAuto && (
+          <p className="-mt-1 text-xs text-[var(--muted,#6f7c79)]">
+            {nextSlot.loading
+              ? 'Iščem prvi prosti termin …'
+              : nextSlot.slot
+                ? `Prvi prosti termin${therapistId ? ` za ${therapists.find((t) => t.id === therapistId)?.name ?? 'terapevta'}` : ''}${
+                    !therapistId || !therapistSchedule || therapistSchedule.weekly.length === 0
+                      ? ' (delovni čas ni nastavljen — privzeto pon–pet 8–19 h).'
+                      : ' v njegovem delovnem času.'
+                  }`
+                : 'V naslednjih 60 dneh ni prostega termina — izberite ga ročno.'}
+          </p>
+        )}
 
         <div className="flex gap-3">
           <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
@@ -880,22 +994,44 @@ function AppointmentModal({
               className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
             Terapevt
             <select
               value={therapistId}
-              onChange={(e) => setTherapistId(e.target.value)}
-              className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+              onChange={(e) => {
+                setTherapistId(e.target.value);
+                setTherapistTouched(true);
+              }}
+              className="w-full rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
             >
-              <option value="">Neuvrščeno</option>
+              <option value="">Nedodeljen</option>
               {therapists.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
+                  {t.archived ? ' (arhiviran)' : ''}
                 </option>
               ))}
             </select>
           </label>
         </div>
+        {ownTherapist && therapistId !== ownTherapist.id && (
+          <p className="-mt-1 text-xs text-[var(--muted,#6f7c79)]">
+            Izbrani terapevt pacienta: {ownTherapist.name}{' '}
+            <button
+              type="button"
+              onClick={() => {
+                setTherapistId(ownTherapist.id);
+                setTherapistTouched(true);
+              }}
+              className="font-medium text-[var(--accent,#2e6e62)] hover:underline"
+            >
+              Izberi
+            </button>
+          </p>
+        )}
+        {patientId && !ownTherapistId && !patients.find((p) => p.patientId === patientId)?.assignedTherapistId && therapistId && (
+          <p className="-mt-1 text-xs text-[var(--muted,#6f7c79)]">Pacient še nima izbranega terapevta — ob shranjevanju dobi tega.</p>
+        )}
 
         <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
           Status
@@ -922,6 +1058,10 @@ function AppointmentModal({
           />
         </label>
 
+        {outsideHours && (
+          <p className="rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">⚠ {outsideHours} Termin lahko vseeno shranite.</p>
+        )}
+
         {formError && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka: {formError}</p>}
 
         <button
@@ -929,7 +1069,7 @@ function AppointmentModal({
           disabled={submitting}
           className="self-start rounded bg-[var(--accent,#2e6e62)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
-          {submitting ? 'Shranjujem …' : mode === 'create' ? 'Ustvari termin' : 'Shrani spremembe'}
+          {submitting ? 'Shranjujem …' : outsideHours ? 'Vseeno shrani' : mode === 'create' ? 'Ustvari termin' : 'Shrani spremembe'}
         </button>
       </form>
     </div>
