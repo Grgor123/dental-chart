@@ -4723,7 +4723,7 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
   login; a patient can't be assigned another practice's therapist) — passed
   2026-10-22 (55/55); 4p (working hours/absences not readable or addable
   across practices) and 4q (clinic hours, closed days, booking settings) —
-  added with 047/048, not yet run.
+  passed 2026-10-22 (61/61).
 
 ### Outbound webhooks and marketing consent (Nastavitve → Integracije)
 
