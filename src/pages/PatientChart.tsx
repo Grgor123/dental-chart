@@ -17,7 +17,11 @@ import { useOpenVisit } from '../hooks/useOpenVisit';
 import { useVisit } from '../hooks/useVisit';
 import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
-import { useNextAppointment, type AppointmentStatus } from '../hooks/useAppointments';
+import { useNextAppointment, useNextFreeSlot, type AppointmentStatus } from '../hooks/useAppointments';
+import { useWorkingHours } from '../hooks/useWorkingHours';
+import { usePracticeHours } from '../hooks/usePracticeHours';
+import { outsideHoursMessage, toDateIso } from '../lib/workingHours';
+import { TimeSelect } from '../components/ui/TimeSelect';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
 import { isBookable, useTherapists } from '../hooks/useTherapists';
 import { usePatientConsentStatus } from '../hooks/usePatientConsentStatus';
@@ -464,6 +468,59 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const [appointmentDuration, setAppointmentDuration] = useState(30);
   const [appointmentService, setAppointmentService] = useState('');
   const [appointmentStatus, setAppointmentStatus] = useState<AppointmentStatus>('scheduled');
+  // Same rules as the calendar's appointment window (Gregor, 2026-11-09):
+  // therapist, first free slot for a new appointment, 5-minute times, and
+  // the working-hours warning / block (outsideHoursMessage, shared).
+  const [appointmentTherapistId, setAppointmentTherapistId] = useState('');
+  const [appointmentSlotAuto, setAppointmentSlotAuto] = useState(false);
+  const { schedules: workingSchedules } = useWorkingHours();
+  const { practice: practiceHours } = usePracticeHours();
+  const bookableTherapists = therapists.filter(
+    (t) => (!t.archived && isBookable(t)) || t.id === nextAppointment?.therapistId
+  );
+  const todayDateIso = toDateIso(new Date());
+  const [slotSearchFromIso] = useState(() => new Date(`${toDateIso(new Date())}T00:00:00`).toISOString());
+  const appointmentSchedule = appointmentTherapistId ? workingSchedules.get(appointmentTherapistId) : undefined;
+  const appointmentNextSlot = useNextFreeSlot(
+    appointmentTherapistId || null,
+    appointmentDuration,
+    slotSearchFromIso,
+    appointmentModalOpen && appointmentSlotAuto,
+    appointmentSchedule,
+    practiceHours
+  );
+  useEffect(() => {
+    if (!appointmentModalOpen || !appointmentSlotAuto || !appointmentNextSlot.slot) return;
+    const d = appointmentNextSlot.slot;
+    setAppointmentDate(toDateIso(d));
+    setAppointmentTime(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
+  }, [appointmentModalOpen, appointmentSlotAuto, appointmentNextSlot.slot]);
+  const appointmentOutsideHours = appointmentModalOpen
+    ? outsideHoursMessage({
+        date: appointmentDate,
+        time: appointmentTime,
+        durationMinutes: appointmentDuration,
+        cancelled: appointmentStatus === 'cancelled',
+        practice: practiceHours,
+        therapistName: therapists.find((t) => t.id === appointmentTherapistId)?.name,
+        therapistSchedule: appointmentSchedule,
+        withTherapist: !!appointmentTherapistId,
+      })
+    : null;
+  // An existing appointment whose time isn't changed can still be edited
+  // (e.g. marked "Opravljen") even if it lies outside the hours.
+  const appointmentTimeChanged =
+    !nextAppointment ||
+    new Date(`${appointmentDate}T${appointmentTime}`).getTime() !== new Date(nextAppointment.startsAt).getTime() ||
+    appointmentDuration !==
+      Math.round((new Date(nextAppointment.endsAt).getTime() - new Date(nextAppointment.startsAt).getTime()) / 60000);
+  const appointmentBlocked = practiceHours.blockOutsideHours && appointmentOutsideHours != null && appointmentTimeChanged;
+
+  /** The patient's own therapist, if they can be booked. */
+  function ownBookableTherapistId(): string {
+    const own = therapists.find((t) => t.id === patientDraft.assignedTherapistId);
+    return own && !own.archived && isBookable(own) ? own.id : '';
+  }
 
   function openAppointmentModal() {
     if (nextAppointment) {
@@ -475,6 +532,8 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
       setAppointmentDuration(Math.round((new Date(nextAppointment.endsAt).getTime() - starts.getTime()) / 60000));
       setAppointmentService(nextAppointment.service ?? '');
       setAppointmentStatus(nextAppointment.status);
+      setAppointmentTherapistId(nextAppointment.therapistId ?? ownBookableTherapistId());
+      setAppointmentSlotAuto(false);
     } else {
       const today = new Date();
       setAppointmentDate(
@@ -484,12 +543,20 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
       setAppointmentDuration(30);
       setAppointmentService('');
       setAppointmentStatus('scheduled');
+      setAppointmentTherapistId(ownBookableTherapistId());
+      // A new appointment starts on the first free slot, like the calendar.
+      setAppointmentSlotAuto(true);
     }
     setAppointmentModalError(null);
     setAppointmentModalOpen(true);
   }
 
   async function handleSaveAppointment() {
+    if (appointmentBlocked) return;
+    if (!nextAppointment && new Date(`${appointmentDate}T${appointmentTime}`).getTime() < Date.now()) {
+      setAppointmentModalError('Ni mogoče ustvariti termina v preteklosti.');
+      return;
+    }
     setAppointmentModalSaving(true);
     setAppointmentModalError(null);
     const startsAt = new Date(`${appointmentDate}T${appointmentTime}`).toISOString();
@@ -499,12 +566,22 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
       endsAt,
       service: appointmentService.trim() || undefined,
       status: appointmentStatus,
+      therapistId: appointmentTherapistId || null,
     });
-    setAppointmentModalSaving(false);
     if ('error' in result) {
+      setAppointmentModalSaving(false);
       setAppointmentModalError(result.error);
       return;
     }
+    // Like the calendar: a patient without a therapist gets this one.
+    const chosen = therapists.find((t) => t.id === appointmentTherapistId);
+    if (chosen && !patientDraft.assignedTherapistId) {
+      const assigned = await updatePatient(patientId, { assignedTherapistId: chosen.id, assignedDentist: chosen.name });
+      if (!('error' in assigned)) {
+        setPatientDraft((prev) => ({ ...prev, assignedTherapistId: chosen.id, assignedDentist: chosen.name }));
+      }
+    }
+    setAppointmentModalSaving(false);
     setAppointmentModalOpen(false);
   }
 
@@ -1785,17 +1862,22 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     <input
                       type="date"
                       value={appointmentDate}
-                      onChange={(e) => setAppointmentDate(e.target.value)}
+                      min={nextAppointment ? undefined : todayDateIso}
+                      onChange={(e) => {
+                        setAppointmentDate(e.target.value);
+                        setAppointmentSlotAuto(false);
+                      }}
                       className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
                     />
                   </label>
-                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                  <label className="flex flex-none flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
                     Ura
-                    <input
-                      type="time"
+                    <TimeSelect
                       value={appointmentTime}
-                      onChange={(e) => setAppointmentTime(e.target.value)}
-                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                      onChange={(next) => {
+                        setAppointmentTime(next);
+                        setAppointmentSlotAuto(false);
+                      }}
                     />
                   </label>
                   <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
@@ -1813,6 +1895,35 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     </select>
                   </label>
                 </div>
+                {appointmentSlotAuto && (
+                  <p className="-mt-1 text-xs text-[var(--muted,#6f7c79)]">
+                    {appointmentNextSlot.loading
+                      ? 'Iščem prvi prosti termin …'
+                      : appointmentNextSlot.slot
+                        ? `Prvi prosti termin${
+                            appointmentTherapistId
+                              ? ` za ${therapists.find((t) => t.id === appointmentTherapistId)?.name ?? 'terapevta'}`
+                              : ''
+                          }.`
+                        : 'V naslednjih 60 dneh ni prostega termina — izberite ga ročno.'}
+                  </p>
+                )}
+                <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                  Terapevt
+                  <select
+                    value={appointmentTherapistId}
+                    onChange={(e) => setAppointmentTherapistId(e.target.value)}
+                    className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                  >
+                    <option value="">Nedodeljen</option>
+                    {bookableTherapists.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                        {t.archived ? ' (arhiviran)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
                   Predvidena storitev
                   <input
@@ -1838,14 +1949,30 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                     </select>
                   </label>
                 )}
+                {appointmentOutsideHours &&
+                  (appointmentBlocked ? (
+                    <p className="rounded bg-[#fdecea] px-3 py-2 text-sm text-[var(--danger,#b3261e)]">
+                      {appointmentOutsideHours} Naročanje izven delovnega časa ni mogoče — izberite drug čas.
+                    </p>
+                  ) : (
+                    <p className="rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">
+                      ⚠ {appointmentOutsideHours} Termin lahko vseeno shranite.
+                    </p>
+                  ))}
                 {appointmentModalError && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka: {appointmentModalError}</p>}
                 <button
                   type="button"
                   onClick={handleSaveAppointment}
-                  disabled={appointmentModalSaving}
+                  disabled={appointmentModalSaving || appointmentBlocked}
                   className="self-start rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
                 >
-                  {appointmentModalSaving ? 'Shranjujem …' : nextAppointment ? 'Shrani spremembe' : 'Ustvari termin'}
+                  {appointmentModalSaving
+                    ? 'Shranjujem …'
+                    : appointmentOutsideHours && !appointmentBlocked
+                      ? 'Vseeno shrani'
+                      : nextAppointment
+                        ? 'Shrani spremembe'
+                        : 'Ustvari termin'}
                 </button>
               </div>
             </div>

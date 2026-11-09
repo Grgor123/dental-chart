@@ -519,7 +519,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`048_practice_hours.sql` — all confirmed run (016–019 are the
+`049_closed_days_yearly.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -530,10 +530,10 @@ see "Aftercare instructions" below; 036 staff invitations, see "Staff users"
 below; 037–043 outbound webhooks, marketing consent requests and the inbound
 API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
-projects"; 045 voice entry's taught words, see "Voice entry"; 046–048 team, rooms,
-working hours and clinic hours, see "Team and rooms"). `supabase/schema.sql`
+projects"; 045 voice entry's taught words, see "Voice entry"; 046–049 team, rooms,
+working hours, clinic hours and yearly closed days, see "Team and rooms"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(048 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(049 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -4698,6 +4698,14 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
   zaprta** dates (`practice_closed_days` — holidays, collective leave; apply
   to everyone) and the switch **"Naročanje izven delovnega časa ni mogoče"**
   (`practice_settings.block_outside_hours`). Owners edit.
+  - **"Ponavljaj vsako leto"** on a closed date (migration 049,
+    `practice_closed_days.repeat_yearly`, Gregor 2026-11-09): the same
+    day(s) every year from the first date on, also across New Year
+    (31. 12. – 2. 1.); at most one year long. Listed first, as "25. 12.
+    vsako leto". Checked by `closedDayCovers()` in the app and
+    `practice_closed_on()` in the database (used by
+    `within_practice_hours`). Movable holidays (Easter Monday) still need a
+    one-off date each year.
   - Clinic hours are the **fallback** for a team member without their own
     (then Mon–Fri 08–19 only while the clinic has none either), and **bound
     what's bookable**: `bookableHours()` = the therapist's hours cut to the
@@ -4707,7 +4715,13 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
   - **Staff bookings**: outside clinic or therapist hours → amber warning +
     "Vseeno shrani"; with the switch on → red message, button disabled.
     Editing an existing appointment without changing its time is never
-    blocked (e.g. marking a past visit "Opravljen").
+    blocked (e.g. marking a past visit "Opravljen"). **The patient record's
+    "Naroči / Prestavi termin" (Frame 5) follows the same rules** (Gregor,
+    2026-11-09): it gained a Terapevt dropdown (the appointment's, else the
+    patient's own therapist), the first free slot for a new appointment,
+    5-minute times, the past-time guard, and fills in "Izbran terapevt" when
+    the patient has none. Both windows use one check, `outsideHoursMessage()`
+    in `lib/workingHours.ts`.
   - **Database rule** (trigger `check_appointment_hours`, function
     `within_practice_hours`, Europe/Ljubljana time): new column
     `appointments.source` ('staff' default | 'online'). Online bookings by

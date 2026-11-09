@@ -20,10 +20,8 @@ import { usePracticeHours } from '../hooks/usePracticeHours';
 import {
   ABSENCE_LABELS,
   bookableHours,
-  describePeriods,
-  fitsInPeriods,
+  outsideHoursMessage,
   practiceHoursForDate,
-  timeToMin,
   type DayHours,
   type PracticeSchedule,
   type Schedule,
@@ -730,22 +728,16 @@ function AppointmentModal({
   // Outside the clinic's or the therapist's hours: a warning, or — with
   // "Naročanje izven delovnega časa ni mogoče" — not saveable. The database
   // enforces the clinic window as well (migration 048).
-  const outsideHours = ((): string | null => {
-    if (!date || !time || status === 'cancelled') return null;
-    const startMin = timeToMin(time);
-    const endMin = startMin + duration;
-    const clinic = practiceHoursForDate(practice, date);
-    if (clinic.closed) return `Ambulanta je ta dan zaprta${clinic.closed.note ? ` (${clinic.closed.note})` : ''}.`;
-    if (clinic.source === 'practice' && !fitsInPeriods(clinic.periods, startMin, endMin)) {
-      return `Izven delovnega časa ambulante (${describePeriods(clinic.periods)}).`;
-    }
-    if (!therapistId) return null;
-    const own = bookableHours(therapistSchedule, date, practice);
-    if (fitsInPeriods(own.periods, startMin, endMin)) return null;
-    const name = therapists.find((t) => t.id === therapistId)?.name ?? 'Terapevt';
-    if (own.absence) return `${name} je ta dan odsoten (${ABSENCE_LABELS[own.absence.reason].toLowerCase()}).`;
-    return `Izven delovnega časa terapevta (${describePeriods(own.periods)}).`;
-  })();
+  const outsideHours = outsideHoursMessage({
+    date,
+    time,
+    durationMinutes: duration,
+    cancelled: status === 'cancelled',
+    practice,
+    therapistName: therapists.find((t) => t.id === therapistId)?.name,
+    therapistSchedule,
+    withTherapist: !!therapistId,
+  });
   // An existing appointment whose time isn't changed can still be edited
   // (e.g. marked "Opravljen") even if it lies outside the hours.
   const timeChanged =

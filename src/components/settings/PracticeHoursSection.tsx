@@ -15,6 +15,12 @@ type DayPeriods = { weekday: number; startMin: number; endMin: number };
 
 const INPUT_CLASS = 'rounded border border-[var(--line,#ccd6d4)] px-2 py-1.5 text-sm text-[var(--ink,#1c2624)]';
 
+/** "25. 12." — a yearly entry's day and month. */
+function dayMonth(dateIso: string): string {
+  const [, m, d] = dateIso.split('-');
+  return `${Number(d)}. ${Number(m)}.`;
+}
+
 function formatDate(dateIso: string): string {
   const [y, m, d] = dateIso.split('-');
   return `${Number(d)}. ${Number(m)}. ${y}`;
@@ -74,9 +80,12 @@ export function PracticeHoursSection() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [note, setNote] = useState('');
+  const [yearly, setYearly] = useState(false);
   const [closedMessage, setClosedMessage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const upcomingClosed = practice.closed.filter((c) => c.dateTo >= today);
+  // Yearly entries first (by day of the year), then upcoming one-off dates.
+  const yearlyClosed = practice.closed.filter((c) => c.repeatYearly).sort((a, b) => a.dateFrom.slice(5).localeCompare(b.dateFrom.slice(5)));
+  const upcomingClosed = [...yearlyClosed, ...practice.closed.filter((c) => !c.repeatYearly && c.dateTo >= today)];
 
   async function handleAddClosed(e: FormEvent) {
     e.preventDefault();
@@ -85,7 +94,11 @@ export function PracticeHoursSection() {
       setClosedMessage('Vnesite datum od (in do, če traja več dni).');
       return;
     }
-    const result = await addClosed({ dateFrom: from, dateTo: end, note });
+    if (yearly && new Date(end) >= new Date(new Date(from).setFullYear(new Date(from).getFullYear() + 1))) {
+      setClosedMessage('Letno ponavljanje je mogoče za največ eno leto dolgo obdobje.');
+      return;
+    }
+    const result = await addClosed({ dateFrom: from, dateTo: end, note, repeatYearly: yearly });
     if (result.error) {
       setClosedMessage(result.error);
       return;
@@ -93,6 +106,7 @@ export function PracticeHoursSection() {
     setFrom('');
     setTo('');
     setNote('');
+    setYearly(false);
     setClosedMessage(null);
   }
 
@@ -186,8 +200,20 @@ export function PracticeHoursSection() {
             {upcomingClosed.map((c) => (
               <li key={c.id} className="flex items-center gap-3">
                 <span className="w-52">
-                  {formatDate(c.dateFrom)}
-                  {c.dateTo !== c.dateFrom && ` – ${formatDate(c.dateTo)}`}
+                  {c.repeatYearly ? (
+                    <>
+                      {dayMonth(c.dateFrom)}
+                      {c.dateTo !== c.dateFrom && ` – ${dayMonth(c.dateTo)}`}
+                      <span className="ml-2 rounded-full bg-[#e6f2ef] px-2 py-0.5 text-[11px] font-semibold text-[var(--accent,#2e6e62)]">
+                        vsako leto
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      {formatDate(c.dateFrom)}
+                      {c.dateTo !== c.dateFrom && ` – ${formatDate(c.dateTo)}`}
+                    </>
+                  )}
                 </span>
                 {c.note && <span className="text-[var(--ink-soft,#45524f)]">{c.note}</span>}
                 {!readOnly && (
@@ -220,6 +246,10 @@ export function PracticeHoursSection() {
                 Opomba
                 <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="npr. Dan reformacije" className={INPUT_CLASS} />
               </label>
+              <label className="flex items-center gap-2 pb-2 text-sm text-[var(--ink,#1c2624)]">
+                <input type="checkbox" checked={yearly} onChange={(e) => setYearly(e.target.checked)} />
+                Ponavljaj vsako leto
+              </label>
               <button
                 type="submit"
                 className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm font-medium text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
@@ -227,7 +257,10 @@ export function PracticeHoursSection() {
                 Dodaj
               </button>
             </div>
-            <span className="text-xs text-[var(--muted,#6f7c79)]">Za en dan pustite »Do« prazno.</span>
+            <span className="text-xs text-[var(--muted,#6f7c79)]">
+              Za en dan pustite »Do« prazno. »Ponavljaj vsako leto« velja za praznike s stalnim datumom (npr. 25. 12.); velikonočni
+              ponedeljek se vsako leto premakne, zato ga vnesite posebej.
+            </span>
             {closedMessage && <span className="text-sm text-[var(--danger,#b3261e)]">{closedMessage}</span>}
           </form>
         )}

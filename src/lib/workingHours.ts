@@ -54,6 +54,20 @@ export interface ClosedDay {
   dateFrom: string;
   dateTo: string;
   note: string | null;
+  /** Same day(s) every year from dateFrom on (migration 049). */
+  repeatYearly: boolean;
+}
+
+/** Is this closed-day entry in force on the date? A yearly one matches the
+ *  same month-days every year from its first date on, also across New Year
+ *  (31. 12. – 2. 1.). Mirrors practice_closed_on() in the database. */
+export function closedDayCovers(c: ClosedDay, dateIso: string): boolean {
+  if (!c.repeatYearly) return c.dateFrom <= dateIso && dateIso <= c.dateTo;
+  if (dateIso < c.dateFrom) return false;
+  const md = dateIso.slice(5);
+  const from = c.dateFrom.slice(5);
+  const to = c.dateTo.slice(5);
+  return from <= to ? from <= md && md <= to : md >= from || md <= to;
 }
 
 export interface Schedule {
@@ -119,7 +133,7 @@ function weekdayOf(dateIso: string): number {
 
 /** The clinic's hours on a date; Mon–Fri 08–19 while none are set. */
 export function practiceHoursForDate(practice: PracticeSchedule | undefined, dateIso: string): DayHours {
-  const closed = practice?.closed.find((c) => c.dateFrom <= dateIso && dateIso <= c.dateTo);
+  const closed = practice?.closed.find((c) => closedDayCovers(c, dateIso));
   if (closed) return { periods: [], source: 'closed', closed };
   const weekday = weekdayOf(dateIso);
   if (!practice || practice.weekly.length === 0) {
@@ -133,7 +147,7 @@ export function practiceHoursForDate(practice: PracticeSchedule | undefined, dat
 
 /** A therapist's own hours on a date (see the file comment). */
 export function hoursForDate(schedule: Schedule | undefined, dateIso: string, practice?: PracticeSchedule): DayHours {
-  const closed = practice?.closed.find((c) => c.dateFrom <= dateIso && dateIso <= c.dateTo);
+  const closed = practice?.closed.find((c) => closedDayCovers(c, dateIso));
   if (closed) return { periods: [], source: 'closed', closed };
   const absence = schedule?.absences.find((a) => a.dateFrom <= dateIso && dateIso <= a.dateTo);
   if (absence) return { periods: [], source: 'absence', absence };
@@ -222,4 +236,38 @@ export function scheduleConflicts(a: Schedule | undefined, b: Schedule | undefin
 export function describeConflict(c: Conflict): string {
   const d = parseDate(c.date);
   return `${WEEKDAY_SHORT[(d.getDay() + 6) % 7]} ${d.getDate()}. ${d.getMonth() + 1}. ${describePeriods(c.periods)}`;
+}
+
+// ---- Booking check (Gregor, 2026-11-09): shared by the calendar's
+// appointment window and the patient record's "Naroči / Prestavi termin", so
+// both warn — or, with "Naročanje izven delovnega časa ni mogoče", block —
+// the same way.
+
+/** Why [date time, +duration) is outside the clinic's or the therapist's
+ *  hours, or null when it fits (or the appointment is cancelled). */
+export function outsideHoursMessage(args: {
+  date: string;
+  time: string;
+  durationMinutes: number;
+  cancelled?: boolean;
+  practice: PracticeSchedule | undefined;
+  therapistName?: string | null;
+  therapistSchedule?: Schedule;
+  withTherapist: boolean;
+}): string | null {
+  const { date, time, durationMinutes, practice } = args;
+  if (!date || !time || args.cancelled) return null;
+  const startMin = timeToMin(time);
+  const endMin = startMin + durationMinutes;
+  const clinic = practiceHoursForDate(practice, date);
+  if (clinic.closed) return `Ambulanta je ta dan zaprta${clinic.closed.note ? ` (${clinic.closed.note})` : ''}.`;
+  if (clinic.source === 'practice' && !fitsInPeriods(clinic.periods, startMin, endMin)) {
+    return `Izven delovnega časa ambulante (${describePeriods(clinic.periods)}).`;
+  }
+  if (!args.withTherapist) return null;
+  const own = bookableHours(args.therapistSchedule, date, practice);
+  if (fitsInPeriods(own.periods, startMin, endMin)) return null;
+  const name = args.therapistName ?? 'Terapevt';
+  if (own.absence) return `${name} je ta dan odsoten (${ABSENCE_LABELS[own.absence.reason].toLowerCase()}).`;
+  return `Izven delovnega časa terapevta (${describePeriods(own.periods)}).`;
 }

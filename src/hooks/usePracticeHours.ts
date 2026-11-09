@@ -18,7 +18,7 @@ export function usePracticeHours() {
   const reload = useCallback(async () => {
     const [h, c, s] = await Promise.all([
       supabase.from('practice_hours').select('id, weekday, start_time, end_time'),
-      supabase.from('practice_closed_days').select('id, date_from, date_to, note').order('date_from'),
+      supabase.from('practice_closed_days').select('id, date_from, date_to, note, repeat_yearly').order('date_from'),
       supabase.from('practice_settings').select('block_outside_hours').maybeSingle(),
     ]);
     // Before migration 048 the tables don't exist — the calendar keeps its defaults.
@@ -42,6 +42,7 @@ export function usePracticeHours() {
         dateFrom: r.date_from as string,
         dateTo: r.date_to as string,
         note: (r.note as string | null) ?? null,
+        repeatYearly: Boolean(r.repeat_yearly),
       }))
     );
     setBlock(Boolean(s.data?.block_outside_hours));
@@ -75,6 +76,7 @@ export function usePracticeHours() {
       date_from: day.dateFrom,
       date_to: day.dateTo,
       note: day.note?.trim() || null,
+      repeat_yearly: day.repeatYearly,
     });
     await reload();
     return insertError ? { error: insertError.message } : {};
