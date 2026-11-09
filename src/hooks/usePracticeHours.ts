@@ -82,6 +82,23 @@ export function usePracticeHours() {
     return insertError ? { error: insertError.message } : {};
   }
 
+  /** Adds several closed days at once ("Dodaj slovenske praznike"). */
+  async function addClosedMany(days: Omit<ClosedDay, 'id'>[]): Promise<{ error?: string }> {
+    if (!practiceId) return { error: 'Ordinacija ni bila najdena.' };
+    if (days.length === 0) return {};
+    const { error: insertError } = await supabase.from('practice_closed_days').insert(
+      days.map((day) => ({
+        practice_id: practiceId,
+        date_from: day.dateFrom,
+        date_to: day.dateTo,
+        note: day.note?.trim() || null,
+        repeat_yearly: day.repeatYearly,
+      }))
+    );
+    await reload();
+    return insertError ? { error: insertError.message } : {};
+  }
+
   async function removeClosed(id: string): Promise<{ error?: string }> {
     const { error: deleteError } = await supabase.from('practice_closed_days').delete().eq('id', id);
     await reload();
@@ -97,5 +114,5 @@ export function usePracticeHours() {
     return upsertError ? { error: upsertError.message } : {};
   }
 
-  return { practice, error, saveWeekly, addClosed, removeClosed, setBlockOutsideHours };
+  return { practice, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours };
 }

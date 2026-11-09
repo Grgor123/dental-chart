@@ -4,6 +4,7 @@ import { usePracticeHours } from '../../hooks/usePracticeHours';
 import { toDateIso, WEEKDAY_LABELS, type Period } from '../../lib/workingHours';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { PeriodsEditor, periodsError } from './PeriodsEditor';
+import { holidayAlreadyEntered, slovenianHolidayEntries, type HolidayEntry } from '../../lib/slovenianHolidays';
 
 // Nastavitve → Delovni čas (migration 048, Gregor 2026-10-22): the clinic's
 // weekly hours, days it's closed, and "Naročanje izven delovnega časa ni
@@ -29,7 +30,19 @@ function formatDate(dateIso: string): string {
 export function PracticeHoursSection() {
   const { role } = usePracticeContext();
   const readOnly = role !== 'owner';
-  const { practice, error, saveWeekly, addClosed, removeClosed, setBlockOutsideHours } = usePracticeHours();
+  const { practice, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours } = usePracticeHours();
+  // "Dodaj slovenske praznike": the entries not entered yet, shown for confirmation.
+  const [holidaysToAdd, setHolidaysToAdd] = useState<HolidayEntry[] | null>(null);
+  const [holidayMessage, setHolidayMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  function openHolidays() {
+    setHolidayMessage(null);
+    const missing = slovenianHolidayEntries(new Date()).filter((h) => !holidayAlreadyEntered(h, practice.closed));
+    if (missing.length === 0) {
+      setHolidayMessage({ kind: 'ok', text: 'Vsi slovenski prazniki so že vneseni.' });
+      return;
+    }
+    setHolidaysToAdd(missing);
+  }
   const today = toDateIso(new Date());
 
   // ---- Weekly hours (draft until saved)
@@ -195,6 +208,22 @@ export function PracticeHoursSection() {
           <h3 className="text-sm font-bold text-[var(--ink,#1c2624)]">Ambulanta zaprta</h3>
           <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">Prazniki, kolektivni dopust … — ti dnevi veljajo za vso ekipo.</p>
         </div>
+        {!readOnly && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={openHolidays}
+              className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm font-medium text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+            >
+              Dodaj slovenske praznike
+            </button>
+            {holidayMessage && (
+              <span className={`text-sm ${holidayMessage.kind === 'error' ? 'text-[var(--danger,#b3261e)]' : 'text-[var(--accent,#2e6e62)]'}`}>
+                {holidayMessage.text}
+              </span>
+            )}
+          </div>
+        )}
         {upcomingClosed.length > 0 ? (
           <ul className="flex flex-col gap-1 text-sm">
             {upcomingClosed.map((c) => (
@@ -266,6 +295,33 @@ export function PracticeHoursSection() {
         )}
       </section>
 
+      {holidaysToAdd && (
+        <ConfirmDialog
+          confirmLabel="Dodaj"
+          onCancel={() => setHolidaysToAdd(null)}
+          onConfirm={async () => {
+            const entries = holidaysToAdd;
+            setHolidaysToAdd(null);
+            const r = await addClosedMany(entries);
+            setHolidayMessage(
+              r.error ? { kind: 'error', text: r.error } : { kind: 'ok', text: `Dodanih je ${entries.length} zaprtih dni.` }
+            );
+          }}
+        >
+          <p className="mb-2">Dodam praznike s stalnim datumom (vir: gov.si):</p>
+          <ul className="mb-2 max-h-60 list-disc overflow-y-auto pl-5 text-xs">
+            {holidaysToAdd.map((h) => (
+              <li key={`${h.dateFrom}-${h.note}`}>
+                {dayMonth(h.dateFrom)}
+                {h.dateTo !== h.dateFrom && ` – ${dayMonth(h.dateTo)}`} {h.note} (vsako leto)
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-[var(--muted,#6f7c79)]">
+            Že vneseni prazniki so izpuščeni. Velika noč se vsako leto premakne — vnesite jo posebej.
+          </p>
+        </ConfirmDialog>
+      )}
       {confirmRemove && (
         <ConfirmDialog
           confirmLabel="Odstrani"

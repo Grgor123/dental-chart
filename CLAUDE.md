@@ -281,6 +281,7 @@ src/
     voice/parseVoiceCommand.ts  # Spoken phrase → chart commands (pure) —
                                 # see "Voice entry" below
     workingHours.ts             # A date's working hours per therapist (pure)
+    slovenianHolidays.ts        # Work-free days for "Dodaj slovenske praznike"
     nextFreeSlot.ts             # First free slot for "+ Nov termin" (pure)
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
@@ -4706,6 +4707,15 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
     `practice_closed_on()` in the database (used by
     `within_practice_hours`). Movable holidays (Easter Monday) still need a
     one-off date each year.
+  - **"Dodaj slovenske praznike"** (Gregor, 2026-11-09,
+    `lib/slovenianHolidays.ts`): adds Slovenia's 15 work-free days from
+    https://www.gov.si/teme/drzavni-prazniki-in-dela-prosti-dnevi/ (checked
+    when built, page dated 5. 11. 2026) — **only the 10 fixed-date ones**, as
+    yearly entries from this year. Velika noč and binkošti are left out
+    (Gregor: they move every year; enter Easter Monday by hand). Holidays that
+    are working days (Trubar, Triglav, Maister, dan znanosti …) aren't added
+    either. A confirmation lists what will be added; entries already there
+    are skipped. **Revisit if the law changes.**
   - Clinic hours are the **fallback** for a team member without their own
     (then Mon–Fri 08–19 only while the clinic has none either), and **bound
     what's bookable**: `bookableHours()` = the therapist's hours cut to the
