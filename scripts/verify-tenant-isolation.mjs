@@ -481,6 +481,37 @@ async function main() {
     check("account 2 cannot read account 1's closed days", !leakedClosed || leakedClosed.length === 0, `${leakedClosed?.length ?? 0} row(s) visible`);
   }
 
+  // 4r. Online booking (050_online_booking.sql) — account 2 can't change
+  // account 1's online booking settings (or learn its embed key), add or read
+  // its visit types, link its therapists, or read its booking consents; the
+  // rate-limit table is closed to browsers.
+  if (account1PracticeId) {
+    const { error: obSettingsSpoof } = await client2
+      .from('online_booking_settings')
+      .upsert({ practice_id: account1PracticeId, enabled: true }, { onConflict: 'practice_id' });
+    check("account 2 cannot change account 1's online booking settings", !!obSettingsSpoof, obSettingsSpoof ? obSettingsSpoof.message : 'upsert unexpectedly succeeded');
+    const { data: leakedObSettings } = await client2.from('online_booking_settings').select('public_key').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's embed key", !leakedObSettings || leakedObSettings.length === 0, `${leakedObSettings?.length ?? 0} row(s) visible`);
+    const { error: visitTypeSpoof } = await client2
+      .from('online_visit_types')
+      .insert({ practice_id: account1PracticeId, name: 'Spoof', duration_minutes: 30 });
+    check("account 2 cannot add a visit type to account 1's practice", !!visitTypeSpoof, visitTypeSpoof ? visitTypeSpoof.message : 'insert unexpectedly succeeded');
+    const { data: leakedVisitTypes } = await client2.from('online_visit_types').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's visit types", !leakedVisitTypes || leakedVisitTypes.length === 0, `${leakedVisitTypes?.length ?? 0} row(s) visible`);
+    const { data: account1VisitType } = await client1.from('online_visit_types').select('id').limit(1).maybeSingle();
+    const { data: account1Therapist } = await client1.from('therapists').select('id').limit(1).maybeSingle();
+    if (account1VisitType && account1Therapist) {
+      const { error: linkSpoof } = await client2
+        .from('online_visit_type_therapists')
+        .insert({ visit_type_id: account1VisitType.id, therapist_id: account1Therapist.id, practice_id: account1PracticeId });
+      check("account 2 cannot link account 1's visit type to a therapist", !!linkSpoof, linkSpoof ? linkSpoof.message : 'insert unexpectedly succeeded');
+    }
+    const { data: leakedConsents } = await client2.from('online_booking_consents').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's online booking consents", !leakedConsents || leakedConsents.length === 0, `${leakedConsents?.length ?? 0} row(s) visible`);
+    const { error: attemptsError } = await client2.from('online_booking_attempts').insert({ ip_hash: 'x', kind: 'book' });
+    check('a browser cannot write the online booking rate-limit table', !!attemptsError, attemptsError ? attemptsError.message : 'insert unexpectedly succeeded');
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

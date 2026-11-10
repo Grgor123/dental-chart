@@ -8,11 +8,21 @@ import { minToTime, timeToMin, type ClosedDay, type PracticeSchedule } from '../
 // (calendar), owners write (RLS). The database also enforces the clinic
 // window on appointments (trigger check_appointment_hours).
 
+/** Offered until a clinic sets its own (migration 051). */
+export const DEFAULT_APPOINTMENT_DURATIONS = [15, 30, 45, 60, 90, 120, 180];
+
+/** The clinic's durations plus the one currently set (an existing
+ *  appointment may have another length), sorted. */
+export function durationOptions(durations: number[], current?: number): number[] {
+  return [...new Set(current ? [...durations, current] : durations)].sort((a, b) => a - b);
+}
+
 export function usePracticeHours() {
   const { practiceId } = usePracticeContext();
   const [weekly, setWeekly] = useState<(PracticeSchedule['weekly'][number] & { id: string })[]>([]);
   const [closed, setClosed] = useState<ClosedDay[]>([]);
   const [blockOutsideHours, setBlock] = useState(false);
+  const [durations, setDurationsState] = useState<number[]>(DEFAULT_APPOINTMENT_DURATIONS);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -46,6 +56,11 @@ export function usePracticeHours() {
       }))
     );
     setBlock(Boolean(s.data?.block_outside_hours));
+    // Separate query: before migration 051 the column doesn't exist, and the
+    // rest of the hours must still load.
+    const d = await supabase.from('practice_settings').select('appointment_durations').maybeSingle();
+    const list = (d.data?.appointment_durations as number[] | null | undefined) ?? null;
+    setDurationsState(!d.error && list && list.length > 0 ? [...list].sort((a, b) => a - b) : DEFAULT_APPOINTMENT_DURATIONS);
   }, []);
 
   useEffect(() => {
@@ -114,5 +129,16 @@ export function usePracticeHours() {
     return upsertError ? { error: upsertError.message } : {};
   }
 
-  return { practice, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours };
+  /** Saves the clinic's appointment durations (null = back to the defaults). */
+  async function setDurations(list: number[] | null): Promise<{ error?: string }> {
+    if (!practiceId) return { error: 'Ordinacija ni bila najdena.' };
+    const value = list ? [...new Set(list)].sort((a, b) => a - b) : null;
+    const { error: upsertError } = await supabase
+      .from('practice_settings')
+      .upsert({ practice_id: practiceId, appointment_durations: value, updated_at: new Date().toISOString() });
+    await reload();
+    return upsertError ? { error: upsertError.message } : {};
+  }
+
+  return { practice, durations, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours, setDurations };
 }

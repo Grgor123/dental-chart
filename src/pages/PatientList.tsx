@@ -141,7 +141,7 @@ export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, on
                     </span>
                     <span className="flex items-center gap-3 text-xs text-[var(--muted,#6f7c79)]">
                       <span>
-                        {formatDob(p.dob)}
+                        {p.dob ? formatDob(p.dob) : '—'}
                         {age != null && ` (${age} let)`}
                       </span>
                       <span>{p.sex ? SEX_LABELS[p.sex] : '—'}</span>
@@ -235,6 +235,7 @@ function NewPatientForm({ createPatient, onCreated }: NewPatientFormProps) {
       emailOptOut: false,
       emailBounced: false,
       marketingConsent: false,
+      source: 'staff',
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       address: address.trim() || undefined,

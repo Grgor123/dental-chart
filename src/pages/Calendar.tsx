@@ -16,7 +16,7 @@ import {
 } from '../hooks/useAppointments';
 import { TimeSelect } from '../components/ui/TimeSelect';
 import { useWorkingHours } from '../hooks/useWorkingHours';
-import { usePracticeHours } from '../hooks/usePracticeHours';
+import { durationOptions, usePracticeHours } from '../hooks/usePracticeHours';
 import {
   ABSENCE_LABELS,
   bookableHours,
@@ -219,7 +219,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
   // Working hours (migration 047): shading, free-slot search, booking warning.
   const { schedules } = useWorkingHours();
   // The clinic's hours and closed days (migration 048).
-  const { practice } = usePracticeHours();
+  const { practice, durations } = usePracticeHours();
   const therapists = useMemo(() => allTherapists.filter((t) => !t.archived && isBookable(t)), [allTherapists]);
   const { practiceName, role } = usePracticeContext();
 
@@ -552,6 +552,7 @@ export function Calendar({ onBack, onSelectPatient, onSignOut, onNavigateEmail, 
             }
             schedules={schedules}
             practice={practice}
+            durations={durations}
             onCreate={createAppointmentEverywhere}
             onUpdate={updateAppointmentEverywhere}
             onCreatePatient={createPatient}
@@ -617,7 +618,6 @@ function ViewSwitcher({ view, onSetView, showWeekends, onSetShowWeekends }: View
   );
 }
 
-const DURATION_OPTIONS = [15, 30, 45, 60, 90];
 
 function toDateInputValue(iso: string): string {
   const d = new Date(iso);
@@ -651,6 +651,8 @@ interface AppointmentModalProps {
   therapists: Therapist[];
   schedules: Map<string, Schedule>;
   practice: PracticeSchedule;
+  /** Nastavitve → Delovni čas → Trajanja terminov (migration 051). */
+  durations: number[];
   onCreate: (input: AppointmentFields & { patientId: string }) => Promise<{ appointment: Appointment } | { error: string }>;
   onUpdate: (id: string, fields: Partial<AppointmentFields>) => Promise<{ appointment: Appointment } | { error: string }>;
   onCreatePatient: (input: NewPatientInput) => Promise<{ patientId: string } | { error: string }>;
@@ -673,6 +675,7 @@ function AppointmentModal({
   therapists,
   schedules,
   practice,
+  durations,
   onCreate,
   onUpdate,
   onCreatePatient,
@@ -1005,7 +1008,7 @@ function AppointmentModal({
               onChange={(e) => setDuration(Number(e.target.value))}
               className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
             >
-              {DURATION_OPTIONS.map((m) => (
+              {durationOptions(durations, duration).map((m) => (
                 <option key={m} value={m}>
                   {m} min
                 </option>

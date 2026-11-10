@@ -101,7 +101,7 @@ export function ChartPrintSheet({ practiceName, patient, chart, notesByFdi, onDo
   const notes = ALL_FDI.filter((fdi) => notesByFdi[fdi]?.trim()).map((fdi) => [fdi, notesByFdi[fdi].trim()] as const);
   const printedOn = new Date().toLocaleDateString('sl-SI');
   const details = [
-    `Datum rojstva: ${formatDate(patient.dob)}`,
+    `Datum rojstva: ${patient.dob ? formatDate(patient.dob) : '—'}`,
     patient.healthCardNumber ? `Št. zdr. kartice: ${patient.healthCardNumber}` : '',
     patient.internalRecordNumber ? `Št. interne evidence: ${patient.internalRecordNumber}` : '',
   ].filter(Boolean);

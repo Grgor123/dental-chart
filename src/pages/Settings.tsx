@@ -8,6 +8,7 @@ import { PracticeUsersSection } from '../components/settings/PracticeUsersSectio
 import { TeamSection } from '../components/settings/TeamSection';
 import { PracticeHoursSection } from '../components/settings/PracticeHoursSection';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
+import { OnlineBookingSection } from '../components/settings/OnlineBookingSection';
 import { usePracticeContext } from '../contexts/PracticeContext';
 
 interface SettingsProps {
@@ -32,6 +33,7 @@ const SECTIONS = [
   { key: 'profil', label: 'Moj profil' },
   { key: 'delovni-cas', label: 'Delovni čas' },
   { key: 'ekipa', label: 'Ekipa' },
+  { key: 'spletno', label: 'Spletno naročanje' },
   { key: 'uporabniki', label: 'Uporabniki' },
   // Owners only (webhooks send patient contact data out of the app).
   { key: 'integracije', label: 'Integracije', ownerOnly: true },
@@ -74,6 +76,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
               {section === 'profil' && <UserProfileSection />}
               {section === 'delovni-cas' && <PracticeHoursSection />}
               {section === 'ekipa' && <TeamSection />}
+              {section === 'spletno' && <OnlineBookingSection />}
               {section === 'uporabniki' && <PracticeUsersSection />}
               {section === 'integracije' && role === 'owner' && <IntegrationsSection />}
             </div>

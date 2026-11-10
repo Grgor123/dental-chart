@@ -30,7 +30,7 @@ export function AppointmentChip({ appointment, color, style, onClick }: Appointm
   const accent = color || NEUTRAL_COLOR;
   const title = `${formatTime(appointment.startsAt)}–${formatTime(appointment.endsAt)} ${appointment.patientLastName} ${appointment.patientFirstName}${
     appointment.service ? ` — ${appointment.service}` : ''
-  }`;
+  }${appointment.source === 'online' ? ' (spletno naročilo)' : ''}`;
 
   return (
     <button
@@ -58,6 +58,9 @@ export function AppointmentChip({ appointment, color, style, onClick }: Appointm
       </span>
       <span className="block truncate pr-3.5">
         {formatTime(appointment.startsAt)}–{formatTime(appointment.endsAt)}
+        {appointment.source === 'online' && (
+          <span className="ml-1 rounded bg-white/80 px-1 text-[9px] font-semibold uppercase tracking-wide">spletno</span>
+        )}
       </span>
       {appointment.service && <span className="block truncate pr-3.5 text-[10px] text-[var(--ink-soft,#45524f)]">{appointment.service}</span>}
     </button>

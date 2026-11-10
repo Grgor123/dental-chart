@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { usePracticeContext } from '../../contexts/PracticeContext';
-import { usePracticeHours } from '../../hooks/usePracticeHours';
+import { DEFAULT_APPOINTMENT_DURATIONS, usePracticeHours } from '../../hooks/usePracticeHours';
 import { toDateIso, WEEKDAY_LABELS, type Period } from '../../lib/workingHours';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { PeriodsEditor, periodsError } from './PeriodsEditor';
@@ -30,7 +30,35 @@ function formatDate(dateIso: string): string {
 export function PracticeHoursSection() {
   const { role } = usePracticeContext();
   const readOnly = role !== 'owner';
-  const { practice, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours } = usePracticeHours();
+  const { practice, durations, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours, setDurations } =
+    usePracticeHours();
+  // ---- Appointment durations (migration 051)
+  const [newDuration, setNewDuration] = useState('');
+  const [durationMessage, setDurationMessage] = useState<string | null>(null);
+  const usingDefaults =
+    durations.length === DEFAULT_APPOINTMENT_DURATIONS.length && durations.every((d, i) => d === DEFAULT_APPOINTMENT_DURATIONS[i]);
+  async function saveDurations(list: number[] | null) {
+    const r = await setDurations(list);
+    setDurationMessage(r.error ?? null);
+  }
+  async function handleAddDuration(e: FormEvent) {
+    e.preventDefault();
+    const minutes = Number(newDuration);
+    if (!Number.isInteger(minutes) || minutes < 5 || minutes > 480) {
+      setDurationMessage('Vnesite trajanje v minutah, od 5 do 480.');
+      return;
+    }
+    if (durations.includes(minutes)) {
+      setDurationMessage(`${minutes} min je že na seznamu.`);
+      return;
+    }
+    if (durations.length >= 20) {
+      setDurationMessage('Največ 20 trajanj.');
+      return;
+    }
+    setNewDuration('');
+    await saveDurations([...durations, minutes]);
+  }
   // "Dodaj slovenske praznike": the entries not entered yet, shown for confirmation.
   const [holidaysToAdd, setHolidaysToAdd] = useState<HolidayEntry[] | null>(null);
   const [holidayMessage, setHolidayMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
@@ -201,6 +229,66 @@ export function PracticeHoursSection() {
         <p className="text-xs text-[var(--muted,#6f7c79)]">
           Spletna naročila pacientov izven delovnega časa ambulante so vedno zavrnjena.
         </p>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <div>
+          <h3 className="text-sm font-bold text-[var(--ink,#1c2624)]">Trajanja terminov</h3>
+          <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">
+            Trajanja, ki jih lahko izberete pri naročanju v koledarju in v kartoteki pacienta ter pri vrstah obiska v Nastavitve → Spletno
+            naročanje. Sprememba seznama ne spremeni že nastavljenih vrst obiska — njihovo trajanje izberete tam.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {durations.map((d) => (
+            <span
+              key={d}
+              className="flex items-center gap-1 rounded-full border border-[var(--line,#ccd6d4)] px-3 py-1 text-sm text-[var(--ink,#1c2624)]"
+            >
+              {d} min
+              {!readOnly && durations.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => saveDurations(durations.filter((x) => x !== d))}
+                  className="ml-0.5 text-xs text-[var(--muted,#6f7c79)] hover:text-[var(--danger,#b3261e)]"
+                  aria-label={`Odstrani ${d} min`}
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))}
+          {!readOnly && (
+            <form onSubmit={handleAddDuration} className="flex items-center gap-2">
+              <input
+                type="number"
+                min={5}
+                max={480}
+                step={5}
+                value={newDuration}
+                onChange={(e) => setNewDuration(e.target.value)}
+                placeholder="min"
+                className={`${INPUT_CLASS} w-20`}
+              />
+              <button
+                type="submit"
+                className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm font-medium text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)]"
+              >
+                Dodaj
+              </button>
+            </form>
+          )}
+          {!readOnly && !usingDefaults && (
+            <button
+              type="button"
+              onClick={() => saveDurations(null)}
+              className="text-xs font-medium text-[var(--ink-soft,#45524f)] hover:underline"
+            >
+              Ponastavi na privzeto
+            </button>
+          )}
+        </div>
+        {durationMessage && <span className="text-sm text-[var(--danger,#b3261e)]">{durationMessage}</span>}
       </section>
 
       <section className="flex flex-col gap-3">

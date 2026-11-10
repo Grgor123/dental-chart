@@ -52,6 +52,13 @@ interface TimeGridProps {
       never actually be saved (see AppointmentModal's own handleSubmit
       guard). */
   onPastSlotClick?: () => void;
+  /** An outlined block for the appointment being booked (the patient
+   *  record's booking window — TherapistWeekPicker). */
+  highlight?: { dateIso: string; startMin: number; endMin: number; label: string; color?: string };
+  /** Narrower columns for a week inside a dialog (default 150 px). */
+  minColumnWidth?: number;
+  /** Where the hour body opens scrolled to, in minutes (default 07:00). */
+  scrollToMinutes?: number;
 }
 
 /** The parts of the day outside the working periods (shaded in the grid). */
@@ -91,7 +98,16 @@ function nowOffsetPx(): number {
 // to the top of that scroll container on the vertical axis while still
 // panning with it horizontally, so the two rows can never drift out of
 // alignment the way two independently-scrolled containers would.
-export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick, onPastSlotClick }: TimeGridProps) {
+export function TimeGrid({
+  columns,
+  resolveEventColor,
+  onSlotClick,
+  onEventClick,
+  onPastSlotClick,
+  highlight,
+  minColumnWidth = 150,
+  scrollToMinutes = DEFAULT_SCROLL_HOUR * 60,
+}: TimeGridProps) {
   const hours: number[] = [];
   for (let h = GRID_START_HOUR; h < GRID_END_HOUR; h++) hours.push(h);
   const gridHeight = (GRID_END_HOUR - GRID_START_HOUR) * HOUR_HEIGHT;
@@ -105,7 +121,7 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
   // navigation), not on every re-render (appointment edits, etc.), so it
   // never fights a scroll position the user has already set by hand.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: DEFAULT_SCROLL_HOUR * HOUR_HEIGHT });
+    scrollRef.current?.scrollTo({ top: (scrollToMinutes / 60) * HOUR_HEIGHT });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeKey]);
 
@@ -138,7 +154,8 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
             {columns.map((column) => (
               <div
                 key={column.key}
-                className="flex h-14 min-w-[150px] flex-1 items-center justify-center gap-1.5 border-b border-l border-[var(--line,#ccd6d4)] px-2"
+                className="flex h-14 flex-1 items-center justify-center gap-1.5 border-b border-l border-[var(--line,#ccd6d4)] px-2"
+                style={{ minWidth: minColumnWidth }}
               >
                 {column.accentColor && (
                   <span className="h-2 w-2 flex-none rounded-full" style={{ backgroundColor: column.accentColor }} />
@@ -183,8 +200,8 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
               return (
                 <div
                   key={column.key}
-                  className="relative min-w-[150px] flex-1 cursor-pointer border-l border-[var(--line,#ccd6d4)]"
-                  style={{ height: gridHeight }}
+                  className="relative flex-1 cursor-pointer border-l border-[var(--line,#ccd6d4)]"
+                  style={{ height: gridHeight, minWidth: minColumnWidth }}
                   onClick={(e) => handleColumnClick(e, column)}
                 >
                   {column.workingPeriods &&
@@ -219,6 +236,19 @@ export function TimeGrid({ columns, resolveEventColor, onSlotClick, onEventClick
                         style={{ left: -5, top: -4.5 }}
                       />
                       <div className="border-t-2 border-[var(--danger,#b3261e)]" />
+                    </div>
+                  )}
+                  {highlight && highlight.dateIso === column.dateIso && (
+                    <div
+                      className="pointer-events-none absolute left-0.5 right-0.5 z-[15] overflow-hidden rounded-md border-2 border-dashed px-1.5 py-0.5 text-[11px] font-semibold leading-tight text-[var(--ink,#1c2624)]"
+                      style={{
+                        top: ((highlight.startMin - GRID_START_HOUR * 60) / 60) * HOUR_HEIGHT,
+                        height: Math.max(((highlight.endMin - highlight.startMin) / 60) * HOUR_HEIGHT, 22),
+                        borderColor: highlight.color ?? 'var(--accent,#2e6e62)',
+                        background: 'rgba(255,255,255,0.85)',
+                      }}
+                    >
+                      {highlight.label}
                     </div>
                   )}
                   {column.events.map((appt) => {

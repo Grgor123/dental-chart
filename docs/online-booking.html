@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spletno naročanje</title>
+<!-- Online booking form (Gregor, 2026-11-09). Embedded on a practice's website
+     in an <iframe> (code in Nastavitve → Spletno naročanje), or opened as a
+     page. ?k=<embed key> selects the practice, ?p=<project ref> the backend
+     (backend.js). Talks to the public Edge Function `online-booking`. -->
+<style>
+  :root { --accent: #2e6e62; --ink: #1c2624; --soft: #45524f; --muted: #6f7c79; --line: #ccd6d4; --danger: #b3261e; --bg: #f4f6f5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); line-height: 1.45; }
+  body.embedded { background: transparent; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 16px; }
+  body.embedded .wrap { padding: 4px; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .practice { font-weight: 600; color: var(--accent); font-size: 14px; margin-bottom: 2px; }
+  h1 { font-size: 1.35rem; margin: 0 0 14px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .steps { display: flex; gap: 6px; margin-bottom: 16px; }
+  .steps span { flex: 1; height: 4px; border-radius: 2px; background: #e3e9e8; }
+  .steps span.on { background: var(--accent); }
+  .types { display: grid; gap: 8px; }
+  .type { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 14px 16px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); cursor: pointer; }
+  .type:hover { border-color: var(--accent); }
+  .type b { display: block; font-size: 15px; }
+  .type small { color: var(--muted); font-size: 13px; }
+  .type .dur { flex: none; font-size: 13px; color: var(--soft); background: #eef4f2; border-radius: 12px; padding: 2px 10px; }
+  .hint { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .grid .full { grid-column: 1 / -1; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+  input[type=text], input[type=email], input[type=tel], textarea { font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; width: 100%; background: #fff; }
+  textarea { min-height: 60px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+  .phone { display: flex; gap: 6px; }
+  .phone select { flex: none; font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 4px; background: #fff; }
+  .phone input { flex: 1; min-width: 0; }
+  .consent { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; font-size: 13px; color: var(--soft); }
+  .consent input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+  .consent a { color: var(--accent); }
+  .req { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .captcha { margin-top: 12px; min-height: 0; }
+  .primary { width: 100%; font: inherit; font-size: 1rem; font-weight: 600; padding: 13px; border: none; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; margin-top: 16px; }
+  .primary:disabled { opacity: .55; cursor: default; }
+  .back { border: none; background: none; padding: 0; margin: 0 0 12px; font: inherit; font-size: 14px; color: var(--accent); cursor: pointer; }
+  .error { color: var(--danger); font-size: 14px; margin-top: 10px; }
+  .chosen { background: #eef4f2; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-bottom: 14px; }
+  .days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 12px; scrollbar-width: thin; }
+  .day { flex: none; min-width: 64px; padding: 8px 6px; text-align: center; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; color: var(--ink); cursor: pointer; }
+  .day small { display: block; font-size: 12px; color: var(--muted); text-transform: capitalize; }
+  .day b { display: block; font-size: 16px; }
+  .day.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .day.on small { color: #e3f0ed; }
+  .times { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; max-height: 260px; overflow-y: auto; }
+  .time { padding: 9px 0; font: inherit; font-size: 15px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); cursor: pointer; }
+  .time:hover { border-color: var(--accent); color: var(--accent); }
+  .dayname { font-size: 14px; color: var(--soft); margin: 0 0 8px; text-transform: capitalize; }
+  .center { text-align: center; padding: 24px 8px; }
+  .ok { width: 48px; height: 48px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 26px; line-height: 48px; margin: 0 auto 10px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .hidden { display: none; }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } .card { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card" id="app"><p class="muted">Nalagam …</p></div></div>
+<script src="backend.js"></script>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var KEY = params.get('k') || '';
+  var API = window.dcFunctionUrl('online-booking');
+  var TZ = 'Europe/Ljubljana';
+  var embedded = window.self !== window.top;
+  if (embedded) document.body.classList.add('embedded');
+
+  var app = document.getElementById('app');
+  var config = null;
+  // Phone: country code (Slovenia by default) + the number as the patient
+  // types it — "041 362 281" or "41 362 281". Sent as "+386 41 362 281";
+  // the server checks it with libphonenumber and stores E.164
+  // (+38641362281), like the app and the old booking widget.
+  var COUNTRIES = [['SI', '386'], ['HR', '385'], ['AT', '43'], ['IT', '39'], ['HU', '36'], ['DE', '49'], ['BA', '387'], ['RS', '381'],
+                   ['ME', '382'], ['MK', '389'], ['CH', '41'], ['FR', '33'], ['NL', '31'], ['GB', '44'], ['US', '1']];
+  function flag(code) { return String.fromCodePoint.apply(null, code.split('').map(function (ch) { return 0x1F1E6 + ch.charCodeAt(0) - 65; })); }
+  function fullPhone(c) {
+    var raw = c.phone.trim();
+    if (/^(\+|00)/.test(raw)) return raw; // typed with a country code already
+    var dial = (COUNTRIES.filter(function (x) { return x[0] === c.country; })[0] || COUNTRIES[0])[1];
+    return '+' + dial + ' ' + raw.replace(/^0+/, '');
+  }
+  var state = { step: 1, visitType: null, contact: { firstName: '', lastName: '', country: 'SI', phone: '', email: '' }, consent: false,
+                session: null, slots: [], day: null, start: null, note: '', error: '', busy: false, turnstileToken: null };
+  var turnstileWidget = null;
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmt(iso, opts) { return new Intl.DateTimeFormat('sl-SI', Object.assign({ timeZone: TZ }, opts)).format(new Date(iso)); }
+  function dayKey(iso) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso)); }
+  function timeOf(iso) { return fmt(iso, { hour: '2-digit', minute: '2-digit' }); }
+  function longDate(iso) { return fmt(iso, { weekday: 'long', day: 'numeric', month: 'long' }); }
+
+  // Lets the host page size the iframe to its content (see the embed code).
+  function reportHeight() {
+    if (!embedded) return;
+    parent.postMessage({ type: 'dental-booking-height', height: document.documentElement.scrollHeight }, '*');
+  }
+  new ResizeObserver(reportHeight).observe(document.body);
+
+  function post(body) {
+    body.k = KEY;
+    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (res) { return res.json().then(function (data) { data._status = res.status; return data; }); });
+  }
+
+  function callUs() {
+    return config && config.phone ? ' Pokličite nas: <a href="tel:' + esc(config.phone.replace(/\s/g, '')) + '">' + esc(config.phone) + '</a>.' : ' Pokličite ordinacijo.';
+  }
+
+  function stepsBar() {
+    var html = '<div class="steps">';
+    for (var i = 1; i <= 4; i++) html += '<span class="' + (i <= state.step ? 'on' : '') + '"></span>';
+    return html + '</div>';
+  }
+
+  function header() {
+    return '<div class="practice">' + esc(config.practiceName) + '</div><h1>Naročite se na termin</h1>' + (state.step < 5 ? stepsBar() : '');
+  }
+
+  function errorHtml() { return state.error ? '<p class="error">' + state.error + '</p>' : ''; }
+
+  function render() {
+    if (!config) return;
+    var h = header();
+    if (state.step === 1) {
+      h += '<h2>Vrsta obiska</h2><div class="types">';
+      config.visitTypes.forEach(function (v) {
+        h += '<button class="type" data-type="' + esc(v.id) + '"><span><b>' + esc(v.name) + '</b>' +
+             (v.description ? '<small>' + esc(v.description) + '</small>' : '') + '</span><span class="dur">' + v.durationMinutes + ' min</span></button>';
+      });
+      h += '</div><p class="hint">Potrebujete kaj drugega (plombo, puljenje zoba, nujno pomoč)?' + callUs() + '</p>';
+    } else if (state.step === 2) {
+      var c = state.contact;
+      h += '<button class="back" data-go="1">← Nazaj</button>' +
+        '<div class="chosen">' + esc(state.visitType.name) + ' · ' + state.visitType.durationMinutes + ' min</div>' +
+        '<h2>Vaši podatki</h2><form id="details"><div class="grid">' +
+        '<label class="field">Ime *<input type="text" name="firstName" required autocomplete="given-name" value="' + esc(c.firstName) + '"></label>' +
+        '<label class="field">Priimek *<input type="text" name="lastName" required autocomplete="family-name" value="' + esc(c.lastName) + '"></label>' +
+        '<label class="field">Telefon *<span class="phone"><select name="country" aria-label="Država">' +
+          COUNTRIES.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === c.country ? ' selected' : '') + '>' + flag(x[0]) + ' +' + x[1] + '</option>'; }).join('') +
+          '</select><input type="tel" name="phone" required autocomplete="tel-national" placeholder="041 123 456" value="' + esc(c.phone) + '"></span></label>' +
+        '<label class="field">E-pošta *<input type="email" name="email" required autocomplete="email" value="' + esc(c.email) + '"></label>' +
+        '</div><p class="req">* Obvezna polja. Če ste že naš pacient, vpišite enake podatke kot pri nas.</p>' +
+        '<label class="consent"><input type="checkbox" name="consent"' + (state.consent ? ' checked' : '') + ' required><span>' + esc(config.consentText) +
+        (config.privacyPolicyUrl ? ' <a href="' + esc(config.privacyPolicyUrl) + '" target="_blank" rel="noopener">Izjava o zasebnosti</a>' : '') + '</span></label>' +
+        '<div class="captcha" id="captcha"></div>' + errorHtml() +
+        '<button class="primary" type="submit"' + (state.busy ? ' disabled' : '') + '>' + (state.busy ? 'Iščem proste termine …' : 'Prikaži proste termine') + '</button></form>';
+    } else if (state.step === 3) {
+      h += '<button class="back" data-go="2">← Nazaj</button>' +
+        '<div class="chosen">' + esc(state.visitType.name) + ' · ' + state.visitType.durationMinutes + ' min</div>' + errorHtml();
+      if (state.busy) {
+        h += '<p class="muted">Iščem proste termine …</p>';
+      } else if (state.slots.length === 0) {
+        h += '<p>V naslednjih tednih ni prostih terminov.' + callUs() + '</p>';
+      } else {
+        var days = [];
+        state.slots.forEach(function (s) { var d = dayKey(s); if (days.indexOf(d) < 0) days.push(d); });
+        if (!state.day || days.indexOf(state.day) < 0) state.day = days[0];
+        h += '<h2>Izberite termin</h2><div class="days">';
+        days.forEach(function (d) {
+          var first = state.slots.filter(function (s) { return dayKey(s) === d; })[0];
+          h += '<button class="day' + (d === state.day ? ' on' : '') + '" data-day="' + d + '"><small>' + esc(fmt(first, { weekday: 'short' })) + '</small><b>' +
+               esc(fmt(first, { day: 'numeric' })) + '.</b><small>' + esc(fmt(first, { month: 'short' })) + '</small></button>';
+        });
+        var daySlots = state.slots.filter(function (s) { return dayKey(s) === state.day; });
+        h += '</div><p class="dayname">' + esc(longDate(daySlots[0])) + '</p><div class="times">';
+        daySlots.forEach(function (s) { h += '<button class="time" data-start="' + esc(s) + '">' + esc(timeOf(s)) + '</button>'; });
+        h += '</div>';
+      }
+    } else if (state.step === 4) {
+      h += '<button class="back" data-go="3">← Izberi drug termin</button>' +
+        '<div class="chosen"><b>' + esc(state.visitType.name) + '</b><br>' + esc(longDate(state.start)) + ' ob ' + esc(timeOf(state.start)) +
+        '<br>' + esc(state.contact.firstName + ' ' + state.contact.lastName) + ' · ' + esc(fullPhone(state.contact)) + ' · ' + esc(state.contact.email) + '</div>' +
+        '<label class="field">Opomba (neobvezno)<textarea id="note" maxlength="500" placeholder="npr. občutljiv zob spodaj levo">' + esc(state.note) + '</textarea></label>' +
+        errorHtml() + '<button class="primary" id="book"' + (state.busy ? ' disabled' : '') + '>' + (state.busy ? 'Naročam …' : 'Potrdi naročilo') + '</button>';
+    } else if (state.step === 5) {
+      h += '<div class="center"><div class="ok">✓</div><h2>Naročeni ste</h2><p><b>' + esc(state.visitType.name) + '</b><br>' + esc(longDate(state.start)) + ' ob ' + esc(timeOf(state.start)) +
+        '</p><p class="muted">Potrditev smo poslali na ' + esc(state.contact.email) + '. Če termina ne morete obiskati, nas prosim pravočasno obvestite.</p></div>';
+    }
+    app.innerHTML = h;
+    bind();
+    if (state.step === 2) mountCaptcha();
+    reportHeight();
+  }
+
+  function bind() {
+    app.querySelectorAll('[data-type]').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-type');
+        var vt = config.visitTypes.filter(function (v) { return v.id === id; })[0];
+        if (!state.visitType || state.visitType.id !== vt.id) state.session = null;
+        state.visitType = vt; state.step = 2; state.error = ''; render();
+      };
+    });
+    app.querySelectorAll('[data-go]').forEach(function (b) {
+      b.onclick = function () {
+        state.step = Number(b.getAttribute('data-go')); state.error = '';
+        if (state.step === 3) loadSlots(); else render();
+      };
+    });
+    app.querySelectorAll('[data-day]').forEach(function (b) { b.onclick = function () { state.day = b.getAttribute('data-day'); render(); }; });
+    app.querySelectorAll('[data-start]').forEach(function (b) { b.onclick = function () { state.start = b.getAttribute('data-start'); state.step = 4; state.error = ''; render(); }; });
+    var form = document.getElementById('details');
+    if (form) {
+      form.oninput = function () {
+        var fd = new FormData(form);
+        ['firstName', 'lastName', 'country', 'phone', 'email'].forEach(function (k) { state.contact[k] = String(fd.get(k) || ''); });
+        state.consent = fd.get('consent') === 'on';
+        state.session = null; // changed details need a fresh check
+      };
+      form.onsubmit = function (e) {
+        e.preventDefault();
+        form.oninput();
+        if (config.turnstileSiteKey && !state.turnstileToken) { state.error = 'Počakajte, da se preverjanje (Cloudflare) zaključi.'; render(); return; }
+        loadSlots(true);
+      };
+    }
+    var note = document.getElementById('note');
+    if (note) note.oninput = function () { state.note = note.value; };
+    var book = document.getElementById('book');
+    if (book) book.onclick = submitBooking;
+  }
+
+  function mountCaptcha() {
+    if (!config.turnstileSiteKey || !window.turnstile) return;
+    state.turnstileToken = null;
+    turnstileWidget = window.turnstile.render('#captcha', {
+      sitekey: config.turnstileSiteKey,
+      language: 'sl',
+      callback: function (t) { state.turnstileToken = t; },
+      'expired-callback': function () { state.turnstileToken = null; },
+      'error-callback': function () { state.turnstileToken = null; }
+    });
+  }
+
+  function loadSlots(fromDetails) {
+    // Build the request before rendering: a re-render resets the captcha.
+    var body = state.session && !fromDetails ? { action: 'slots', session: state.session }
+      : { action: 'slots', visitTypeId: state.visitType.id, consent: state.consent, turnstileToken: state.turnstileToken,
+          firstName: state.contact.firstName, lastName: state.contact.lastName, phone: fullPhone(state.contact), email: state.contact.email };
+    state.busy = true; state.error = '';
+    if (!fromDetails) state.step = 3;
+    if (fromDetails) setBusyButton('Iščem proste termine …'); else render();
+    post(body).then(function (data) {
+      state.busy = false;
+      if (data.error) {
+        state.error = esc(data.error);
+        if (data.expired) state.session = null;
+        state.step = 2; render(); return;
+      }
+      state.session = data.session; state.slots = data.slots; state.step = 3; render();
+    }).catch(function () { state.busy = false; state.error = 'Povezava ni uspela. Poskusite znova.'; render(); });
+  }
+
+  function setBusyButton(label) {
+    var b = app.querySelector('.primary');
+    if (b) { b.disabled = true; b.textContent = label; }
+  }
+
+  function submitBooking() {
+    state.busy = true; state.error = ''; render();
+    post({ action: 'book', session: state.session, start: state.start, note: state.note }).then(function (data) {
+      state.busy = false;
+      if (data.ok) { state.step = 5; render(); return; }
+      state.error = esc(data.error || 'Naročilo ni uspelo.');
+      if (data.expired) { state.session = null; state.step = 2; render(); return; }
+      if (data.taken) { loadSlots(false); return; }
+      render();
+    }).catch(function () { state.busy = false; state.error = 'Povezava ni uspela. Poskusite znova.'; render(); });
+  }
+
+  if (!/^[a-f0-9]{32}$/.test(KEY)) {
+    app.innerHTML = '<p>Povezava do obrazca ni popolna (manjka ključ ?k=…). Uporabite kodo ali povezavo iz Nastavitve → Spletno naročanje.</p>';
+    reportHeight();
+    return;
+  }
+  fetch(API + '?k=' + encodeURIComponent(KEY)).then(function (r) { return r.json(); }).then(function (data) {
+    if (!data.enabled) {
+      app.innerHTML = '<p>Spletno naročanje trenutno ni na voljo. Prosimo, pokličite ordinacijo.</p>';
+      reportHeight();
+      return;
+    }
+    config = data;
+    if (!config.visitTypes.length) {
+      app.innerHTML = '<div class="practice">' + esc(config.practiceName) + '</div><p>Spletno naročanje trenutno ni na voljo.' + callUs() + '</p>';
+      reportHeight();
+      return;
+    }
+    if (config.turnstileSiteKey) {
+      var s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      s.onload = function () { if (state.step === 2) mountCaptcha(); };
+      document.head.appendChild(s);
+    }
+    render();
+  }).catch(function () {
+    app.innerHTML = '<p>Obrazca ni bilo mogoče naložiti. Poskusite znova kasneje.</p>';
+  });
+})();
+</script>
+</body>
+</html>

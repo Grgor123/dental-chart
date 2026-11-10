@@ -70,17 +70,21 @@ export type PatientListItem = Pick<
       — only ever granted by the patient on the health questionnaire; staff
       can only withdraw it (withdrawMarketingConsent below). */
   marketingConsent: boolean;
+  /** 'online' = created by the online booking form (migration 050) — no
+      birth date until staff add it ('' in `dob`). */
+  source: 'staff' | 'online';
 };
 
 const PATIENT_COLUMNS =
-  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, assigned_therapist_id, internal_record_number, sms_consent_status, email_opt_out, email_bounced, marketing_consent';
+  'id, first_name, last_name, dob, sex, phone, email, address, postal_code, city, health_card_number, assigned_dentist, assigned_therapist_id, internal_record_number, sms_consent_status, email_opt_out, email_bounced, marketing_consent, source';
 
 function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
   return {
     patientId: row.id as string,
     firstName: row.first_name as string,
     lastName: row.last_name as string,
-    dob: row.dob as string,
+    // Optional since migration 050 (online bookings) — '' = not known yet.
+    dob: (row.dob as string | null) ?? '',
     sex: (row.sex as Patient['sex'] | null) ?? null,
     phone: (row.phone as string | null) ?? undefined,
     email: (row.email as string | null) ?? undefined,
@@ -95,6 +99,7 @@ function rowToPatientListItem(row: Record<string, unknown>): PatientListItem {
     emailOptOut: (row.email_opt_out as boolean | null) ?? false,
     emailBounced: (row.email_bounced as boolean | null) ?? false,
     marketingConsent: (row.marketing_consent as boolean | null) ?? false,
+    source: row.source === 'online' ? 'online' : 'staff',
   };
 }
 
@@ -213,7 +218,7 @@ export function usePatients() {
       const columnUpdates: Record<string, unknown> = {};
       if (fields.firstName !== undefined) columnUpdates.first_name = fields.firstName;
       if (fields.lastName !== undefined) columnUpdates.last_name = fields.lastName;
-      if (fields.dob !== undefined) columnUpdates.dob = fields.dob;
+      if (fields.dob !== undefined) columnUpdates.dob = fields.dob || null;
       if (fields.sex !== undefined) columnUpdates.sex = fields.sex;
       if (fields.phone !== undefined) columnUpdates.phone = fields.phone || null;
       if (fields.email !== undefined) columnUpdates.email = fields.email || null;

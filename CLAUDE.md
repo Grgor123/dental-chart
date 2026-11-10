@@ -147,6 +147,8 @@ src/
       PracticeHoursSection.tsx # Nastavitve → Delovni čas: clinic hours,
                                 # closed days, "no booking outside hours"
       PeriodsEditor.tsx        # One day's [od]–[do] periods, shared by both
+      OnlineBookingSection.tsx # Nastavitve → Spletno naročanje — see
+                                # "Online booking" below
       IntegrationsSection.tsx  # Nastavitve → Integracije (owners): outbound
                                 # webhooks — see "Outbound webhooks" below
       ApiKeysSection.tsx       # Integracije → API ključi (inbound API)
@@ -283,6 +285,9 @@ src/
     workingHours.ts             # A date's working hours per therapist (pure)
     slovenianHolidays.ts        # Work-free days for "Dodaj slovenske praznike"
     nextFreeSlot.ts             # First free slot for "+ Nov termin" (pure)
+                                # (workingHours.ts itself now lives in
+                                # supabase/functions/_shared/scheduling/ and
+                                # is re-exported here — see "Online booking")
     calendarLayout.ts           # layoutOverlappingEvents() — pure column-
                                 # packing algorithm for side-by-side
                                 # overlapping appointments, shared by
@@ -520,7 +525,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`049_closed_days_yearly.sql` — all confirmed run (016–019 are the
+`051_appointment_durations.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -532,9 +537,10 @@ below; 037–043 outbound webhooks, marketing consent requests and the inbound
 API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
 projects"; 045 voice entry's taught words, see "Voice entry"; 046–049 team, rooms,
-working hours, clinic hours and yearly closed days, see "Team and rooms"). `supabase/schema.sql`
+working hours, clinic hours and yearly closed days, see "Team and rooms"; 050–051 online booking
+and the clinic's appointment durations, see "Online booking"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(049 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(051 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -4738,16 +4744,97 @@ in Settings, not the calendar; "office" means rooms/chairs inside one clinic
     patients are **always** refused outside clinic hours or on a closed day;
     staff bookings only while the switch is on. Only the clinic window is
     enforced in the database — therapist hours are checked in the app. A
-    practice with no clinic hours accepts everything. Online booking itself
-    doesn't exist in this app yet (roadmap item 6; the separate booking widget
-    writes to Google Calendar, not here) — it must insert with
-    `source = 'online'`.
+    practice with no clinic hours accepts everything. Online booking (see
+    "Online booking") inserts with `source = 'online'`.
+  - **Trajanja terminov** (migration 051, Gregor 2026-11-10): the clinic's
+    list of appointment durations, in Nastavitve → Delovni čas
+    (`practice_settings.appointment_durations`, null = 15, 30, 45, 60, 90,
+    120, 180 min; 1–20 values, 5–480 min). It is the "Trajanje" choice in
+    Koledar's appointment window, the patient record's booking window and the
+    online visit types' duration (`durationOptions()` in
+    `usePracticeHours.ts` — an existing appointment or visit type with
+    another length keeps it as an extra option). Changing the list never
+    changes a visit type's own duration.
+- **Patient record, Frame 5** (Gregor, 2026-11-09): lists **every** upcoming
+  appointment (not cancelled, not yet ended), each with "Prestavi"
+  (`useUpcomingAppointments`, reloads on window focus); "Naroči nov termin"
+  adds one. The booking window has the fields in two rows on top (Datum / Ura
+  / Trajanje, then Terapevt / Predvidena storitev / Status) and the
+  therapist's week across the full width below (`TherapistWeekPicker.tsx` on
+  `TimeGrid`: their bookable hours, their appointments, the new one as a
+  dashed block; clicking a free spot sets date and time).
 - **Tenant isolation**: section 4o (rooms not addable/readable across
   practices) and 7b (a team member can't be linked to another practice's
   login; a patient can't be assigned another practice's therapist) — passed
   2026-10-22 (55/55); 4p (working hours/absences not readable or addable
   across practices) and 4q (clinic hours, closed days, booking settings) —
   passed 2026-10-22 (61/61).
+
+### Online booking (Spletno naročanje)
+
+**Status: built and tested by Gregor on localhost (2026-11-09 … 10)** —
+migrations 050–051 run, `online-booking` deployed to the dev project. Roadmap
+item 6; replaces the separate Google-Calendar booking widget
+(`C:\Users\Uporabnik\Documents\Claude code dental calendar`) with a form
+that books straight into this app's calendar. Gregor's choices: visit types set
+in Nastavitve; patients never pick a therapist; booked at once; no birth date
+asked.
+
+- **The form**: `docs/online-booking.html` (GitHub Pages, embedded on the
+  practice's website in an iframe that resizes itself via `postMessage`), JSON
+  API in the public Edge Function `online-booking` (`--no-verify-jwt`). Steps:
+  vrsta obiska → podatki (ime, priimek, telefon with a country dropdown, SI
+  default, e-pošta, consent, Turnstile) → free times (day strip + times) →
+  povzetek + note → booked. `?k=<embed key>` picks the practice
+  (`online_booking_settings.public_key`), `?p=` the project (`backend.js`).
+  **Live only once pushed to main** (GitHub Pages serves main's `docs/`);
+  until then test via `python -m http.server 5190 --directory docs` and the
+  "Preizkus na tem računalniku" link.
+- **Who the patient is**: same first + last name and the same email or phone
+  → the existing record (works — Gregor's own test matched); otherwise a new
+  patient with `source = 'online'` and **no birth date** (`patients.dob`
+  nullable since 050; the record shows "Spletno naročilo — dopolnite").
+  Phones are parsed with `libphonenumber-js` (default SI) and stored E.164,
+  like the app. **Therapist**: a known patient whose "Izbran terapevt" offers
+  the visit type is booked with them only; everyone else with whoever is free
+  — earliest times first, ties by team order — and a patient without a
+  therapist gets that one. The details step comes before the times for this
+  reason (Gregor). Note: the offered times depend on who fills in the form,
+  which slightly reveals whether someone is a patient — mitigated by Turnstile
+  and the rate limit.
+- **Times**: `_shared/scheduling/onlineSlots.ts` (pure, Europe/Ljubljana wall
+  clock, DST-safe) on the same rules as the calendar — `workingHours.ts` was
+  moved to `_shared/scheduling/` so the function and the app share it. Clinic
+  + therapist hours, absences, closed days, existing appointments
+  (cancelled/no-show free), minimum notice, booking window, slot grid.
+- **Booking**: re-checked at booking time; `appointments` row with `source =
+  'online'`, `online_visit_type_id`, the visit type as service and the
+  contact details in the notes; a same-second clash makes the later insert
+  give way (409 → back to the times). The usual triggers send the
+  confirmation email and (new phone) the SMS consent request; the database
+  still refuses online bookings outside clinic hours. Consent is stored per
+  booking with its exact wording (`online_booking_consents`).
+- **Protection**: Turnstile on the details step when `TURNSTILE_SITE_KEY` /
+  `TURNSTILE_SECRET_KEY` are set (not yet — Gregor sets them in his terminal
+  and adds `grgor123.github.io` to the widget's hostnames); a signed 30-minute
+  session carries the details to the booking step; per-IP limits (30 slot
+  searches, 5 bookings an hour, `online_booking_attempts`, hashed IP, kept a
+  day).
+- **Nastavitve → Spletno naročanje** (`OnlineBookingSection.tsx`,
+  `useOnlineBooking.ts`; owners edit): on/off; **Vrste obiska** (name,
+  description, duration from the clinic's "Trajanja terminov", "Kdo izvaja" —
+  none = every bookable member, offered on/off, order, delete; starts with
+  Pregled 30 and Čiščenje zobnega kamna 45); booking window, minimum notice,
+  slot grid; consent text (`{ordinacija}`), privacy link, phone for "pokličite
+  nas"; embed code + "Odpri obrazec".
+- **Calendar**: online appointments carry a small **SPLETNO** tag.
+- **Tenant isolation**: section 4r (settings/embed key, visit types and their
+  therapists, consents not writable/readable across practices; rate-limit
+  table closed) — **not yet run**.
+- **Before Monika's version / production**: push to main (form page live),
+  Turnstile keys, the production project ref in `backend.js`.
+
+**Deploy**: `online-booking --no-verify-jwt`.
 
 ### Outbound webhooks and marketing consent (Nastavitve → Integracije)
 
@@ -5419,7 +5506,7 @@ Gregor before starting each item.
    schedule in their own Google Calendar with **no patient details, initials
    only**.
 6. **Online booking like the separate booking widget** (spec 3.2), built into
-   this app on its own calendar.
+   this app on its own calendar — **built 2026-11-09, see "Online booking".**
 7. **More roles** (spec 1) — e.g. reception without clinical notes.
 8. **ZZZS insurance** (spec 4.3) — eligibility (KZZ), split ZZZS /
    supplementary / patient, monthly billing files, programme tracking (fields
@@ -5435,7 +5522,15 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-10-22 (Team and rooms — Nastavitve → Ekipa replaces the
+*Last updated: 2026-11-10 (Online booking — embeddable form + public Edge
+Function, visit types in Nastavitve → Spletno naročanje, patient matched by
+name + email/phone, no birth date (patients.dob optional), therapist chosen by
+the app — migration 050; the clinic's appointment durations — migration 051;
+Frame 5 lists all upcoming appointments and books with the therapist's week
+in view; Slovenian holidays and yearly closed days — migration 049. See
+"Online booking" and "Team and rooms".)*
+
+*Previous entry: 2026-10-22 (Team and rooms — Nastavitve → Ekipa replaces the
 calendar's "+", rooms (ordinacije), "Izbran terapevt" picked from the team,
 working hours per therapist (weekly, split shifts, odd/even weeks, special
 days, absences) used by the calendar — migrations 046–047; therapist filter

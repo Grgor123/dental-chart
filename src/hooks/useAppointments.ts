@@ -18,6 +18,8 @@ export interface Appointment {
   service: string | null;
   notes: string | null;
   therapistId: string | null;
+  /** 'online' = booked by the patient on the website (migrations 048/050). */
+  source?: 'staff' | 'online';
 }
 
 export interface AppointmentWithPatient extends Appointment {
@@ -25,7 +27,7 @@ export interface AppointmentWithPatient extends Appointment {
   patientLastName: string;
 }
 
-const APPOINTMENT_COLUMNS = 'id, patient_id, starts_at, ends_at, status, service, notes, therapist_id';
+const APPOINTMENT_COLUMNS = 'id, patient_id, starts_at, ends_at, status, service, notes, therapist_id, source';
 
 function rowToAppointment(row: Record<string, unknown>): Appointment {
   return {
@@ -37,6 +39,7 @@ function rowToAppointment(row: Record<string, unknown>): Appointment {
     service: (row.service as string | null) ?? null,
     notes: (row.notes as string | null) ?? null,
     therapistId: (row.therapist_id as string | null) ?? null,
+    source: row.source === 'online' ? 'online' : 'staff',
   };
 }
 
@@ -50,12 +53,13 @@ export interface AppointmentFields {
 }
 
 // Frame 5 (Patient Record page, PatientChart.tsx) — "Podrobnosti termina."
-// Loads one patient's soonest not-yet-happened, not-cancelled appointment.
-// scheduleAppointment() both creates (no appointment yet) and reschedules
-// (one already exists) — Frame 5's single "Naroči/Prestavi termin" button
-// stays the same either way, just against real data now.
-export function useNextAppointment(patientId: string) {
-  const [appointment, setAppointment] = useState<Appointment | null>(null);
+// Every upcoming (not yet ended, not cancelled) appointment of one patient,
+// soonest first (Gregor, 2026-11-09 — it used to be only the next one, which
+// hid e.g. a second booking made online). scheduleAppointment() creates a new
+// one, or reschedules/edits the one whose id is passed. Reloads when the
+// window regains focus, so a booking made meanwhile (calendar, website) shows.
+export function useUpcomingAppointments(patientId: string) {
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,26 +70,28 @@ export function useNextAppointment(patientId: string) {
       .select(APPOINTMENT_COLUMNS)
       .eq('patient_id', patientId)
       .neq('status', 'cancelled')
-      .gte('starts_at', new Date().toISOString())
+      .gte('ends_at', new Date().toISOString())
       .order('starts_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(50);
     if (fetchError) {
       setError(fetchError.message);
       setLoading(false);
       return;
     }
-    setAppointment(data ? rowToAppointment(data) : null);
+    setAppointments((data ?? []).map(rowToAppointment));
     setError(null);
     setLoading(false);
   }, [patientId]);
 
   useEffect(() => {
     reload();
+    const onFocus = () => reload();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, [reload]);
 
   const scheduleAppointment = useCallback(
-    async (fields: AppointmentFields): Promise<{ appointment: Appointment } | { error: string }> => {
+    async (fields: AppointmentFields, appointmentId: string | null): Promise<{ appointment: Appointment } | { error: string }> => {
       // therapist_id is deliberately sparse, not always-`?? null` like the
       // other fields: Frame 5 (Patient Record page) never sets fields.therapistId
       // at all, since it has no therapist picker of its own — if this
@@ -99,30 +105,21 @@ export function useNextAppointment(patientId: string) {
         notes: fields.notes || null,
       };
       if (fields.therapistId !== undefined) columns.therapist_id = fields.therapistId;
-      const { data, error: saveError } = appointment
-        ? await supabase.from('appointments').update(columns).eq('id', appointment.id).select(APPOINTMENT_COLUMNS).single()
+      const { data, error: saveError } = appointmentId
+        ? await supabase.from('appointments').update(columns).eq('id', appointmentId).select(APPOINTMENT_COLUMNS).single()
         : await supabase
             .from('appointments')
             .insert({ patient_id: patientId, ...columns })
             .select(APPOINTMENT_COLUMNS)
             .single();
       if (saveError) return { error: saveError.message };
-      const saved = rowToAppointment(data);
-      setAppointment(saved);
-      return { appointment: saved };
+      await reload();
+      return { appointment: rowToAppointment(data) };
     },
-    [appointment, patientId]
+    [patientId, reload]
   );
 
-  const cancelAppointment = useCallback(async (): Promise<{ error: string } | null> => {
-    if (!appointment) return null;
-    const { error: cancelError } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appointment.id);
-    if (cancelError) return { error: cancelError.message };
-    await reload();
-    return null;
-  }, [appointment, reload]);
-
-  return { appointment, loading, error, reload, scheduleAppointment, cancelAppointment };
+  return { appointments, loading, error, reload, scheduleAppointment };
 }
 
 // "1982-03-12" -> the [start, end) UTC-ISO bounds of that calendar day in

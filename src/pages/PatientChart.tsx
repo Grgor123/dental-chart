@@ -17,9 +17,10 @@ import { useOpenVisit } from '../hooks/useOpenVisit';
 import { useVisit } from '../hooks/useVisit';
 import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
-import { useNextAppointment, useNextFreeSlot, type AppointmentStatus } from '../hooks/useAppointments';
+import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
+import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
 import { useWorkingHours } from '../hooks/useWorkingHours';
-import { usePracticeHours } from '../hooks/usePracticeHours';
+import { durationOptions, usePracticeHours } from '../hooks/usePracticeHours';
 import { outsideHoursMessage, toDateIso } from '../lib/workingHours';
 import { TimeSelect } from '../components/ui/TimeSelect';
 import { usePatients, type PatientListItem } from '../hooks/usePatients';
@@ -72,7 +73,7 @@ const WHOLE_TOOTH_MARKER_STATUSES: ToothStatus[] = [
 // referencing it, since the mockup stays a separate, independent dev-only
 // sandbox (same role StatusShowcase.tsx already plays) — not imported from
 // here. Frame 5's own appointment status/date/time is real now (see
-// useNextAppointment below), and so is its invoice panel (useInvoiceList,
+// useUpcomingAppointments below), and so is its invoice panel (useInvoiceList,
 // supabase/migrations/023_add_invoicing.sql).
 // ---------------------------------------------------------------------
 // "Ni termina" has no equivalent in the real AppointmentStatus enum (see
@@ -454,12 +455,12 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const totalUnpaid = unpaidInvoices.reduce((sum, inv) => sum + inv.totalEur, 0);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
-  // ---- Frame 5: real appointment data (supabase/migrations/
-  // 013_add_appointments.sql) — one modal handles both "Naroči naslednji
-  // termin" (no appointment.appointment yet) and "Prestavi termin"
-  // (rescheduling the existing one), since scheduleAppointment() already
-  // does the right thing for either case.
-  const { appointment: nextAppointment, scheduleAppointment } = useNextAppointment(patientId);
+  // ---- Frame 5: every upcoming appointment (supabase/migrations/
+  // 013_add_appointments.sql), each with "Prestavi"; one modal handles both
+  // "Naroči nov termin" (editingAppointment null) and editing a listed one.
+  const { appointments: upcomingAppointments, scheduleAppointment } = useUpcomingAppointments(patientId);
+  const nextAppointment = upcomingAppointments[0] ?? null;
+  const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
   const [appointmentModalError, setAppointmentModalError] = useState<string | null>(null);
   const [appointmentModalSaving, setAppointmentModalSaving] = useState(false);
@@ -474,9 +475,9 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const [appointmentTherapistId, setAppointmentTherapistId] = useState('');
   const [appointmentSlotAuto, setAppointmentSlotAuto] = useState(false);
   const { schedules: workingSchedules } = useWorkingHours();
-  const { practice: practiceHours } = usePracticeHours();
+  const { practice: practiceHours, durations: appointmentDurations } = usePracticeHours();
   const bookableTherapists = therapists.filter(
-    (t) => (!t.archived && isBookable(t)) || t.id === nextAppointment?.therapistId
+    (t) => (!t.archived && isBookable(t)) || t.id === editingAppointment?.therapistId
   );
   const todayDateIso = toDateIso(new Date());
   const [slotSearchFromIso] = useState(() => new Date(`${toDateIso(new Date())}T00:00:00`).toISOString());
@@ -510,10 +511,10 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // An existing appointment whose time isn't changed can still be edited
   // (e.g. marked "Opravljen") even if it lies outside the hours.
   const appointmentTimeChanged =
-    !nextAppointment ||
-    new Date(`${appointmentDate}T${appointmentTime}`).getTime() !== new Date(nextAppointment.startsAt).getTime() ||
+    !editingAppointment ||
+    new Date(`${appointmentDate}T${appointmentTime}`).getTime() !== new Date(editingAppointment.startsAt).getTime() ||
     appointmentDuration !==
-      Math.round((new Date(nextAppointment.endsAt).getTime() - new Date(nextAppointment.startsAt).getTime()) / 60000);
+      Math.round((new Date(editingAppointment.endsAt).getTime() - new Date(editingAppointment.startsAt).getTime()) / 60000);
   const appointmentBlocked = practiceHours.blockOutsideHours && appointmentOutsideHours != null && appointmentTimeChanged;
 
   /** The patient's own therapist, if they can be booked. */
@@ -522,17 +523,18 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     return own && !own.archived && isBookable(own) ? own.id : '';
   }
 
-  function openAppointmentModal() {
-    if (nextAppointment) {
-      const starts = new Date(nextAppointment.startsAt);
+  function openAppointmentModal(appointment: Appointment | null) {
+    setEditingAppointment(appointment);
+    if (appointment) {
+      const starts = new Date(appointment.startsAt);
       setAppointmentDate(
         `${starts.getFullYear()}-${String(starts.getMonth() + 1).padStart(2, '0')}-${String(starts.getDate()).padStart(2, '0')}`
       );
       setAppointmentTime(`${String(starts.getHours()).padStart(2, '0')}:${String(starts.getMinutes()).padStart(2, '0')}`);
-      setAppointmentDuration(Math.round((new Date(nextAppointment.endsAt).getTime() - starts.getTime()) / 60000));
-      setAppointmentService(nextAppointment.service ?? '');
-      setAppointmentStatus(nextAppointment.status);
-      setAppointmentTherapistId(nextAppointment.therapistId ?? ownBookableTherapistId());
+      setAppointmentDuration(Math.round((new Date(appointment.endsAt).getTime() - starts.getTime()) / 60000));
+      setAppointmentService(appointment.service ?? '');
+      setAppointmentStatus(appointment.status);
+      setAppointmentTherapistId(appointment.therapistId ?? ownBookableTherapistId());
       setAppointmentSlotAuto(false);
     } else {
       const today = new Date();
@@ -553,7 +555,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
 
   async function handleSaveAppointment() {
     if (appointmentBlocked) return;
-    if (!nextAppointment && new Date(`${appointmentDate}T${appointmentTime}`).getTime() < Date.now()) {
+    if (!editingAppointment && new Date(`${appointmentDate}T${appointmentTime}`).getTime() < Date.now()) {
       setAppointmentModalError('Ni mogoče ustvariti termina v preteklosti.');
       return;
     }
@@ -561,13 +563,16 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     setAppointmentModalError(null);
     const startsAt = new Date(`${appointmentDate}T${appointmentTime}`).toISOString();
     const endsAt = new Date(new Date(`${appointmentDate}T${appointmentTime}`).getTime() + appointmentDuration * 60000).toISOString();
-    const result = await scheduleAppointment({
-      startsAt,
-      endsAt,
-      service: appointmentService.trim() || undefined,
-      status: appointmentStatus,
-      therapistId: appointmentTherapistId || null,
-    });
+    const result = await scheduleAppointment(
+      {
+        startsAt,
+        endsAt,
+        service: appointmentService.trim() || undefined,
+        status: appointmentStatus,
+        therapistId: appointmentTherapistId || null,
+      },
+      editingAppointment?.id ?? null
+    );
     if ('error' in result) {
       setAppointmentModalSaving(false);
       setAppointmentModalError(result.error);
@@ -908,27 +913,47 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     <>
       <h2 className="mb-3 text-lg font-bold text-[var(--ink,#1c2624)]">Podrobnosti termina</h2>
       <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-1 flex-col items-start gap-2">
-          <span
-            className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${
-              nextAppointment ? APPOINTMENT_STATUS_META[nextAppointment.status].pillClass : NI_TERMINA_META.pillClass
-            }`}
-          >
-            {nextAppointment ? APPOINTMENT_STATUS_META[nextAppointment.status].label : NI_TERMINA_META.label}
-          </span>
+        <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
           <button
             type="button"
-            onClick={openAppointmentModal}
+            onClick={() => openAppointmentModal(null)}
             className="w-fit rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
           >
-            {nextAppointment ? 'Prestavi termin' : 'Naroči naslednji termin'}
+            Naroči nov termin
           </button>
-          {nextAppointment && (
-            <div className="flex flex-col gap-1 text-sm text-[var(--ink,#1c2624)]">
-              <span>Datum: {formatSlovenianDate(nextAppointment.startsAt.slice(0, 10))}</span>
-              <span>Ura: {new Date(nextAppointment.startsAt).toLocaleTimeString('sl-SI', { hour: '2-digit', minute: '2-digit' })}</span>
-              {nextAppointment.service && <span>Predvidena storitev: {nextAppointment.service}</span>}
-            </div>
+          {upcomingAppointments.length === 0 ? (
+            <span className={`w-fit rounded-full px-4 py-1.5 text-sm font-semibold ${NI_TERMINA_META.pillClass}`}>{NI_TERMINA_META.label}</span>
+          ) : (
+            <ul className="flex max-h-56 w-full flex-col gap-1.5 overflow-y-auto pr-1">
+              {upcomingAppointments.map((a) => {
+                const therapist = therapists.find((t) => t.id === a.therapistId);
+                return (
+                  <li key={a.id} className="rounded border border-[var(--line,#ccd6d4)] px-2.5 py-1.5 text-sm text-[var(--ink,#1c2624)]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold">
+                        {formatSlovenianDate(toDateIso(new Date(a.startsAt)))} ob{' '}
+                        {new Date(a.startsAt).toLocaleTimeString('sl-SI', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className={`flex-none rounded-full px-2 py-0.5 text-[11px] font-semibold ${APPOINTMENT_STATUS_META[a.status].pillClass}`}>
+                        {APPOINTMENT_STATUS_META[a.status].label}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs text-[var(--ink-soft,#45524f)]">
+                      <span className="truncate">
+                        {[a.service, therapist?.name, a.source === 'online' ? 'spletno' : null].filter(Boolean).join(' · ') || '—'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openAppointmentModal(a)}
+                        className="flex-none font-semibold text-[var(--accent,#2e6e62)] hover:underline"
+                      >
+                        Prestavi
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
         <div className="flex w-[150px] flex-none flex-col gap-1.5">
@@ -1415,7 +1440,14 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                 </div>
 
                 <div className="flex flex-col gap-1">
-                  <span className={VIEW_LABEL_CLASSES}>Datum rojstva</span>
+                  <div className="flex items-center gap-2">
+                    <span className={VIEW_LABEL_CLASSES}>Datum rojstva</span>
+                    {!patientDraft.dob && (
+                      <span className="rounded-full bg-[#fff4e0] px-2 py-0.5 text-xs font-semibold text-[#8a5a00]">
+                        {patient.source === 'online' ? 'Spletno naročilo — dopolnite' : 'Dopolnite'}
+                      </span>
+                    )}
+                  </div>
                   {editMode ? (
                     <input
                       value={patientDraft.dob}
@@ -1424,7 +1456,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                       className={FIELD_INPUT_CLASSES}
                     />
                   ) : (
-                    <span className={VIEW_VALUE_CLASSES}>{formatSlovenianDate(patientDraft.dob)}</span>
+                    <span className={VIEW_VALUE_CLASSES}>{patientDraft.dob ? formatSlovenianDate(patientDraft.dob) : '—'}</span>
                   )}
                 </div>
                 <div className="flex flex-col gap-1">
@@ -1848,21 +1880,28 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
 
         {appointmentModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={() => setAppointmentModalOpen(false)}>
-            <div className="w-full max-w-md rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="flex max-h-[92vh] w-full max-w-[1200px] flex-col rounded-md bg-[var(--surface,#fff)] p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">{nextAppointment ? 'Prestavi termin' : 'Naroči naslednji termin'}</h2>
+                <h2 className="text-xl font-bold text-[var(--ink,#1c2624)]">{editingAppointment ? 'Prestavi termin' : 'Naroči nov termin'}</h2>
                 <button type="button" onClick={() => setAppointmentModalOpen(false)} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
                   ✕
                 </button>
               </div>
-              <div className="flex flex-col gap-3">
-                <div className="flex gap-3">
-                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+              {/* Fields on top in two rows — date/time, then therapist and
+                  service — and the therapist's week below at full width
+                  (Gregor, 2026-11-09): pick the time in the fields or by
+                  clicking the calendar. */}
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
                     Datum
                     <input
                       type="date"
                       value={appointmentDate}
-                      min={nextAppointment ? undefined : todayDateIso}
+                      min={editingAppointment ? undefined : todayDateIso}
                       onChange={(e) => {
                         setAppointmentDate(e.target.value);
                         setAppointmentSlotAuto(false);
@@ -1870,7 +1909,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                       className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
                     />
                   </label>
-                  <label className="flex flex-none flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
                     Ura
                     <TimeSelect
                       value={appointmentTime}
@@ -1880,100 +1919,129 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                       }}
                     />
                   </label>
-                  <label className="flex flex-1 flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
                     Trajanje
                     <select
                       value={appointmentDuration}
                       onChange={(e) => setAppointmentDuration(Number(e.target.value))}
                       className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
                     >
-                      {[15, 30, 45, 60, 90].map((m) => (
-                        <option key={m} value={m}>
-                          {m} min
-                        </option>
-                      ))}
+                      {durationOptions(appointmentDurations, appointmentDuration).map((m) => (
+                          <option key={m} value={m}>
+                            {m} min
+                          </option>
+                        ))}
                     </select>
                   </label>
+                  {appointmentSlotAuto && (
+                    <p className="pb-2.5 text-xs text-[var(--muted,#6f7c79)]">
+                      {appointmentNextSlot.loading
+                        ? 'Iščem prvi prosti termin …'
+                        : appointmentNextSlot.slot
+                          ? `Prvi prosti termin${
+                              appointmentTherapistId
+                                ? ` za ${therapists.find((t) => t.id === appointmentTherapistId)?.name ?? 'terapevta'}`
+                                : ''
+                            }.`
+                          : 'V naslednjih 60 dneh ni prostega termina — izberite ga ročno.'}
+                    </p>
+                  )}
                 </div>
-                {appointmentSlotAuto && (
-                  <p className="-mt-1 text-xs text-[var(--muted,#6f7c79)]">
-                    {appointmentNextSlot.loading
-                      ? 'Iščem prvi prosti termin …'
-                      : appointmentNextSlot.slot
-                        ? `Prvi prosti termin${
-                            appointmentTherapistId
-                              ? ` za ${therapists.find((t) => t.id === appointmentTherapistId)?.name ?? 'terapevta'}`
-                              : ''
-                          }.`
-                        : 'V naslednjih 60 dneh ni prostega termina — izberite ga ročno.'}
-                  </p>
-                )}
-                <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
-                  Terapevt
-                  <select
-                    value={appointmentTherapistId}
-                    onChange={(e) => setAppointmentTherapistId(e.target.value)}
-                    className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
-                  >
-                    <option value="">Nedodeljen</option>
-                    {bookableTherapists.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                        {t.archived ? ' (arhiviran)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
-                  Predvidena storitev
-                  <input
-                    value={appointmentService}
-                    onChange={(e) => setAppointmentService(e.target.value)}
-                    placeholder="npr. Pregled + čiščenje"
-                    className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
-                  />
-                </label>
-                {nextAppointment && (
-                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)]">
-                    Status
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)] w-56">
+                    Terapevt
                     <select
-                      value={appointmentStatus}
-                      onChange={(e) => setAppointmentStatus(e.target.value as AppointmentStatus)}
+                      value={appointmentTherapistId}
+                      onChange={(e) => setAppointmentTherapistId(e.target.value)}
                       className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
                     >
-                      {(Object.keys(APPOINTMENT_STATUS_META) as AppointmentStatus[]).map((s) => (
-                        <option key={s} value={s}>
-                          {APPOINTMENT_STATUS_META[s].label}
+                      <option value="">Nedodeljen</option>
+                      {bookableTherapists.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                          {t.archived ? ' (arhiviran)' : ''}
                         </option>
                       ))}
                     </select>
                   </label>
-                )}
-                {appointmentOutsideHours &&
-                  (appointmentBlocked ? (
-                    <p className="rounded bg-[#fdecea] px-3 py-2 text-sm text-[var(--danger,#b3261e)]">
-                      {appointmentOutsideHours} Naročanje izven delovnega časa ni mogoče — izberite drug čas.
-                    </p>
-                  ) : (
-                    <p className="rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">
-                      ⚠ {appointmentOutsideHours} Termin lahko vseeno shranite.
-                    </p>
-                  ))}
-                {appointmentModalError && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka: {appointmentModalError}</p>}
-                <button
-                  type="button"
-                  onClick={handleSaveAppointment}
-                  disabled={appointmentModalSaving || appointmentBlocked}
-                  className="self-start rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
-                >
-                  {appointmentModalSaving
-                    ? 'Shranjujem …'
-                    : appointmentOutsideHours && !appointmentBlocked
-                      ? 'Vseeno shrani'
-                      : nextAppointment
-                        ? 'Shrani spremembe'
-                        : 'Ustvari termin'}
-                </button>
+                  <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)] min-w-[220px] flex-1">
+                    Predvidena storitev
+                    <input
+                      value={appointmentService}
+                      onChange={(e) => setAppointmentService(e.target.value)}
+                      placeholder="npr. Pregled + čiščenje"
+                      className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                    />
+                  </label>
+                  {editingAppointment && (
+                    <label className="flex flex-col gap-1 text-sm text-[var(--ink-soft,#45524f)] w-48">
+                      Status
+                      <select
+                        value={appointmentStatus}
+                        onChange={(e) => setAppointmentStatus(e.target.value as AppointmentStatus)}
+                        className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
+                      >
+                        {(Object.keys(APPOINTMENT_STATUS_META) as AppointmentStatus[]).map((s) => (
+                          <option key={s} value={s}>
+                            {APPOINTMENT_STATUS_META[s].label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
+                <div className="h-[min(560px,58vh)] min-h-[320px] w-full">
+                  <TherapistWeekPicker
+                    therapistId={appointmentTherapistId || null}
+                    therapistColor={therapists.find((t) => t.id === appointmentTherapistId)?.color}
+                    schedule={appointmentSchedule}
+                    practice={practiceHours}
+                    date={appointmentDate}
+                    time={appointmentTime}
+                    durationMinutes={appointmentDuration}
+                    label={`${patientDraft.lastName} ${patientDraft.firstName}`}
+                    editingAppointmentId={editingAppointment?.id ?? null}
+                    onPick={(dateIso, hhmm) => {
+                      setAppointmentDate(dateIso);
+                      setAppointmentTime(hhmm);
+                      setAppointmentSlotAuto(false);
+                    }}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  {appointmentOutsideHours &&
+                    (appointmentBlocked ? (
+                      <p className="mr-auto rounded bg-[#fdecea] px-3 py-2 text-sm text-[var(--danger,#b3261e)]">
+                        {appointmentOutsideHours} Naročanje izven delovnega časa ni mogoče — izberite drug čas.
+                      </p>
+                    ) : (
+                      <p className="mr-auto rounded bg-[#fff6e5] px-3 py-2 text-sm text-[#6b4a00]">
+                        ⚠ {appointmentOutsideHours} Termin lahko vseeno shranite.
+                      </p>
+                    ))}
+                  {appointmentModalError && <p className="mr-auto text-sm text-[var(--danger,#b3261e)]">Napaka: {appointmentModalError}</p>}
+                  <button
+                    type="button"
+                    onClick={() => setAppointmentModalOpen(false)}
+                    className="rounded-full border border-[var(--line,#ccd6d4)] px-4 py-1.5 text-sm font-semibold text-[var(--ink-soft,#45524f)] hover:border-[var(--accent,#2e6e62)]"
+                  >
+                    Prekliči
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveAppointment}
+                    disabled={appointmentModalSaving || appointmentBlocked}
+                    className="rounded-full bg-[var(--accent,#2e6e62)] px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                  >
+                    {appointmentModalSaving
+                      ? 'Shranjujem …'
+                      : appointmentOutsideHours && !appointmentBlocked
+                        ? 'Vseeno shrani'
+                        : editingAppointment
+                          ? 'Shrani spremembe'
+                          : 'Ustvari termin'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
