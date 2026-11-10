@@ -4830,7 +4830,7 @@ asked.
 - **Calendar**: online appointments carry a small **SPLETNO** tag.
 - **Tenant isolation**: section 4r (settings/embed key, visit types and their
   therapists, consents not writable/readable across practices; rate-limit
-  table closed) — **not yet run**.
+  table closed) — passed 2026-11-10 (68/68).
 - **Before Monika's version / production**: push to main (form page live),
   Turnstile keys, the production project ref in `backend.js`.
 
