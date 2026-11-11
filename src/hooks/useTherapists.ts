@@ -18,8 +18,14 @@ export const THERAPIST_KIND_LABELS: Record<TherapistKind, string> = {
 
 // Fixed palette rather than a raw color picker — keeps therapist colors
 // distinct from each other and from the app's own accent/status colors. The
-// first four match the approved calendar mockup.
-export const THERAPIST_COLORS = ['#57d974', '#5ce1e6', '#eece9a', '#ff914d', '#9C6ADE', '#4C7093', '#B3261E', '#607D8B'];
+// first four match the approved calendar mockup; the last four were lightened
+// on 2026-11-10 (dark colours read badly). The calendar shows a light shade
+// of any colour anyway (lib/therapistColors.ts). Four more (pink, yellow,
+// lime, brown) added the same day.
+export const THERAPIST_COLORS = [
+  '#57d974', '#5ce1e6', '#eece9a', '#ff914d', '#b99cf0', '#8fb6e0',
+  '#f2938c', '#a8bcc6', '#f5a8d0', '#f6dd6b', '#b8e07a', '#c9a27e',
+];
 
 /** Kinds that get their own calendar column and can be booked. Assistants
  *  come into the calendar with room/assistant booking (roadmap item 5). */

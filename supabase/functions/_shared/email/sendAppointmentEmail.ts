@@ -11,6 +11,7 @@ import { buildIcsEvent } from './ics.ts';
 import { logEmail, resolveUnsubscribeToken } from './log.ts';
 import { TEMPLATE_DEFS, type TemplateKey, type TemplateOverride } from './templateDefs.ts';
 import { publicPageUrl } from '../publicPages.ts';
+import { confirmPageUrl, ensureConfirmToken } from '../confirmToken.ts';
 
 /** The patient's unsubscribe link (persistent token per patient). */
 export function unsubscribeUrl(token: string): string {
@@ -131,7 +132,14 @@ export async function sendAppointmentEmail(
     service: appointment.service,
     therapistName: appointment.therapists?.name ?? null,
   });
-  const content = renderTemplate(templateKey, override, vars, { practiceName: practice.name, unsubscribeUrl: unsubscribeLink });
+  // The reminder carries the appointment's "Pridem / Ne pridem" link, the
+  // same one the SMS reminder uses (migration 052).
+  let actionUrl: string | undefined;
+  if (templateKey === 'appointment_reminder') {
+    const token = await ensureConfirmToken(supabase, appointment.id);
+    if (token) actionUrl = confirmPageUrl(token);
+  }
+  const content = renderTemplate(templateKey, override, vars, { practiceName: practice.name, unsubscribeUrl: unsubscribeLink, actionUrl });
 
   let attachmentIcs: { filename: string; content: string; method: 'REQUEST' | 'CANCEL' } | null = null;
   if (def.ics) {

@@ -9,6 +9,19 @@
 // (supabase/migrations/019_add_email_templates.sql) and only ever OVERRIDE
 // these defaults — no row, or a null column, means "use the default".
 
+// The SMS reminder (send-appointment-reminders): this many days before the
+// appointment, at this Europe/Ljubljana hour. The reminder email must go out
+// BEFORE it (Gregor, 2026-11-11): the SMS is only sent when the email's
+// "Pridem / Ne pridem" link hasn't been answered. Also enforced by the
+// database (migration 053) — change both together.
+export const SMS_REMINDER_DAYS_BEFORE = 2;
+export const SMS_REMINDER_HOUR = 14;
+
+/** Is a reminder email at `daysBefore` days, `hour` o'clock, sent before the SMS? */
+export function reminderEmailBeforeSms(daysBefore: number, hour: number): boolean {
+  return daysBefore > SMS_REMINDER_DAYS_BEFORE || (daysBefore === SMS_REMINDER_DAYS_BEFORE && hour < SMS_REMINDER_HOUR);
+}
+
 export const TEMPLATE_KEYS = [
   'appointment_confirmation',
   'appointment_reminder',
@@ -111,6 +124,9 @@ export interface TemplateDef {
   /** A fixed button the layout adds under the body (e.g. the questionnaire
       link) — its label isn't practice-editable, the URL is per recipient. */
   actionLabel: string | null;
+  /** The button goes after the whole body instead of after the second
+      paragraph (the reminder: date and service first, then the ask). */
+  actionAtEnd?: boolean;
   /** Sent only by hand (no automatic trigger), so there's no on/off switch. */
   manualOnly?: boolean;
   /** No unsubscribe footer — a business document (an invoice), not a
@@ -141,12 +157,16 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     description: 'Nekaj dni pred terminom.',
     defaultSubject: 'Opomnik na termin — {datum} ob {ura}',
     defaultHeading: 'Opomnik na termin',
-    defaultBody: 'Pozdravljeni {ime},\n\nspomnimo vas na vaš termin pri {ordinacija}:\n\n**{datum} ob {ura}**\n\nStoritev: {storitev}',
+    defaultBody:
+      'Pozdravljeni {ime},\n\nspomnimo vas na vaš termin pri {ordinacija}:\n\n**{datum} ob {ura}**\n\nStoritev: {storitev}\n\nProsimo, sporočite nam, ali boste prišli:',
     placeholders: APPOINTMENT_PLACEHOLDERS,
     ics: null,
-    timing: { unit: 'days_before', default: 2, min: 1, max: 14 },
+    // min 2: never after the SMS reminder (reminderEmailBeforeSms above).
+    timing: { unit: 'days_before', default: 2, min: 2, max: 14 },
     sendHourDefault: 9,
-    actionLabel: null,
+    // Same "Pridem / Ne pridem" page as the SMS reminder (Gregor, 2026-11-11).
+    actionLabel: 'Potrdite ali odpovejte termin',
+    actionAtEnd: true,
   },
   appointment_cancelled: {
     key: 'appointment_cancelled',

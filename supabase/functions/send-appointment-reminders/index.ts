@@ -18,7 +18,8 @@
 // nodes (read via the n8n API) — auth is a plain `apiKey` header, phone
 // goes in a `destinations` array, `message` is a {content, isUnicode}
 // object, and a successful response is `{ messages: [{ messageId }] }`.
-import { publicPageUrl } from '../_shared/publicPages.ts';
+import { confirmPageUrl, ensureConfirmToken } from '../_shared/confirmToken.ts';
+import { SMS_REMINDER_DAYS_BEFORE, SMS_REMINDER_HOUR } from '../_shared/email/templateDefs.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -54,23 +55,24 @@ Deno.serve(async (req) => {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  if (ljubljanaHour() !== 14) {
+  if (ljubljanaHour() !== SMS_REMINDER_HOUR) {
     return new Response('Not the scheduled hour, skipping.', { status: 200 });
   }
 
-  const targetYmd = toLjubljanaYmd(new Date(Date.now() + 2 * 86400000).toISOString());
+  const targetYmd = toLjubljanaYmd(new Date(Date.now() + SMS_REMINDER_DAYS_BEFORE * 86400000).toISOString());
   // Padded a full day either side of the 2-day target — the exact target
   // day is filtered precisely in JS below via toLjubljanaYmd, so this only
   // needs to not miss anything near a UTC/local day boundary.
-  const queryStart = new Date(Date.now() + 1 * 86400000).toISOString();
-  const queryEnd = new Date(Date.now() + 3 * 86400000).toISOString();
+  const queryStart = new Date(Date.now() + (SMS_REMINDER_DAYS_BEFORE - 1) * 86400000).toISOString();
+  const queryEnd = new Date(Date.now() + (SMS_REMINDER_DAYS_BEFORE + 1) * 86400000).toISOString();
 
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('id, starts_at, status, patients(phone, sms_consent_status)')
     .gte('starts_at', queryStart)
     .lt('starts_at', queryEnd)
-    .not('status', 'in', '(cancelled,completed)');
+    // Already answered (e.g. "Pridem" in the reminder email) → no SMS.
+    .not('status', 'in', '(cancelled,completed,confirmed)');
   if (error) return new Response(`Query failed: ${error.message}`, { status: 500 });
 
   const targets = (appointments ?? []).filter((a) => {
@@ -86,12 +88,14 @@ Deno.serve(async (req) => {
     if (existing) continue;
 
     const patient = appt.patients as unknown as PatientJoin;
-    const token = randomToken();
+    // The appointment's own token (migration 052) — the reminder email's
+    // link is the same one, so either answer counts.
+    const token = (await ensureConfirmToken(supabase, appt.id)) ?? randomToken();
     const time = new Date(appt.starts_at).toLocaleString('sl-SI', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Ljubljana' });
     // Points at the GitHub Pages page, not this Edge Function's own URL —
     // see appointment-confirm's own comment for why (Supabase won't serve
     // real HTML from *.supabase.co).
-    const link = publicPageUrl('appointment-confirm.html', token);
+    const link = confirmPageUrl(token);
     // Plain ASCII (no š/č/ž), matching the sibling n8n workflow's own
     // reminder text convention (isUnicode: false below) — GSM-7 keeps this
     // a single, cheaper SMS segment.

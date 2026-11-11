@@ -14,6 +14,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { WorkingHoursDialog } from './WorkingHoursDialog';
 import { useWorkingHours } from '../../hooks/useWorkingHours';
 import { ABSENCE_LABELS, describeConflict, scheduleConflicts, toDateIso } from '../../lib/workingHours';
+import { swatchStyle } from '../../lib/therapistColors';
 
 // Nastavitve → Ekipa (migration 046): the people who treat or assist, and the
 // practice's rooms (ordinacije). Replaces the calendar's old "+ terapevt".
@@ -73,13 +74,13 @@ function ColorPicker({ value, onChange, disabled }: { value: string; onChange: (
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         aria-label="Barva v koledarju"
-        className="h-6 w-6 rounded-full border border-black/10 disabled:cursor-default"
-        style={{ backgroundColor: value }}
+        className="h-6 w-6 rounded-full disabled:cursor-default"
+        style={swatchStyle(value)}
       />
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-8 z-20 flex w-[136px] flex-wrap gap-2 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-2 shadow-lg">
+          <div className="absolute left-0 top-8 z-20 grid w-max grid-cols-4 gap-2 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-2 shadow-lg">
             {THERAPIST_COLORS.map((c) => (
               <button
                 key={c}
@@ -90,7 +91,7 @@ function ColorPicker({ value, onChange, disabled }: { value: string; onChange: (
                   if (c !== value) onChange(c);
                 }}
                 className="h-6 w-6 rounded-full"
-                style={{ backgroundColor: c, outline: c === value ? '2px solid var(--ink, #1c2624)' : 'none', outlineOffset: 2 }}
+                style={{ ...swatchStyle(c), outline: c === value ? '2px solid var(--ink, #1c2624)' : 'none', outlineOffset: 2 }}
               />
             ))}
           </div>
@@ -320,7 +321,7 @@ export function TeamSection() {
               <ul className="flex flex-col gap-1 text-sm">
                 {archived.map((t) => (
                   <li key={t.id} className="flex items-center gap-3 text-[var(--ink-soft,#45524f)]">
-                    <span className="h-3 w-3 rounded-full opacity-50" style={{ backgroundColor: t.color }} />
+                    <span className="h-3 w-3 rounded-full opacity-50" style={swatchStyle(t.color)} />
                     <span>
                       {t.name} · {THERAPIST_KIND_LABELS[t.kind]}
                     </span>

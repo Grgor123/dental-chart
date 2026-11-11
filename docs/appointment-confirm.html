@@ -23,7 +23,7 @@
     const FUNCTION_URL = window.dcFunctionUrl('appointment-confirm');
     const token = new URLSearchParams(location.search).get('token');
     const app = document.getElementById('app');
-    const LABELS = { confirmed: 'potrjen', declined: 'odpovedan' };
+    const LABELS = { confirmed: 'potrjen', declined: 'odpovedan', past: 'zaključen' };
 
     function render(html) { app.innerHTML = html; }
 

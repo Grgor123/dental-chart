@@ -239,12 +239,16 @@ export function renderTemplate(
   const paragraphs = paragraphsOf(pick(override?.body, def.defaultBody), vars);
 
   // The action button goes after the second paragraph (greeting + the ask),
-  // so it's visible without scrolling; anything further follows it.
+  // so it's visible without scrolling; anything further follows it — or,
+  // with actionAtEnd, after the whole body.
   const action = def.actionLabel && context.actionUrl ? { label: def.actionLabel, url: context.actionUrl } : null;
   const paragraphHtml = paragraphs.map(paragraphToHtml);
+  const buttonAfter = def.actionAtEnd ? paragraphHtml.length : 2;
   const sections = context.sections ?? [];
   const bodyHtml = [
-    action ? [...paragraphHtml.slice(0, 2), actionButtonHtml(action), ...paragraphHtml.slice(2)].join('\n') : paragraphHtml.join('\n'),
+    action
+      ? [...paragraphHtml.slice(0, buttonAfter), actionButtonHtml(action), ...paragraphHtml.slice(buttonAfter)].join('\n')
+      : paragraphHtml.join('\n'),
     ...sections.map((section) => sectionHtml(section, vars)),
   ].join('\n');
 

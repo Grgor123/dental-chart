@@ -11,7 +11,9 @@ import { AppointmentChip } from './AppointmentChip';
 // gives this component a fixed-height flex ancestor via h-screen).
 export const GRID_START_HOUR = 0;
 export const GRID_END_HOUR = 24;
-const HOUR_HEIGHT = 56; // px per hour — tall enough to fit a 15-min chip's own two lines of text
+// px per hour — 64 so a 30-minute appointment shows two lines, name and time
+// (Gregor, 2026-11-10; it was 56). 15-minute ones use one line.
+const HOUR_HEIGHT = 64;
 // Where the grid's scroll position opens by default — the old business-hours
 // window, now that 00-24 all exist but midnight isn't a useful starting
 // scroll position, same as Google Calendar's own default scroll-into-view.

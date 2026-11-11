@@ -525,7 +525,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`051_appointment_durations.sql` — all confirmed run (016–019 are the
+`053_reminder_email_before_sms.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -538,9 +538,11 @@ API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
 projects"; 045 voice entry's taught words, see "Voice entry"; 046–049 team, rooms,
 working hours, clinic hours and yearly closed days, see "Team and rooms"; 050–051 online booking
-and the clinic's appointment durations, see "Online booking"). `supabase/schema.sql`
+and the clinic's appointment durations, see "Online booking"; 052–053 the
+reminder email's confirm link, see "Reminder confirmation" under "Native
+scheduling calendar"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(051 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(053 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3300,11 +3302,12 @@ fed from one another in any way; don't conflate them.
   request has gone out, awaiting reply; purely staff-set, no real
   notification-sending exists), `confirmed` ("Potrjen"), `completed`
   ("Opravljen"), `cancelled` ("Odpovedan"), `no_show` ("Ni se
-  zglasil/-a"). `appointmentBadge()` maps `confirmed` → a tick and
-  `cancelled` → a cross, both rendered in the same red (both badges are the
-  same color deliberately — shape, not color, is what tells confirmed from
-  declined apart, per Gregor's explicit instruction) as a small circular
-  badge in a chip's top-right corner. `appointmentChipStyle()` gives `sent`
+  zglasil/-a"). `appointmentBadge()` gives the small white circle at the
+  chip's **top left** (Gregor, 2026-11-10/11): green ✓ = `confirmed`, red ✕ =
+  `cancelled` (both used to be red, top right), **empty** = the reminder
+  email with the confirm link went out (or status `sent`), **blue centre**
+  (the chart's `DONE_COLOR`) = still unanswered, so the 14:00 SMS went out
+  too — see "Reminder confirmation" below. `appointmentChipStyle()` gives `sent`
   a dashed chip border. **`cancelled` used to also render the chip
   blurred/dimmed** — removed per Gregor's explicit request: a declined
   appointment should look like any other chip, marked only by its cross
@@ -3347,9 +3350,14 @@ fed from one another in any way; don't conflate them.
   dismissing after 4s. Past time is also visually shaded (a faint tint) —
   the whole column for an earlier day, just the portion above the red "now"
   line for today.
-- **`AppointmentChip.tsx`**: solid therapist-color background (not a light
-  tint), patient name (bold) then time range then service, truncated;
-  falls back to a neutral grey (`NEUTRAL_COLOR`) when unassigned. Color
+- **`AppointmentChip.tsx`**: a **light shade** of the therapist's colour
+  with the full colour as border and 3 px left stripe (`lib/therapistColors.ts`
+  `lightShade()` — Gregor, 2026-11-10: solid dark colours read badly; this
+  replaced the earlier solid fill). First line: badge (left), patient name,
+  **SPLETNO** tag (right) for online bookings; then the time range, then the
+  service. **15 minutes or shorter: everything on one line.** The grid is 64
+  px per hour (was 56) so a 30-minute appointment fits two lines. Falls back
+  to a neutral grey (`NEUTRAL_COLOR`) when unassigned. Color
   resolution differs by view since a Day column already *is* one
   therapist (`column.accentColor`) but a Week/Month column is a day, not a
   resource — those pass `resolveEventColor` instead, resolving each
@@ -3358,8 +3366,9 @@ fed from one another in any way; don't conflate them.
   color too** (a small dot before the patient name) — this was a real gap
   fixed after Day/Week already had it, since `MonthOverview.tsx`'s chips
   originally rendered as a flat, uncolored grey pill.
-- **`TherapistPanel.tsx`** ("Terapevti:") — solid-color name chips in a
-  wrapping grid, not a checkbox+dot row. **Clicking a chip cycles a filter**
+- **`TherapistPanel.tsx`** ("Terapevti:") — name chips in the same light
+  shade as the appointments (full colour as border; the selected chip's
+  outline is no longer clipped), in a wrapping grid, not a checkbox+dot row. **Clicking a chip cycles a filter**
   (Gregor, 2026-10-22, replacing a plain hide toggle): everyone → **only this
   therapist** (chip outlined; "Nedodeljen" hidden too) → **everyone except
   this one** (chip dimmed to 35%) → everyone; clicking another chip while
@@ -3378,6 +3387,20 @@ fed from one another in any way; don't conflate them.
   stretches (`h-full`/`flex-1`) to reach exactly 12px above `MiniCalendar`**
   sitting below it in the same sidebar column, per Gregor's explicit
   request, rather than sizing to its own content and leaving a gap.
+- **Reminder confirmation** (Gregor, 2026-11-11; migrations 052–053): one
+  "Pridem / Ne pridem" link per appointment (`appointments.confirm_token`,
+  `_shared/confirmToken.ts`), carried by the **reminder email** (button
+  "Potrdite ali odpovejte termin", default 2 days before at 09:00) **and** the
+  **SMS reminder** (2 days before at 14:00). The SMS is sent only if the
+  appointment is still unanswered (not confirmed/cancelled). `appointment-confirm`
+  reads the answer from the appointment, so the second link says "already
+  answered"; old SMS tokens (appointment_reminders) still work, a past visit
+  says "zaključen". **Safety rule**: the reminder email may not be set later
+  than the SMS — at least 2 days before, and on day 2 before 14:00 (E-pošta
+  page check + database constraint `email_templates_reminder_before_sms`;
+  shared values `SMS_REMINDER_DAYS_BEFORE` / `SMS_REMINDER_HOUR` in
+  `templateDefs.ts`). Calendar: empty circle after the email, blue centre after
+  the SMS, ✓/✕ once answered. Undelivered email/SMS don't count.
 - **`MiniCalendar.tsx`** — a small month-picker widget in the sidebar
   (month navigation, Monday-first day grid, today/selected-day
   highlighting), clicking a date jumps the main calendar there. Its own
@@ -3955,11 +3978,10 @@ before starting):
    unsubscribe made in the autoresponder back to `marketing_consent = false`.
    Webhook/API-key configuration belongs on the deferred Nastavitve page.
 
-**Explicitly out of scope this phase**: confirm/decline via email (SMS's
-own `appointment-confirm` token flow already covers that; duplicating it
-for email would mean two channels racing to set `appointments.status` for
-no real benefit — these emails are informational-only: time, service,
-`.ics` attachment, unsubscribe link); speculative email types with no real trigger yet (a welcome
+**Explicitly out of scope this phase** (as first designed): confirm/decline
+via email — **since reversed (2026-11-11)**: the reminder email now carries
+the same confirm link as the SMS, see "Reminder confirmation" under "Native
+scheduling calendar"; the other emails stay informational-only. Speculative email types with no real trigger yet (a welcome
 email has no practice-signup code path to hang off, since practices are
 still created manually via the dashboard; a staff-invite email has no
 invite UI, per "Out of Scope for Phase 1" below) — the `_shared/email/`
@@ -5522,7 +5544,15 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-10 (Online booking — embeddable form + public Edge
+*Last updated: 2026-11-11 (Calendar design — light therapist shades with a
+colour stripe, ✓ green / ✕ red at the chip's top left, SPLETNO at the top
+right, 64 px per hour, 15-minute appointments on one line, 12 lighter team
+colours in a 4 × 3 picker; reminder email with the "Pridem / Ne pridem" link,
+SMS only if unanswered, empty / blue-centred circle in the calendar, email
+never later than the SMS — migrations 052–053. See "Native scheduling
+calendar".)*
+
+*Previous entry: 2026-11-10 (Online booking — embeddable form + public Edge
 Function, visit types in Nastavitve → Spletno naročanje, patient matched by
 name + email/phone, no birth date (patients.dob optional), therapist chosen by
 the app — migration 050; the clinic's appointment durations — migration 051;

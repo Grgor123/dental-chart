@@ -1,4 +1,5 @@
 import type { Therapist } from '../../hooks/useTherapists';
+import { lightShade } from '../../lib/therapistColors';
 
 interface TherapistPanelProps {
   therapists: Therapist[];
@@ -14,7 +15,9 @@ interface TherapistPanelProps {
 // Mockup shows each therapist as a solid-colored name chip (not a
 // checkbox+dot row) in a two-column wrap grid. Clicking a chip cycles the
 // calendar's filter (Gregor, 2026-10-22): only this therapist (outlined) →
-// everyone except them (dimmed) → everyone.
+// everyone except them (dimmed) → everyone. Chips use the same light shade
+// as the calendar's appointments, with the full colour as the border
+// (Gregor, 2026-11-10).
 export function TherapistPanel({ therapists, hiddenIds, filter, onToggleVisibility, onEditTeam }: TherapistPanelProps) {
   // What the next click on this chip does (see Calendar.tsx's toggleTherapistVisibility).
   function nextAction(id: string): string {
@@ -42,7 +45,9 @@ export function TherapistPanel({ therapists, hiddenIds, filter, onToggleVisibili
           fixed-height calendar frame it sits beside) instead of scrolling
           internally. content-start keeps wrapped rows anchored to the top
           rather than centering in the leftover vertical space. */}
-      <div className="flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-y-auto">
+      {/* -m-1 p-1: room for the selected chip's outline, which the
+          scroll area otherwise clips. */}
+      <div className="-m-1 flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-y-auto p-1">
         {therapists.map((t) => {
           const hidden = hiddenIds.has(t.id);
           return (
@@ -51,9 +56,11 @@ export function TherapistPanel({ therapists, hiddenIds, filter, onToggleVisibili
               type="button"
               onClick={() => onToggleVisibility(t.id)}
               title={nextAction(t.id)}
-              className="flex-none rounded-md px-3 py-1.5 text-sm font-semibold text-[var(--ink,#1c2624)]"
+              className="flex-none rounded-md border px-3 py-1.5 text-sm font-semibold text-[var(--ink,#1c2624)]"
               style={{
-                backgroundColor: t.color,
+                backgroundColor: lightShade(t.color),
+                borderColor: t.color,
+                borderLeftWidth: 3,
                 opacity: hidden ? 0.35 : 1,
                 outline: filter.kind === 'only' && filter.id === t.id ? '2px solid var(--ink, #1c2624)' : 'none',
                 outlineOffset: 2,

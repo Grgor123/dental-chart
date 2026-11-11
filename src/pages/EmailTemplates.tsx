@@ -7,6 +7,9 @@ import { useAftercareTopics } from '../hooks/useAftercareTopics';
 import { AftercareTopicsSection } from '../components/email/AftercareTopicsSection';
 import {
   PLACEHOLDER_LABELS,
+  reminderEmailBeforeSms,
+  SMS_REMINDER_DAYS_BEFORE,
+  SMS_REMINDER_HOUR,
   TEMPLATE_DEFS,
   TEMPLATE_KEYS,
   type TemplateDef,
@@ -259,6 +262,14 @@ function TemplateEditor({
     if (values.sendHour !== null && (!Number.isInteger(values.sendHour) || values.sendHour < 0 || values.sendHour > 23)) {
       return 'Ura mora biti med 0 in 23.';
     }
+    if (
+      def.key === 'appointment_reminder' &&
+      values.timingValue !== null &&
+      values.sendHour !== null &&
+      !reminderEmailBeforeSms(values.timingValue, values.sendHour)
+    ) {
+      return `Opomnik po e-pošti mora iti pred SMS opomnikom (${SMS_REMINDER_DAYS_BEFORE} dni pred terminom ob ${SMS_REMINDER_HOUR}:00) — SMS se pošlje le, če pacient na e-pošto ne odgovori. Izberite ${SMS_REMINDER_DAYS_BEFORE} dni pred terminom do ${SMS_REMINDER_HOUR - 1}:00 ali več dni.`;
+    }
     return null;
   }
 
@@ -493,6 +504,18 @@ function TimingControls({ def, values, setValues }: TimingControlsProps) {
         <>
           {valueInput} dni pred terminom, ob {hourInput}
         </>
+      )}
+      {def.key === 'appointment_reminder' && (
+        <p
+          className={`w-full text-xs ${
+            values.timingValue !== null && values.sendHour !== null && !reminderEmailBeforeSms(values.timingValue, values.sendHour)
+              ? 'font-semibold text-[var(--danger,#b3261e)]'
+              : 'text-[var(--muted,#6f7c79)]'
+          }`}
+        >
+          Mora iti pred SMS opomnikom ({SMS_REMINDER_DAYS_BEFORE} dni pred terminom ob {SMS_REMINDER_HOUR}:00), ki se pošlje le pacientom, ki
+          na e-pošto niso odgovorili.
+        </p>
       )}
       {timing.unit === 'hours_after' && <>{valueInput} ur po koncu opravljenega termina</>}
       {timing.unit === 'months_after' && (

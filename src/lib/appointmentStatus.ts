@@ -15,12 +15,20 @@ export const APPOINTMENT_STATUS_META: Record<AppointmentStatus, { label: string;
 export const APPOINTMENT_STATUS_ORDER: AppointmentStatus[] = ['scheduled', 'sent', 'confirmed', 'completed', 'no_show', 'cancelled'];
 
 // Grid-chip-only badge treatment (Calendar.tsx's day/week grid) — Frame 5's
-// plain status pill never shows these, only the label/color above. Per
-// Gregor's explicit instruction, BOTH badges render in red — tick vs.
-// cross shape is what distinguishes confirmed from declined, not color.
-export function appointmentBadge(status: AppointmentStatus): 'tick' | 'cross' | null {
+// plain status pill never shows these, only the label/color above. Green
+// tick = confirmed, red cross = declined (Gregor, 2026-11-10 — both used to
+// be red); an empty circle = the reminder email with the confirm link went
+// out (or status "Poslano"); a blue centre = still no answer, so the 14:00
+// SMS went out too — shows the SMS were sent. Colours in AppointmentChip.tsx.
+export function appointmentBadge(
+  status: AppointmentStatus,
+  reminder: 'email' | 'sms' | null = null
+): 'tick' | 'cross' | 'pending' | 'pending-sms' | null {
   if (status === 'confirmed') return 'tick';
   if (status === 'cancelled') return 'cross';
+  if (status !== 'scheduled' && status !== 'sent') return null;
+  if (reminder === 'sms') return 'pending-sms';
+  if (reminder === 'email' || status === 'sent') return 'pending';
   return null;
 }
 

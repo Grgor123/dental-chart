@@ -3,6 +3,7 @@ import type { Therapist } from '../../hooks/useTherapists';
 import type { useWorkingHours } from '../../hooks/useWorkingHours';
 import { PeriodsEditor, periodsError } from './PeriodsEditor';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { swatchStyle } from '../../lib/therapistColors';
 import {
   ABSENCE_LABELS,
   describeConflict,
@@ -259,7 +260,7 @@ export function WorkingHoursDialog({
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-[var(--ink,#1c2624)]">
             Delovni čas — {therapist.name}
-            <span className="ml-2 inline-block h-3 w-3 rounded-full align-middle" style={{ backgroundColor: therapist.color }} />
+            <span className="ml-2 inline-block h-3 w-3 rounded-full align-middle" style={swatchStyle(therapist.color)} />
           </h2>
           <button type="button" onClick={handleClose} className="text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]">
             ✕

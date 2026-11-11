@@ -3482,3 +3482,21 @@ alter table public.practice_settings
       and 480 >= all (appointment_durations)
     )
   );
+
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/052_appointment_confirm_token.sql.
+-- ---------------------------------------------------------------------------
+alter table public.appointments
+  add column confirm_token text unique check (confirm_token is null or length(confirm_token) between 8 and 64);
+
+
+-- ---------------------------------------------------------------------------
+-- Baked in from supabase/migrations/053_reminder_email_before_sms.sql.
+-- ---------------------------------------------------------------------------
+alter table public.email_templates
+  add constraint email_templates_reminder_before_sms check (
+    template_key <> 'appointment_reminder'
+    or coalesce(timing_value, 2) > 2
+    or (coalesce(timing_value, 2) = 2 and coalesce(send_hour, 9) < 14)
+  );

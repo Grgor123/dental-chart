@@ -20,6 +20,11 @@ export interface Appointment {
   therapistId: string | null;
   /** 'online' = booked by the patient on the website (migrations 048/050). */
   source?: 'staff' | 'online';
+  /** Which reminder with the "Pridem / Ne pridem" link went out (Gregor,
+   *  2026-11-11): 'email' (09:00) → empty circle, 'sms' (14:00, sent only if
+   *  still unanswered) → circle with a blue centre. Undelivered ones don't
+   *  count. Only loaded by useAppointmentsForRange. */
+  reminder?: 'email' | 'sms' | null;
 }
 
 export interface AppointmentWithPatient extends Appointment {
@@ -203,6 +208,25 @@ export function useAppointmentsForRange(startIso: string, endIsoExclusive: strin
       setLoading(false);
       return;
     }
+    // Which still-open appointments already got a reminder with the confirm
+    // link (Gregor, 2026-11-11). A failed lookup just means no circles.
+    const openIds = (data ?? []).filter((row) => row.status === 'scheduled' || row.status === 'sent').map((row) => row.id as string);
+    const reminded = new Map<string, 'email' | 'sms'>();
+    if (openIds.length > 0) {
+      const [mail, sms] = await Promise.all([
+        supabase
+          .from('email_log')
+          .select('appointment_id')
+          .eq('email_type', 'appointment_reminder')
+          .in('status', ['sent', 'delivered'])
+          .in('appointment_id', openIds),
+        supabase.from('appointment_reminders').select('appointment_id, delivery_status').in('appointment_id', openIds),
+      ]);
+      for (const r of mail.data ?? []) reminded.set(r.appointment_id as string, 'email');
+      for (const r of sms.data ?? []) {
+        if (!['FAILED', 'REJECTED', 'CANCELLED'].includes((r.delivery_status as string | null) ?? '')) reminded.set(r.appointment_id as string, 'sms');
+      }
+    }
     setAppointments(
       (data ?? []).map((row) => {
         const patient = row.patients as unknown as { first_name: string; last_name: string } | null;
@@ -210,6 +234,7 @@ export function useAppointmentsForRange(startIso: string, endIsoExclusive: strin
           ...rowToAppointment(row),
           patientFirstName: patient?.first_name ?? '',
           patientLastName: patient?.last_name ?? '',
+          reminder: reminded.get(row.id as string) ?? null,
         };
       })
     );
