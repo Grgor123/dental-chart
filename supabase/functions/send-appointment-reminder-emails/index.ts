@@ -31,6 +31,18 @@ Deno.serve(async (req) => {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  // "Pošlji e-pošto in SMS za potrditev termina" (migration 055 trigger):
+  // this one appointment's reminder, now — if it's still open and ahead.
+  const body = (await req.json().catch(() => null)) as { appointmentId?: unknown } | null;
+  if (body && typeof body.appointmentId === 'string') {
+    const { data: appt } = await supabase.from('appointments').select('id, starts_at, status').eq('id', body.appointmentId).maybeSingle();
+    if (!appt || !['scheduled', 'sent'].includes(appt.status as string) || Date.parse(appt.starts_at as string) <= Date.now()) {
+      return new Response('Appointment not open or already past — nothing sent.', { status: 200 });
+    }
+    const outcome = await sendAppointmentEmail(supabase, { appointmentId: appt.id as string, templateKey: 'appointment_reminder', force: true });
+    return new Response(`Confirmation request: ${outcome.status}${'reason' in outcome ? ` (${outcome.reason})` : ''}.`, { status: 200 });
+  }
+
   const currentHour = ljubljanaHour();
 
   const { data: practices, error: practicesError } = await supabase.from('practices').select('id');

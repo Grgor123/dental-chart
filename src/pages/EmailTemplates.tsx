@@ -5,6 +5,7 @@ import { usePracticeContext } from '../contexts/PracticeContext';
 import { useEmailTemplates, type TemplateFormValues } from '../hooks/useEmailTemplates';
 import { useAftercareTopics } from '../hooks/useAftercareTopics';
 import { AftercareTopicsSection } from '../components/email/AftercareTopicsSection';
+import { ContactEmailField } from '../components/email/ContactEmailField';
 import {
   PLACEHOLDER_LABELS,
   reminderEmailBeforeSms,
@@ -81,6 +82,8 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
             Prilagodite besedilo in čas pošiljanja samodejnih e-poštnih sporočil pacientom ter besedilo e-pošte, s katero pošiljate račune.
           </p>
         </div>
+
+        <ContactEmailField />
 
         {loading && <p className="text-sm text-[var(--ink-soft,#45524f)]">Nalaganje …</p>}
         {error && <p className="text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {error}</p>}

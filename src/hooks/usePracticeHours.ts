@@ -23,6 +23,13 @@ export function usePracticeHours() {
   const [closed, setClosed] = useState<ClosedDay[]>([]);
   const [blockOutsideHours, setBlock] = useState(false);
   const [durations, setDurationsState] = useState<number[]>(DEFAULT_APPOINTMENT_DURATIONS);
+  // Daily confirmation report (migration 054): on/off, recipient, and the
+  // practice's contact email it falls back to.
+  const [report, setReport] = useState<{ enabled: boolean; email: string; fallbackEmail: string }>({
+    enabled: true,
+    email: '',
+    fallbackEmail: '',
+  });
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -61,6 +68,15 @@ export function usePracticeHours() {
     const d = await supabase.from('practice_settings').select('appointment_durations').maybeSingle();
     const list = (d.data?.appointment_durations as number[] | null | undefined) ?? null;
     setDurationsState(!d.error && list && list.length > 0 ? [...list].sort((a, b) => a - b) : DEFAULT_APPOINTMENT_DURATIONS);
+    const [r, p] = await Promise.all([
+      supabase.from('practice_settings').select('reminder_report_enabled, reminder_report_email').maybeSingle(),
+      supabase.from('practices').select('contact_email').maybeSingle(),
+    ]);
+    setReport({
+      enabled: r.error ? true : ((r.data?.reminder_report_enabled as boolean | undefined) ?? true),
+      email: r.error ? '' : ((r.data?.reminder_report_email as string | null | undefined) ?? ''),
+      fallbackEmail: (p.data?.contact_email as string | null | undefined) ?? '',
+    });
   }, []);
 
   useEffect(() => {
@@ -140,5 +156,37 @@ export function usePracticeHours() {
     return upsertError ? { error: upsertError.message } : {};
   }
 
-  return { practice, durations, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours, setDurations };
+  /** Saves the daily confirmation report's on/off and recipient ('' = contact email). */
+  async function saveReport(fields: { enabled?: boolean; email?: string }): Promise<{ error?: string }> {
+    if (!practiceId) return { error: 'Ordinacija ni bila najdena.' };
+    const values: Record<string, unknown> = { practice_id: practiceId, updated_at: new Date().toISOString() };
+    if (fields.enabled !== undefined) values.reminder_report_enabled = fields.enabled;
+    if (fields.email !== undefined) values.reminder_report_email = fields.email.trim() || null;
+    const { error: upsertError } = await supabase.from('practice_settings').upsert(values);
+    await reload();
+    return upsertError ? { error: upsertError.message } : {};
+  }
+
+  /** Sends the report for the day after tomorrow right now (send-reminder-report). */
+  async function sendReportNow(): Promise<{ sent?: boolean; message?: string; error?: string }> {
+    const { data, error: invokeError } = await supabase.functions.invoke('send-reminder-report', { body: {} });
+    if (invokeError) return { error: invokeError.message };
+    const result = data as { sent?: boolean; message?: string; error?: string } | null;
+    return result ?? { error: 'Ni odgovora.' };
+  }
+
+  return {
+    practice,
+    durations,
+    report,
+    error,
+    saveWeekly,
+    addClosed,
+    addClosedMany,
+    removeClosed,
+    setBlockOutsideHours,
+    setDurations,
+    saveReport,
+    sendReportNow,
+  };
 }

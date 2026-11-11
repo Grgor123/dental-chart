@@ -25,6 +25,9 @@ export interface Appointment {
    *  still unanswered) → circle with a blue centre. Undelivered ones don't
    *  count. Only loaded by useAppointmentsForRange. */
   reminder?: 'email' | 'sms' | null;
+  /** When "Pošlji e-pošto in SMS za potrditev termina" was last ticked
+   *  (migration 055) — reminders before it don't count any more. */
+  confirmRequestedAt?: string | null;
 }
 
 export interface AppointmentWithPatient extends Appointment {
@@ -32,7 +35,7 @@ export interface AppointmentWithPatient extends Appointment {
   patientLastName: string;
 }
 
-const APPOINTMENT_COLUMNS = 'id, patient_id, starts_at, ends_at, status, service, notes, therapist_id, source';
+const APPOINTMENT_COLUMNS = 'id, patient_id, starts_at, ends_at, status, service, notes, therapist_id, source, confirm_requested_at';
 
 function rowToAppointment(row: Record<string, unknown>): Appointment {
   return {
@@ -45,6 +48,7 @@ function rowToAppointment(row: Record<string, unknown>): Appointment {
     notes: (row.notes as string | null) ?? null,
     therapistId: (row.therapist_id as string | null) ?? null,
     source: row.source === 'online' ? 'online' : 'staff',
+    confirmRequestedAt: (row.confirm_requested_at as string | null) ?? null,
   };
 }
 
@@ -55,6 +59,10 @@ export interface AppointmentFields {
   status?: AppointmentStatus;
   notes?: string | null;
   therapistId?: string | null;
+  /** "Pošlji e-pošto in SMS za potrditev termina": the reminder email with
+   *  the "Pridem / Ne pridem" link goes out now, the SMS 2 hours later if
+   *  still unanswered (migration 055 — a trigger and send-appointment-reminders). */
+  requestConfirmation?: boolean;
 }
 
 // Frame 5 (Patient Record page, PatientChart.tsx) — "Podrobnosti termina."
@@ -110,6 +118,7 @@ export function useUpcomingAppointments(patientId: string) {
         notes: fields.notes || null,
       };
       if (fields.therapistId !== undefined) columns.therapist_id = fields.therapistId;
+      if (fields.requestConfirmation) columns.confirm_requested_at = new Date().toISOString();
       const { data, error: saveError } = appointmentId
         ? await supabase.from('appointments').update(columns).eq('id', appointmentId).select(APPOINTMENT_COLUMNS).single()
         : await supabase
@@ -216,15 +225,23 @@ export function useAppointmentsForRange(startIso: string, endIsoExclusive: strin
       const [mail, sms] = await Promise.all([
         supabase
           .from('email_log')
-          .select('appointment_id')
+          .select('appointment_id, sent_at')
           .eq('email_type', 'appointment_reminder')
           .in('status', ['sent', 'delivered'])
           .in('appointment_id', openIds),
-        supabase.from('appointment_reminders').select('appointment_id, delivery_status').in('appointment_id', openIds),
+        supabase.from('appointment_reminders').select('appointment_id, delivery_status, sent_at').in('appointment_id', openIds),
       ]);
-      for (const r of mail.data ?? []) reminded.set(r.appointment_id as string, 'email');
+      // Only what was sent since the latest "Pošlji … za potrditev" counts.
+      const requestedAt = new Map((data ?? []).map((row) => [row.id as string, (row.confirm_requested_at as string | null) ?? null]));
+      const current = (r: { appointment_id: unknown; sent_at: unknown }) => {
+        const since = requestedAt.get(r.appointment_id as string);
+        return !since || Date.parse(r.sent_at as string) >= Date.parse(since);
+      };
+      for (const r of mail.data ?? []) if (current(r)) reminded.set(r.appointment_id as string, 'email');
       for (const r of sms.data ?? []) {
-        if (!['FAILED', 'REJECTED', 'CANCELLED'].includes((r.delivery_status as string | null) ?? '')) reminded.set(r.appointment_id as string, 'sms');
+        if (current(r) && !['FAILED', 'REJECTED', 'CANCELLED'].includes((r.delivery_status as string | null) ?? '')) {
+          reminded.set(r.appointment_id as string, 'sms');
+        }
       }
     }
     setAppointments(
@@ -258,6 +275,7 @@ export function useAppointmentsForRange(startIso: string, endIsoExclusive: strin
           status: input.status ?? 'scheduled',
           notes: input.notes || null,
           therapist_id: input.therapistId ?? null,
+          ...(input.requestConfirmation ? { confirm_requested_at: new Date().toISOString() } : {}),
         })
         .select(APPOINTMENT_COLUMNS)
         .single();
@@ -277,6 +295,7 @@ export function useAppointmentsForRange(startIso: string, endIsoExclusive: strin
       if (fields.status !== undefined) columnUpdates.status = fields.status;
       if (fields.notes !== undefined) columnUpdates.notes = fields.notes || null;
       if (fields.therapistId !== undefined) columnUpdates.therapist_id = fields.therapistId;
+      if (fields.requestConfirmation) columnUpdates.confirm_requested_at = new Date().toISOString();
 
       const { data, error: updateError } = await supabase
         .from('appointments')

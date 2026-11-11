@@ -1,5 +1,5 @@
-// Deno Edge Function — the daily reminder send, 2 days before each
-// appointment. Invoked hourly by pg_cron (see
+// Deno Edge Function — the SMS reminder, 2 days before each appointment,
+// plus requested confirmations (see below). Invoked every 15 minutes by pg_cron (see
 // supabase/migrations/015_add_sms_reminders.sql) rather than once at a
 // fixed UTC time, and self-gates on the current Europe/Ljubljana
 // wall-clock hour below — see that migration's own comment for why (14:00
@@ -50,89 +50,139 @@ interface PatientJoin {
   sms_consent_status: string;
 }
 
+const HOUR_MS = 3600000;
+const DAY_MS = 86400000;
+// "Pošlji e-pošto in SMS za potrditev termina" (migration 055): the SMS this
+// long after the request if still unanswered, and only during these hours.
+const REQUEST_SMS_DELAY_MS = 2 * HOUR_MS;
+const SMS_FROM_HOUR = 8;
+const SMS_UNTIL_HOUR = 20;
+
+interface AppointmentJoin {
+  id: string;
+  starts_at: string;
+  status: string;
+  confirm_requested_at: string | null;
+  patients: PatientJoin | null;
+}
+
+/** Has this appointment had an SMS since `sinceIso` (or ever, if null)? */
+async function smsSentSince(appointmentId: string, sinceIso: string | null): Promise<boolean> {
+  let query = supabase.from('appointment_reminders').select('id').eq('appointment_id', appointmentId);
+  if (sinceIso) query = query.gte('sent_at', sinceIso);
+  const { data } = await query.limit(1);
+  return (data ?? []).length > 0;
+}
+
+async function sendSms(appt: AppointmentJoin): Promise<boolean> {
+  const patient = appt.patients as PatientJoin;
+  // The appointment's own token (migration 052) — the reminder email's
+  // link is the same one, so either answer counts.
+  const token = (await ensureConfirmToken(supabase, appt.id)) ?? randomToken();
+  const time = new Date(appt.starts_at).toLocaleString('sl-SI', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Ljubljana' });
+  // Points at the GitHub Pages page, not this Edge Function's own URL —
+  // see appointment-confirm's own comment for why (Supabase won't serve
+  // real HTML from *.supabase.co).
+  const link = confirmPageUrl(token);
+  // Plain ASCII (no š/č/ž), matching the sibling n8n workflow's own
+  // reminder text convention (isUnicode: false below) — GSM-7 keeps this
+  // a single, cheaper SMS segment.
+  const message = `Zobozdravstvo Goslar: opomnik na termin ${time}. Ali pridete? ${link}`;
+
+  const lertifyRes = await fetch('https://api.lertify.app/v1/sms/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apiKey: LERTIFY_API_KEY },
+    body: JSON.stringify({
+      sender: LERTIFY_SENDER,
+      destinations: [patient.phone],
+      message: { content: message, isUnicode: false },
+      deliveryReportUrl: `${SUPABASE_URL}/functions/v1/lertify-delivery-webhook`,
+    }),
+  });
+  const lertifyBody: { messages?: { messageId?: string }[] } | null = await lertifyRes.json().catch(() => null);
+  if (!lertifyRes.ok) {
+    console.error(`Lertify send failed for appointment ${appt.id}:`, lertifyRes.status, lertifyBody);
+    return false;
+  }
+
+  const reminder = {
+    appointment_id: appt.id,
+    patient_phone: patient.phone,
+    confirm_token: token,
+    lertify_message_id: lertifyBody?.messages?.[0]?.messageId ?? null,
+  };
+  // message_text (migration 030) is the SMS as sent, shown in the
+  // patient's Sporočila tab. If the column doesn't exist yet, the row —
+  // which the confirm link needs — is still written, without it.
+  let { error: insertError } = await supabase.from('appointment_reminders').insert({ ...reminder, message_text: message });
+  if (insertError && (insertError.code === '42703' || insertError.code === 'PGRST204')) {
+    ({ error: insertError } = await supabase.from('appointment_reminders').insert(reminder));
+  }
+  if (insertError) console.error(`Failed to record reminder for appointment ${appt.id}:`, insertError.message);
+  return true;
+}
+
+function canText(appt: AppointmentJoin): boolean {
+  return !!appt.patients?.phone && appt.patients.sms_consent_status === 'granted';
+}
+
+const SELECT = 'id, starts_at, status, confirm_requested_at, patients(phone, sms_consent_status)';
+
+// Runs every 15 minutes (migration 055). Two sends:
+//   1. the regular reminder at 14:00, SMS_REMINDER_DAYS_BEFORE days ahead,
+//      unless already answered (e.g. "Pridem" in the 09:00 email) or already
+//      sent — it runs four times in that hour, so the second check matters;
+//   2. a requested confirmation ("Pošlji e-pošto in SMS za potrditev
+//      termina"): 2 hours after the request, if still unanswered and no SMS
+//      since the request, between 08:00 and 20:00.
 Deno.serve(async (req) => {
   if (req.headers.get('Authorization') !== `Bearer ${SERVICE_ROLE_KEY}`) {
     return new Response('Unauthorized', { status: 401 });
   }
+  const hour = ljubljanaHour();
+  const now = Date.now();
+  let regular = 0;
+  let requested = 0;
 
-  if (ljubljanaHour() !== SMS_REMINDER_HOUR) {
-    return new Response('Not the scheduled hour, skipping.', { status: 200 });
+  // ---- 1. Regular reminder
+  if (hour === SMS_REMINDER_HOUR) {
+    const targetYmd = toLjubljanaYmd(new Date(now + SMS_REMINDER_DAYS_BEFORE * DAY_MS).toISOString());
+    // Padded a full day either side of the target — the exact target day is
+    // filtered in JS via toLjubljanaYmd (DST shifts the boundary).
+    const { data, error } = await supabase
+      .from('appointments')
+      .select(SELECT)
+      .gte('starts_at', new Date(now + (SMS_REMINDER_DAYS_BEFORE - 1) * DAY_MS).toISOString())
+      .lt('starts_at', new Date(now + (SMS_REMINDER_DAYS_BEFORE + 1) * DAY_MS).toISOString())
+      // Already answered → no SMS.
+      .not('status', 'in', '(cancelled,completed,confirmed,no_show)');
+    if (error) return new Response(`Query failed: ${error.message}`, { status: 500 });
+    for (const appt of (data ?? []) as unknown as AppointmentJoin[]) {
+      if (toLjubljanaYmd(appt.starts_at) !== targetYmd || !canText(appt)) continue;
+      // A fresh request is handled by send 2, two hours after it.
+      if (appt.confirm_requested_at && Date.parse(appt.confirm_requested_at) > now - REQUEST_SMS_DELAY_MS) continue;
+      if (await smsSentSince(appt.id, appt.confirm_requested_at)) continue;
+      if (await sendSms(appt)) regular++;
+    }
   }
 
-  const targetYmd = toLjubljanaYmd(new Date(Date.now() + SMS_REMINDER_DAYS_BEFORE * 86400000).toISOString());
-  // Padded a full day either side of the 2-day target — the exact target
-  // day is filtered precisely in JS below via toLjubljanaYmd, so this only
-  // needs to not miss anything near a UTC/local day boundary.
-  const queryStart = new Date(Date.now() + (SMS_REMINDER_DAYS_BEFORE - 1) * 86400000).toISOString();
-  const queryEnd = new Date(Date.now() + (SMS_REMINDER_DAYS_BEFORE + 1) * 86400000).toISOString();
-
-  const { data: appointments, error } = await supabase
-    .from('appointments')
-    .select('id, starts_at, status, patients(phone, sms_consent_status)')
-    .gte('starts_at', queryStart)
-    .lt('starts_at', queryEnd)
-    // Already answered (e.g. "Pridem" in the reminder email) → no SMS.
-    .not('status', 'in', '(cancelled,completed,confirmed)');
-  if (error) return new Response(`Query failed: ${error.message}`, { status: 500 });
-
-  const targets = (appointments ?? []).filter((a) => {
-    const patient = a.patients as unknown as PatientJoin | null;
-    return toLjubljanaYmd(a.starts_at) === targetYmd && !!patient?.phone && patient.sms_consent_status === 'granted';
-  });
-
-  let sent = 0;
-  for (const appt of targets) {
-    // Dedup — the unique index on appointment_id would reject a second
-    // insert anyway, but check first to avoid a wasted Lertify send.
-    const { data: existing } = await supabase.from('appointment_reminders').select('id').eq('appointment_id', appt.id).maybeSingle();
-    if (existing) continue;
-
-    const patient = appt.patients as unknown as PatientJoin;
-    // The appointment's own token (migration 052) — the reminder email's
-    // link is the same one, so either answer counts.
-    const token = (await ensureConfirmToken(supabase, appt.id)) ?? randomToken();
-    const time = new Date(appt.starts_at).toLocaleString('sl-SI', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Ljubljana' });
-    // Points at the GitHub Pages page, not this Edge Function's own URL —
-    // see appointment-confirm's own comment for why (Supabase won't serve
-    // real HTML from *.supabase.co).
-    const link = confirmPageUrl(token);
-    // Plain ASCII (no š/č/ž), matching the sibling n8n workflow's own
-    // reminder text convention (isUnicode: false below) — GSM-7 keeps this
-    // a single, cheaper SMS segment.
-    const message = `Zobozdravstvo Goslar: opomnik na termin ${time}. Ali pridete? ${link}`;
-
-    const lertifyRes = await fetch('https://api.lertify.app/v1/sms/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apiKey: LERTIFY_API_KEY },
-      body: JSON.stringify({
-        sender: LERTIFY_SENDER,
-        destinations: [patient.phone],
-        message: { content: message, isUnicode: false },
-        deliveryReportUrl: `${SUPABASE_URL}/functions/v1/lertify-delivery-webhook`,
-      }),
-    });
-    const lertifyBody: { messages?: { messageId?: string }[] } | null = await lertifyRes.json().catch(() => null);
-    if (!lertifyRes.ok) {
-      console.error(`Lertify send failed for appointment ${appt.id}:`, lertifyRes.status, lertifyBody);
-      continue;
+  // ---- 2. Requested confirmation, 2 hours later
+  if (hour >= SMS_FROM_HOUR && hour < SMS_UNTIL_HOUR) {
+    const { data, error } = await supabase
+      .from('appointments')
+      .select(SELECT)
+      .not('confirm_requested_at', 'is', null)
+      .lte('confirm_requested_at', new Date(now - REQUEST_SMS_DELAY_MS).toISOString())
+      .gte('confirm_requested_at', new Date(now - 3 * DAY_MS).toISOString())
+      .gt('starts_at', new Date(now).toISOString())
+      .in('status', ['scheduled', 'sent']);
+    if (error) return new Response(`Query failed: ${error.message}`, { status: 500 });
+    for (const appt of (data ?? []) as unknown as AppointmentJoin[]) {
+      if (!canText(appt)) continue;
+      if (await smsSentSince(appt.id, appt.confirm_requested_at)) continue;
+      if (await sendSms(appt)) requested++;
     }
-
-    const reminder = {
-      appointment_id: appt.id,
-      patient_phone: patient.phone,
-      confirm_token: token,
-      lertify_message_id: lertifyBody?.messages?.[0]?.messageId ?? null,
-    };
-    // message_text (migration 030) is the SMS as sent, shown in the
-    // patient's Sporočila tab. If the column doesn't exist yet, the row —
-    // which the confirm link needs — is still written, without it.
-    let { error: insertError } = await supabase.from('appointment_reminders').insert({ ...reminder, message_text: message });
-    if (insertError && (insertError.code === '42703' || insertError.code === 'PGRST204')) {
-      ({ error: insertError } = await supabase.from('appointment_reminders').insert(reminder));
-    }
-    if (insertError) console.error(`Failed to record reminder for appointment ${appt.id}:`, insertError.message);
-    sent++;
   }
 
-  return new Response(`Sent ${sent} reminder(s) for ${targetYmd}.`, { status: 200 });
+  return new Response(`Sent ${regular} regular and ${requested} requested reminder SMS.`, { status: 200 });
 });

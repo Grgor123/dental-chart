@@ -33,7 +33,7 @@ function actionButtonHtml(action: { label: string; url: string } | null): string
   return `<p style="margin:8px 0 16px;"><a href="${escapeHtml(action.url)}" style="display:inline-block;background:${ACCENT_COLOR};color:#ffffff;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:6px;">${escapeHtml(action.label)}</a></p>`;
 }
 
-function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHtml: string; unsubscribeUrl: string | null }): string {
+export function wrapEmailLayout(params: { practiceName: string; heading: string; bodyHtml: string; unsubscribeUrl: string | null }): string {
   return `<!doctype html>
 <html lang="sl">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -128,7 +128,7 @@ export function fillTemplateText(
   };
 }
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 

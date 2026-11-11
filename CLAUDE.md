@@ -525,7 +525,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`053_reminder_email_before_sms.sql` — all confirmed run (016–019 are the
+`055_confirm_request_and_contact_email.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -538,11 +538,12 @@ API — 041's tags were removed again by 043 — see "Outbound webhooks" below;
 044 the project address from Vault, see "Development and production
 projects"; 045 voice entry's taught words, see "Voice entry"; 046–049 team, rooms,
 working hours, clinic hours and yearly closed days, see "Team and rooms"; 050–051 online booking
-and the clinic's appointment durations, see "Online booking"; 052–053 the
-reminder email's confirm link, see "Reminder confirmation" under "Native
-scheduling calendar"). `supabase/schema.sql`
+and the clinic's appointment durations, see "Online booking"; 052–055 the
+reminder email's confirm link, the daily confirmation report, requested
+confirmations and the reply address, see "Reminder confirmation" under
+"Native scheduling calendar"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(053 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(055 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3401,6 +3402,35 @@ fed from one another in any way; don't conflate them.
   shared values `SMS_REMINDER_DAYS_BEFORE` / `SMS_REMINDER_HOUR` in
   `templateDefs.ts`). Calendar: empty circle after the email, blue centre after
   the SMS, ✓/✕ once answered. Undelivered email/SMS don't count.
+- **"Pošlji e-pošto in SMS za potrditev termina"** (Gregor, 2026-11-11;
+  migration 055; `ConfirmRequestCheckbox.tsx` in both booking windows): for
+  phone bookings and rebooked patients too close for the regular reminders.
+  Saving with it ticked sets `appointments.confirm_requested_at`; a trigger
+  sends the reminder email at once (`send-appointment-reminder-emails` with
+  `{appointmentId}`, `force` past the once-per-appointment check); the SMS
+  goes 2 hours later if still unanswered, 08:00–20:00 only
+  (`send-appointment-reminders`, now every 15 minutes; its 14:00 run skips
+  anything already texted). An appointment can thus get several reminders —
+  the one-per-appointment unique indexes on `appointment_reminders` and
+  `email_log` (reminder type) became plain ones; the calendar counts only
+  reminders since the latest request.
+- **Daily confirmation report** (Gregor, 2026-11-11; migration 054;
+  `send-reminder-report`, hourly cron gated to 17:00 Ljubljana, once a day per
+  practice): an email about the appointments 2 days ahead — **Nepotrjeni**
+  (phone, how the email and SMS reminders fared, failures in red),
+  **Odpovedani**, **Potrjeni** — plus **"Jutri — naknadno poslane
+  potrditve"** (tomorrow's requested confirmations with the answer). Names,
+  times, phones only. Same idea as the old booking widget's 17:00 n8n
+  report. Set in Nastavitve → Delovni čas → "Dnevno poročilo o potrditvah"
+  (on/off, recipient — default the contact email below, "Pošlji poročilo
+  zdaj").
+- **Reply address** (Gregor, 2026-11-11; migration 055): the sending address
+  `obvestila@…` has no mailbox, so replies to automatic emails bounced (seen
+  live). `practices.contact_email` — the Reply-To every sender already uses —
+  is now set at the top of the **E-pošta** page ("Odgovori pacientov prejme",
+  suggests the email from Podatki za račune) through the owner-only
+  `set_practice_contact_email()`. A move to Podatki za račune with a "drug
+  naslov" checkbox was built and reverted at Gregor's request.
 - **`MiniCalendar.tsx`** — a small month-picker widget in the sidebar
   (month navigation, Monday-first day grid, today/selected-day
   highlighting), clicking a date jumps the main calendar there. Its own
@@ -5544,7 +5574,13 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-11 (Calendar design — light therapist shades with a
+*Last updated: 2026-11-11, later (Daily confirmation report at 17:00 —
+migration 054; "Pošlji e-pošto in SMS za potrditev termina" when booking,
+email at once and SMS 2 hours later, SMS job every 15 minutes; reply address
+on the E-pošta page — migration 055. See "Reminder confirmation" under
+"Native scheduling calendar".)*
+
+*Previous entry: 2026-11-11 (Calendar design — light therapist shades with a
 colour stripe, ✓ green / ✕ red at the chip's top left, SPLETNO at the top
 right, 64 px per hour, 15-minute appointments on one line, 12 lighter team
 colours in a 4 × 3 picker; reminder email with the "Pridem / Ne pridem" link,

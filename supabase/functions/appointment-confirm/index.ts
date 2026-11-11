@@ -45,7 +45,8 @@ interface AppointmentRow {
 async function appointmentForToken(token: string): Promise<AppointmentRow | null> {
   const { data: own } = await supabase.from('appointments').select('id, starts_at, status').eq('confirm_token', token).maybeSingle();
   if (own) return own as AppointmentRow;
-  const { data: reminder } = await supabase.from('appointment_reminders').select('appointment_id').eq('confirm_token', token).maybeSingle();
+  const { data: reminders } = await supabase.from('appointment_reminders').select('appointment_id').eq('confirm_token', token).limit(1);
+  const reminder = reminders?.[0];
   if (!reminder) return null;
   const { data } = await supabase.from('appointments').select('id, starts_at, status').eq('id', reminder.appointment_id).maybeSingle();
   return (data as AppointmentRow | null) ?? null;

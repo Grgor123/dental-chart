@@ -28,6 +28,7 @@ import {
 } from '../lib/workingHours';
 import { isBookable, useTherapists, type Therapist } from '../hooks/useTherapists';
 import { APPOINTMENT_STATUS_META, APPOINTMENT_STATUS_ORDER } from '../lib/appointmentStatus';
+import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
 import { TimeGrid, type TimeGridColumn } from '../components/calendar/TimeGrid';
 import { TherapistPanel } from '../components/calendar/TherapistPanel';
 import { CalendarSearch } from '../components/calendar/CalendarSearch';
@@ -718,6 +719,7 @@ function AppointmentModal({
   const ownTherapistId = patientId ? patientTherapistId(patientId) : '';
   const ownTherapist = therapists.find((t) => t.id === ownTherapistId);
   const [notes, setNotes] = useState(appointment?.notes ?? '');
+  const [requestConfirmation, setRequestConfirmation] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -817,6 +819,7 @@ function AppointmentModal({
       status,
       notes: notes.trim() || undefined,
       therapistId: therapistId || null,
+      requestConfirmation,
     };
     const result = mode === 'create' ? await onCreate({ ...fields, patientId }) : await onUpdate(appointment!.id, fields);
     setSubmitting(false);
@@ -1105,6 +1108,12 @@ function AppointmentModal({
             className="rounded border border-[var(--line,#ccd6d4)] px-3 py-2 text-[var(--ink,#1c2624)]"
           />
         </label>
+
+        <ConfirmRequestCheckbox
+          checked={requestConfirmation}
+          onChange={setRequestConfirmation}
+          lastRequestedAt={appointment?.confirmRequestedAt}
+        />
 
         {outsideHours &&
           (blockedByHours ? (

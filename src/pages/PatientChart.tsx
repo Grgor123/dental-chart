@@ -19,6 +19,7 @@ import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory } from '../hooks/usePatientHistory';
 import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
+import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
 import { useWorkingHours } from '../hooks/useWorkingHours';
 import { durationOptions, usePracticeHours } from '../hooks/usePracticeHours';
 import { outsideHoursMessage, toDateIso } from '../lib/workingHours';
@@ -474,6 +475,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // the working-hours warning / block (outsideHoursMessage, shared).
   const [appointmentTherapistId, setAppointmentTherapistId] = useState('');
   const [appointmentSlotAuto, setAppointmentSlotAuto] = useState(false);
+  const [appointmentRequestConfirmation, setAppointmentRequestConfirmation] = useState(false);
   const { schedules: workingSchedules } = useWorkingHours();
   const { practice: practiceHours, durations: appointmentDurations } = usePracticeHours();
   const bookableTherapists = therapists.filter(
@@ -525,6 +527,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
 
   function openAppointmentModal(appointment: Appointment | null) {
     setEditingAppointment(appointment);
+    setAppointmentRequestConfirmation(false);
     if (appointment) {
       const starts = new Date(appointment.startsAt);
       setAppointmentDate(
@@ -570,6 +573,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         service: appointmentService.trim() || undefined,
         status: appointmentStatus,
         therapistId: appointmentTherapistId || null,
+        requestConfirmation: appointmentRequestConfirmation,
       },
       editingAppointment?.id ?? null
     );
@@ -2020,6 +2024,13 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                       </p>
                     ))}
                   {appointmentModalError && <p className="mr-auto text-sm text-[var(--danger,#b3261e)]">Napaka: {appointmentModalError}</p>}
+                  <div className="mr-auto">
+                    <ConfirmRequestCheckbox
+                      checked={appointmentRequestConfirmation}
+                      onChange={setAppointmentRequestConfirmation}
+                      lastRequestedAt={editingAppointment?.confirmRequestedAt}
+                    />
+                  </div>
                   <button
                     type="button"
                     onClick={() => setAppointmentModalOpen(false)}

@@ -30,8 +30,44 @@ function formatDate(dateIso: string): string {
 export function PracticeHoursSection() {
   const { role } = usePracticeContext();
   const readOnly = role !== 'owner';
-  const { practice, durations, error, saveWeekly, addClosed, addClosedMany, removeClosed, setBlockOutsideHours, setDurations } =
-    usePracticeHours();
+  const {
+    practice,
+    durations,
+    report,
+    error,
+    saveWeekly,
+    addClosed,
+    addClosedMany,
+    removeClosed,
+    setBlockOutsideHours,
+    setDurations,
+    saveReport,
+    sendReportNow,
+  } = usePracticeHours();
+  // ---- Daily confirmation report (migration 054)
+  const [reportEmail, setReportEmail] = useState('');
+  useEffect(() => setReportEmail(report.email), [report.email]);
+  const [reportMessage, setReportMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [reportSending, setReportSending] = useState(false);
+  async function commitReportEmail() {
+    const next = reportEmail.trim();
+    if (next === report.email) return;
+    if (next && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(next)) {
+      setReportMessage({ kind: 'error', text: 'E-poštni naslov ni pravilen.' });
+      return;
+    }
+    const r = await saveReport({ email: next });
+    setReportMessage(r.error ? { kind: 'error', text: r.error } : { kind: 'ok', text: 'Shranjeno.' });
+  }
+  async function handleSendReportNow() {
+    setReportSending(true);
+    setReportMessage(null);
+    const r = await sendReportNow();
+    setReportSending(false);
+    if (r.error) setReportMessage({ kind: 'error', text: r.error });
+    else if (r.sent) setReportMessage({ kind: 'ok', text: `Poročilo je poslano na ${report.email || report.fallbackEmail}.` });
+    else setReportMessage({ kind: 'error', text: r.message ?? 'Poročilo ni bilo poslano.' });
+  }
   // ---- Appointment durations (migration 051)
   const [newDuration, setNewDuration] = useState('');
   const [durationMessage, setDurationMessage] = useState<string | null>(null);
@@ -289,6 +325,67 @@ export function PracticeHoursSection() {
           )}
         </div>
         {durationMessage && <span className="text-sm text-[var(--danger,#b3261e)]">{durationMessage}</span>}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <div>
+          <h3 className="text-sm font-bold text-[var(--ink,#1c2624)]">Dnevno poročilo o potrditvah</h3>
+          <p className="mt-1 text-xs text-[var(--muted,#6f7c79)]">
+            Vsak dan ob 17:00 — po opomniku po e-pošti (9:00) in SMS-u (14:00) — e-pošta s termini čez dva dni: kdo ni odgovoril (s stanjem
+            opomnikov in telefonom), kdo je odpovedal in kdo potrdil. Brez kliničnih podatkov; ob dnevu brez terminov se ne pošlje.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-[var(--ink,#1c2624)]">
+          <input
+            type="checkbox"
+            checked={report.enabled}
+            disabled={readOnly}
+            onChange={async (e) => {
+              const r = await saveReport({ enabled: e.target.checked });
+              if (r.error) setReportMessage({ kind: 'error', text: r.error });
+            }}
+          />
+          Pošiljaj dnevno poročilo
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-[var(--ink-soft,#45524f)]">
+            Prejemnik
+            <input
+              type="email"
+              value={reportEmail}
+              disabled={readOnly || !report.enabled}
+              onChange={(e) => setReportEmail(e.target.value)}
+              onBlur={commitReportEmail}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              placeholder={report.fallbackEmail || 'npr. recepcija@ordinacija.si'}
+              className={`${INPUT_CLASS} w-72`}
+            />
+          </label>
+          {report.enabled && (
+            <button
+              type="button"
+              onClick={handleSendReportNow}
+              disabled={reportSending}
+              className="rounded border border-[var(--line,#ccd6d4)] px-3 py-1.5 text-sm font-medium text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] disabled:opacity-50"
+            >
+              {reportSending ? 'Pošiljam …' : 'Pošlji poročilo zdaj'}
+            </button>
+          )}
+        </div>
+        <span className="text-xs text-[var(--muted,#6f7c79)]">
+          {report.email
+            ? ''
+            : report.fallbackEmail
+              ? `Prazno = kontaktni naslov ordinacije (${report.fallbackEmail}).`
+              : 'Vpišite naslov — brez njega se poročilo ne pošlje.'}
+        </span>
+        {reportMessage && (
+          <span className={`text-sm ${reportMessage.kind === 'error' ? 'text-[var(--danger,#b3261e)]' : 'text-[var(--accent,#2e6e62)]'}`}>
+            {reportMessage.text}
+          </span>
+        )}
       </section>
 
       <section className="flex flex-col gap-3">

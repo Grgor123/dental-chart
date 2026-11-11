@@ -512,6 +512,19 @@ async function main() {
     check('a browser cannot write the online booking rate-limit table', !!attemptsError, attemptsError ? attemptsError.message : 'insert unexpectedly succeeded');
   }
 
+  // 4s. Contact email (055_confirm_request_and_contact_email.sql) —
+  // set_practice_contact_email() only ever changes the caller's own practice.
+  if (account1PracticeId) {
+    const { data: before } = await client1.from('practices').select('contact_email').eq('id', account1PracticeId).maybeSingle();
+    await client2.rpc('set_practice_contact_email', { p_email: 'spoof@example.com' });
+    const { data: after } = await client1.from('practices').select('contact_email').eq('id', account1PracticeId).maybeSingle();
+    check(
+      "account 2 cannot change account 1's contact email",
+      (before?.contact_email ?? null) === (after?.contact_email ?? null),
+      `before ${before?.contact_email ?? 'null'}, after ${after?.contact_email ?? 'null'}`
+    );
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

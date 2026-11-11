@@ -80,7 +80,7 @@ export async function loadAllOverrides(supabase: SupabaseClient, key: TemplateKe
 
 export async function sendAppointmentEmail(
   supabase: SupabaseClient,
-  params: { appointmentId: string; templateKey: TemplateKey }
+  params: { appointmentId: string; templateKey: TemplateKey; force?: boolean }
 ): Promise<SendOutcome> {
   const { appointmentId, templateKey } = params;
   const def = TEMPLATE_DEFS[templateKey];
@@ -90,14 +90,17 @@ export async function sendAppointmentEmail(
   // send, so checking here avoids a duplicate real email. Rescheduled is the
   // one type that may repeat (an appointment can move more than once), and
   // is excluded from that index for the same reason.
-  if (templateKey !== 'appointment_rescheduled') {
+  // `force`: the reminder asked for by hand ("Pošlji e-pošto in SMS za
+  // potrditev termina", migration 055) goes out even if one was sent before —
+  // the reminder may now appear several times per appointment.
+  if (templateKey !== 'appointment_rescheduled' && !params.force) {
     const { data: existing } = await supabase
       .from('email_log')
       .select('id')
       .eq('appointment_id', appointmentId)
       .eq('email_type', templateKey)
-      .maybeSingle();
-    if (existing) return { status: 'skipped', reason: 'already sent' };
+      .limit(1);
+    if (existing && existing.length > 0) return { status: 'skipped', reason: 'already sent' };
   }
 
   const { data, error } = await supabase.from('appointments').select(APPOINTMENT_SELECT).eq('id', appointmentId).single();
