@@ -525,6 +525,30 @@ async function main() {
     );
   }
 
+  // 4t. Signed visits and the audit log (056_signed_visits_and_audit_log.sql)
+  // — account 2 can't sign account 1's visit, add an addendum to it, read
+  // its addenda or audit log, log access to its patient, or write the audit
+  // log directly.
+  if (foreignPatientId && account1PracticeId) {
+    const { data: account1Visit } = await client1.from('visits').select('id').eq('patient_id', foreignPatientId).limit(1).maybeSingle();
+    if (account1Visit) {
+      const { error: signSpoof } = await client2.rpc('sign_visit', { p_visit_id: account1Visit.id, p_note: 'Spoof' });
+      check("account 2 cannot sign account 1's visit", !!signSpoof, signSpoof ? signSpoof.message : 'sign unexpectedly succeeded');
+      const { error: addendumSpoof } = await client2.rpc('add_visit_addendum', { p_visit_id: account1Visit.id, p_body: 'Spoof' });
+      check("account 2 cannot add an addendum to account 1's visit", !!addendumSpoof, addendumSpoof ? addendumSpoof.message : 'addendum unexpectedly succeeded');
+    }
+    const { data: leakedAddenda } = await client2.from('visit_addenda').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's addenda", !leakedAddenda || leakedAddenda.length === 0, `${leakedAddenda?.length ?? 0} row(s) visible`);
+    const { data: leakedAudit } = await client2.from('audit_log').select('id').eq('practice_id', account1PracticeId).limit(5);
+    check("account 2 cannot read account 1's audit log", !leakedAudit || leakedAudit.length === 0, `${leakedAudit?.length ?? 0} row(s) visible`);
+    const { error: accessSpoof } = await client2.rpc('log_patient_access', { p_patient_id: foreignPatientId, p_action: 'view', p_details: null });
+    check("account 2 cannot log access to account 1's patient", !!accessSpoof, accessSpoof ? accessSpoof.message : 'call unexpectedly succeeded');
+    const { error: auditInsert } = await client2
+      .from('audit_log')
+      .insert({ practice_id: account1PracticeId, actor: 'spoof', action: 'view', entity: 'patients' });
+    check('a browser cannot write the audit log directly', !!auditInsert, auditInsert ? auditInsert.message : 'insert unexpectedly succeeded');
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

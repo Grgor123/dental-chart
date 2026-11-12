@@ -140,6 +140,8 @@ src/
                                 # number (FURS operator) — see "FURS" below
       PracticeUsersSection.tsx # Nastavitve → Uporabniki: users, invite,
                                 # roles, remove — see "Staff users" below
+      AuditLogSection.tsx      # Nastavitve → Revizijska sled (owners) —
+                                # see "Signed visits and audit log"
       TeamSection.tsx          # Nastavitve → Ekipa: team members + rooms —
                                 # see "Team and rooms" below
       WorkingHoursDialog.tsx   # Ekipa → Delovni čas (weekly, special days,
@@ -204,7 +206,12 @@ src/
     usePatientHistory.ts        # Same join, minus the tooth filter, grouped
                                 # by visit instead — backs Frame 8 on the
                                 # Patient Record page — see "Visit
-                                # lifecycle" below
+                                # lifecycle" below; also each visit's
+                                # record text, signature and addenda,
+                                # signVisit()/addAddendum()
+    useUnsignedVisits.ts        # Patient list's "Nepodpisani obiski"
+    useAuditLog.ts              # logPatientAccess() + the log reader — see
+                                # "Signed visits and audit log"
     useTherapists.ts            # The practice's team (therapists) — see
                                 # "Team and rooms" below
     useRooms.ts                 # Ordinacije (rooms) — same section
@@ -525,7 +532,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`055_confirm_request_and_contact_email.sql` — all confirmed run (016–019 are the
+`057_audit_log_less_noise.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -541,9 +548,10 @@ working hours, clinic hours and yearly closed days, see "Team and rooms"; 050–
 and the clinic's appointment durations, see "Online booking"; 052–055 the
 reminder email's confirm link, the daily confirmation report, requested
 confirmations and the reply address, see "Reminder confirmation" under
-"Native scheduling calendar"). `supabase/schema.sql`
+"Native scheduling calendar"; 056–057 signed visits and the audit log, see
+"Signed visits and audit log"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(055 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(057 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3178,6 +3186,66 @@ toggle on/off; Chrome/Edge only.
 - **Tenant isolation**: section 4n (voice words not addable/readable across
   practices) — passed 2026-10-21 (51/51).
 
+### Signed visits and audit log
+
+**Status: built and confirmed by Gregor on localhost (2026-11-12)** —
+migrations 056–057 run. Roadmap item 1 (with the production project, still to
+do). Gregor's choices: an explicit signature; the log records changes **and**
+views; production set up after these two.
+
+- **Signing** (`SignVisitModal.tsx`): "Podpiši obisk" in Frame 1's row (next
+  to the print/microphone icons) saves the chart (`flush()` now returns
+  whether everything saved), then opens a window with what the chart recorded
+  in this visit and a **Zapis obiska** text (`visits.notes`, unused before).
+  `sign_visit()` (security definer) stores the text, closes the visit and
+  records `signed_at` / `signed_by` / `signed_by_name` (Moj profil name, else
+  the login email); an empty visit (no chart rows, no text) can't be signed.
+  The page then resolves a fresh open visit (`useOpenVisit().startNew()`,
+  without a loading screen). The text is saved only on signing.
+- **Locked**: triggers `guard_signed_visit` / `guard_signed_tooth_record`
+  refuse any change or delete of a signed visit and its `tooth_records` rows —
+  for everyone, service role included. `closeVisit()` now only touches an
+  open visit (`.is('closed_at', null)`). A patient with signed visits can't be
+  deleted (the cascade is refused) — deliberate, records must be kept.
+- **Addenda** (`visit_addenda`, `add_visit_addendum()`): "+ Dopolnilo" under
+  a signed visit in Frame 8; shown with author and time; append-only (no
+  write policies, a trigger refuses update/delete).
+- **Frame 8** now lists visits from `visits` (not only those with chart rows):
+  date, "✓ Podpisal/a …", "Trenutni obisk — še ni podpisan", or an amber
+  **Nepodpisano** with "Podpiši" for a closed unsigned visit; then the chart
+  lines, the record text and the addenda. Visits with nothing in them are left
+  out.
+- **Patient list**: "Nepodpisani obiski (N) — zadnjih 30 dni" (closed visits
+  with content and no signature); older ones show only in Frame 8, so the
+  history from before signing existed doesn't flood the list.
+- **Who can sign**: any user of the practice (the signature names them).
+  Restricting it to dentists would need logins linked to team members.
+- **Audit log** (`audit_log`): one trigger function, `audit_row_change()`, on
+  patients, visits, tooth_records, appointments, health_questionnaires,
+  invoices and visit_addenda records insert / update / delete / sign /
+  addendum with the actor (login email, or "sistem" for service-role work —
+  reminders, online booking, delivery reports), the patient, and for changes
+  **only the names of the changed fields** (never values — the log mustn't
+  become a second copy of the record); a tooth row also gets its tooth number.
+  `log_patient_access()` records **views** (opening a patient record — once
+  per mount, a ref absorbs StrictMode), **printouts** (chart, invoice,
+  aftercare instructions) and **invoice emails**, called from the app
+  (`logPatientAccess()`, never blocks the action). Rows can't be changed or
+  deleted by anyone (trigger); read by owners only (RLS).
+- **Less noise** (migration 057, Gregor): the app opening an empty visit and
+  a visit being closed (`closed_at` only) aren't logged.
+- **Nastavitve → Revizijska sled** (`AuditLogSection.tsx`, owners): time,
+  user, action, what, patient, details; filters patient / action / dates;
+  100 rows a page. Shows everything by default (hiding views by default was
+  tried and confused Gregor). Consecutive changes of the same record by the
+  same person are shown as one row ("4× od 12:20"); the log keeps every entry.
+- **Not done**: 2FA for staff (roadmap item 1, still to build); re-entering
+  the password on signing; a hash chain over the log (it's protected by
+  triggers + RLS, not cryptographically); retention rules.
+- **Tenant isolation**: section 4t (can't sign or add an addendum to another
+  practice's visit, read its addenda or log, log access to its patient, or
+  write the log) — passed 2026-11-12 (75/75).
+
 ### Chart printout (A4)
 
 **Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
@@ -5558,6 +5626,8 @@ Gregor before starting each item.
    "Development and production projects"), plus an **audit log**: who
    viewed, created, changed or exported which patient data, when — required
    for traceability in public health (spec 7.2). 2FA for staff alongside.
+   **Audit log and signed visits built 2026-11-12** (see "Signed visits and
+   audit log"); production project and 2FA still to do.
 2. **Deciduous teeth (51–85) and mixed dentition** — Monika treats children
    (spec 2.2; currently "Out of Scope for Phase 1").
 3. **Clinical notes + MDR/IVDR traceability per ZMedPri-1** (spec 2.5) —
@@ -5593,7 +5663,12 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-12 (Folder tabs: wrapped rows put the selected tab's
+*Last updated: 2026-11-12, later (Signed visits — "Podpiši obisk", locked
+after signing, addenda, "Nepodpisano" lists; audit log of changes and views
+with Nastavitve → Revizijska sled — migrations 056–057. See "Signed visits
+and audit log".)*
+
+*Previous entry: 2026-11-12 (Folder tabs: wrapped rows put the selected tab's
 row against the card, like Windows' multi-row tabs; short tab names on
 E-pošta — see "Email templates (E-pošta)" → Frontend.)*
 

@@ -24,6 +24,7 @@ import { useZzzsSetting } from '../hooks/useZzzs';
 import { useChartBilling } from '../hooks/useChartBilling';
 import { useAftercareTopics } from '../hooks/useAftercareTopics';
 import { renderAftercarePrintHtml } from '../lib/aftercarePrint';
+import { logPatientAccess } from '../hooks/useAuditLog';
 import type { AftercareSendResult } from '../hooks/useInvoices';
 import { ChartBillingDialog, type ChartBillingPick } from '../components/invoices/ChartBillingDialog';
 import { effectiveChartLink, workItemKey } from '../lib/chartBilling';
@@ -187,6 +188,7 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
     const ids = invoice.status === 'draft' ? tickedTopicIds : (invoice.aftercareTopicIds ?? []);
     const topics = aftercare.topics.filter((t) => ids.includes(t.id));
     if (topics.length === 0) return;
+    if (invoice.patientId) void logPatientAccess(invoice.patientId, 'print', { document: 'navodila' });
     const [y, m, d] = invoice.serviceDate.split('-');
     const issuer = liveIssuer;
     printHtml(
@@ -428,6 +430,8 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
 
   function printAs(format: 'a4' | 'receipt') {
     if (!doc) return;
+    // Audit log (migration 056): a printout of a patient's invoice.
+    if (invoice?.patientId) void logPatientAccess(invoice.patientId, 'print', { document: 'racun', number: invoice.number ?? '' });
     if (format === 'a4') {
       // With Paged.js the document lays out its pages, then prints itself.
       printHtml(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: pagedScript ?? undefined, autoPrint: true }), {
@@ -1150,7 +1154,11 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
             const script = pagedScript ?? (await loadPagedScript());
             return invoiceHtmlToPdfBase64(renderInvoiceHtml(doc, { format: 'a4' }, { upnQrSvg: qrSvg, fursQrSvg: fursQr, pagedScript: script }));
           }}
-          onSend={sendByEmail}
+          onSend={async (input) => {
+            const result = await sendByEmail(input);
+            if (invoice.patientId && 'results' in result) void logPatientAccess(invoice.patientId, 'email', { document: 'racun', number: invoice.number ?? '' });
+            return result;
+          }}
           onClose={() => setEmailOpen(false)}
         />
       )}

@@ -1,3 +1,4 @@
+import { useUnsignedVisits } from '../hooks/useUnsignedVisits';
 import { useMemo, useState, type FormEvent } from 'react';
 import PhoneInput from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
@@ -64,6 +65,8 @@ export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, on
   const { practiceName } = usePracticeContext();
   const [query, setQuery] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
+  // Closed visits waiting for the dentist's signature (migration 056).
+  const unsignedVisits = useUnsignedVisits();
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -105,6 +108,32 @@ export function PatientList({ onSelectPatient, onSignOut, onNavigateCalendar, on
             {showNewForm ? 'Prekliči' : '+ Nov pacient'}
           </button>
         </div>
+
+        {unsignedVisits.length > 0 && (
+          <details className="rounded border border-[#f0d38a] bg-[#fff8e6] px-3 py-2 text-sm text-[var(--ink,#1c2624)]">
+            <summary className="cursor-pointer font-semibold text-[#8a5a00]">
+              Nepodpisani obiski ({unsignedVisits.length}) — zadnjih 30 dni
+            </summary>
+            <ul className="mt-2 flex flex-col gap-1">
+              {unsignedVisits.map((v) => {
+                const patient = patients.find((p) => p.patientId === v.patientId);
+                if (!patient) return null;
+                const [y, m, d] = v.date.split('-');
+                return (
+                  <li key={v.visitId}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectPatient(patient, patientLabel(patient))}
+                      className="text-left hover:text-[var(--accent,#2e6e62)] hover:underline"
+                    >
+                      {patientLabel(patient)} · {Number(d)}. {Number(m)}. {y}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        )}
 
         {showNewForm && (
           <NewPatientForm

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 // Resolves which `visits.id` PatientChart.tsx should load/save against for
@@ -29,11 +29,18 @@ export function useOpenVisit(patientId: string) {
   const [visitId, setVisitId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by startNew() once the current visit is signed (migration 056):
+  // the signed visit is closed, so resolving again starts a fresh one.
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setVisitId(null);
+    // After signing (startNew) the page stays up while the next visit is
+    // resolved — no loading screen, the old id is only replaced.
+    if (version === 0) {
+      setLoading(true);
+      setVisitId(null);
+    }
     setError(null);
 
     async function resolve() {
@@ -78,7 +85,9 @@ export function useOpenVisit(patientId: string) {
     return () => {
       cancelled = true;
     };
-  }, [patientId]);
+  }, [patientId, version]);
 
-  return { visitId, loading, error };
+  const startNew = useCallback(() => setVersion((v) => v + 1), []);
+
+  return { visitId, loading, error, startNew };
 }

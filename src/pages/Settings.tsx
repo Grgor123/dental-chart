@@ -7,6 +7,7 @@ import { UserProfileSection } from '../components/settings/UserProfileSection';
 import { PracticeUsersSection } from '../components/settings/PracticeUsersSection';
 import { TeamSection } from '../components/settings/TeamSection';
 import { PracticeHoursSection } from '../components/settings/PracticeHoursSection';
+import { AuditLogSection } from '../components/settings/AuditLogSection';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
 import { OnlineBookingSection } from '../components/settings/OnlineBookingSection';
 import { usePracticeContext } from '../contexts/PracticeContext';
@@ -37,6 +38,8 @@ const SECTIONS = [
   { key: 'uporabniki', label: 'Uporabniki' },
   // Owners only (webhooks send patient contact data out of the app).
   { key: 'integracije', label: 'Integracije', ownerOnly: true },
+  // Owners only: who viewed or changed patient data (migration 056).
+  { key: 'revizija', label: 'Revizijska sled', ownerOnly: true },
 ];
 
 // "Nastavitve" — the practice-wide setup area (the submenu item used to be an
@@ -79,6 +82,7 @@ export function Settings({ onBack, onSignOut, onNavigateCalendar, onNavigateEmai
               {section === 'spletno' && <OnlineBookingSection />}
               {section === 'uporabniki' && <PracticeUsersSection />}
               {section === 'integracije' && role === 'owner' && <IntegrationsSection />}
+              {section === 'revizija' && role === 'owner' && <AuditLogSection />}
             </div>
           )}
         </CardTabs>

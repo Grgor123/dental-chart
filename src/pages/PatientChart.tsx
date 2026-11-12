@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import PhoneInput from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import { DentalChart } from '../components/chart/DentalChart';
@@ -16,7 +16,9 @@ import { ChartPrintSheet } from '../components/chart/ChartPrintSheet';
 import { useOpenVisit } from '../hooks/useOpenVisit';
 import { useVisit } from '../hooks/useVisit';
 import { useToothHistory } from '../hooks/useToothHistory';
-import { usePatientHistory } from '../hooks/usePatientHistory';
+import { usePatientHistory, type PatientHistoryEntry } from '../hooks/usePatientHistory';
+import { logPatientAccess } from '../hooks/useAuditLog';
+import { SignVisitModal } from '../components/chart/SignVisitModal';
 import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
 import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
@@ -110,6 +112,44 @@ function formatSlovenianDate(iso: string): string {
   return `${Number(d)}.${Number(m)}.${y}`;
 }
 
+// ISO timestamp -> "12. 11. 2026, 14:05" (Ljubljana time).
+function formatSlovenianDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('sl-SI', {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Ljubljana',
+  });
+}
+
+function signingDateLabel(entries: PatientHistoryEntry[], visitId: string): string {
+  const entry = entries.find((e) => e.visitId === visitId);
+  return formatSlovenianDate(entry?.date ?? new Date().toLocaleDateString('sv-SE'));
+}
+
+// Frame 8's signature line for one visit (migration 056): signed (who,
+// when), in progress, or closed but not signed yet (with "Podpiši").
+function VisitSignatureStatus({ visit, isCurrent, onSign }: { visit: PatientHistoryEntry; isCurrent: boolean; onSign: () => void }) {
+  if (visit.signedAt) {
+    return (
+      <span className="text-xs text-[var(--accent,#2e6e62)]">
+        ✓ Podpisal/a {visit.signedByName ?? '—'}, {formatSlovenianDateTime(visit.signedAt)}
+      </span>
+    );
+  }
+  if (isCurrent) return <span className="text-xs text-[var(--muted,#6f7c79)]">Trenutni obisk — še ni podpisan</span>;
+  return (
+    <>
+      <span className="rounded-full bg-[#fff1cc] px-2 py-0.5 text-[11px] font-semibold text-[#8a5a00]">Nepodpisano</span>
+      <button type="button" onClick={onSign} className="text-xs font-semibold text-[var(--accent,#2e6e62)] hover:underline">
+        Podpiši
+      </button>
+    </>
+  );
+}
+
 const GENDER_LABELS: Record<string, string> = { M: 'Moški', F: 'Ženski', '': 'Neznano' };
 
 // Frame 2 field styling — deliberately NOT boxed (a bordered/padded input
@@ -198,7 +238,15 @@ function sameTarget(a: Target, b: Target): boolean {
 // `patientId` on every mount — see useOpenVisit.ts and useVisit.ts's own
 // comments for exactly what each does.
 export function PatientChart({ patientId, patientLabel, patient, onBack, onSignOut, onNavigateCalendar, onNavigateEmail, onNavigateSettings, onNavigateInvoices, onOpenInvoice }: PatientChartProps) {
-  const { visitId, loading: visitLoading, error: visitError } = useOpenVisit(patientId);
+  const { visitId, loading: visitLoading, error: visitError, startNew: startNewVisit } = useOpenVisit(patientId);
+  // Audit log (migration 056): opening a patient's record counts as viewing
+  // it. Once per patient — the ref also absorbs StrictMode's double effect.
+  const viewLoggedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (viewLoggedFor.current === patientId) return;
+    viewLoggedFor.current = patientId;
+    void logPatientAccess(patientId, 'view');
+  }, [patientId]);
   const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent, requestMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
@@ -596,7 +644,50 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
 
   // ---- Frame 8: real cross-tooth visit rollup (usePatientHistory.ts) —
   // replaces PatientPageMockup.tsx's fabricated MOCK_VISIT_HISTORY.
-  const { entries: patientHistoryEntries } = usePatientHistory(patientId);
+  const patientHistory = usePatientHistory(patientId);
+  const patientHistoryEntries = patientHistory.entries;
+  // "Podpiši obisk" (migration 056): which visit the signing window is for.
+  const [signingVisitId, setSigningVisitId] = useState<string | null>(null);
+  const [signPrepareError, setSignPrepareError] = useState<string | null>(null);
+  // Addendum being written under a signed visit in Frame 8.
+  const [addendumFor, setAddendumFor] = useState<string | null>(null);
+  const [addendumText, setAddendumText] = useState('');
+  const [addendumError, setAddendumError] = useState<string | null>(null);
+  const [addendumBusy, setAddendumBusy] = useState(false);
+
+  // Signing the visit in progress: save the chart first, so what's signed is
+  // what's on screen.
+  async function handleSignCurrentVisit() {
+    if (!visitId) return;
+    setSignPrepareError(null);
+    const saved = await flush();
+    if (!saved) {
+      setSignPrepareError('Karte ni bilo mogoče shraniti — obisk ni podpisan.');
+      return;
+    }
+    patientHistory.reload();
+    setSigningVisitId(visitId);
+  }
+
+  async function handleSign(targetVisitId: string, note: string) {
+    const result = await patientHistory.signVisit(targetVisitId, note);
+    // The signed visit is closed; further work goes into a new one.
+    if (!result.error && targetVisitId === visitId) startNewVisit();
+    return result;
+  }
+
+  async function handleAddAddendum(targetVisitId: string) {
+    setAddendumBusy(true);
+    setAddendumError(null);
+    const result = await patientHistory.addAddendum(targetVisitId, addendumText);
+    setAddendumBusy(false);
+    if (result.error) {
+      setAddendumError(result.error);
+      return;
+    }
+    setAddendumFor(null);
+    setAddendumText('');
+  }
 
   // Statuses that need to land on the whole tooth (`surfaces.all`) no
   // matter which individual surface was actually clicked to apply them —
@@ -1033,12 +1124,74 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         )}
         {patientHistoryEntries.map((visit) => (
           <li key={visit.visitId} className="flex-none rounded-md bg-[#e7e7e7] p-3">
-            <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{formatSlovenianDate(visit.date)}</span>
-            <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
-              {visit.items.map((item, j) => (
-                <li key={j}>• {item}</li>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{formatSlovenianDate(visit.date)}</span>
+              <VisitSignatureStatus
+                visit={visit}
+                isCurrent={visit.visitId === visitId}
+                onSign={() => setSigningVisitId(visit.visitId)}
+              />
+            </div>
+            {visit.items.length > 0 && (
+              <ul className="mt-1 flex flex-col gap-0.5 text-sm text-[var(--ink,#1c2624)]">
+                {visit.items.map((item, j) => (
+                  <li key={j}>• {item}</li>
+                ))}
+              </ul>
+            )}
+            {visit.note && <p className="mt-1.5 whitespace-pre-wrap text-sm text-[var(--ink,#1c2624)]">{visit.note}</p>}
+            {visit.addenda.map((addendum) => (
+              <div key={addendum.id} className="mt-1.5 border-l-2 border-[#b26a00] pl-2 text-sm text-[var(--ink,#1c2624)]">
+                <span className="block text-xs text-[var(--muted,#6f7c79)]">
+                  Dopolnilo · {addendum.createdByName ?? '—'} · {formatSlovenianDateTime(addendum.createdAt)}
+                </span>
+                <span className="whitespace-pre-wrap">{addendum.body}</span>
+              </div>
+            ))}
+            {visit.signedAt &&
+              (addendumFor === visit.visitId ? (
+                <div className="mt-2 flex flex-col gap-1.5">
+                  <textarea
+                    value={addendumText}
+                    onChange={(e) => setAddendumText(e.target.value)}
+                    rows={3}
+                    autoFocus
+                    placeholder="Dopolnilo k podpisanemu obisku …"
+                    className="w-full rounded border border-[var(--line,#ccd6d4)] bg-white px-2 py-1.5 text-sm text-[var(--ink,#1c2624)]"
+                  />
+                  {addendumError && <span className="text-xs text-[var(--danger,#b3261e)]">{addendumError}</span>}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAddAddendum(visit.visitId)}
+                      disabled={addendumBusy || !addendumText.trim()}
+                      className="rounded bg-[var(--accent,#2e6e62)] px-3 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {addendumBusy ? 'Shranjujem …' : 'Dodaj dopolnilo'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAddendumFor(null)}
+                      disabled={addendumBusy}
+                      className="rounded border border-[var(--line,#ccd6d4)] bg-white px-3 py-1 text-xs text-[var(--ink,#1c2624)]"
+                    >
+                      Prekliči
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddendumFor(visit.visitId);
+                    setAddendumText('');
+                    setAddendumError(null);
+                  }}
+                  className="mt-1.5 text-xs font-semibold text-[var(--accent,#2e6e62)] hover:underline"
+                >
+                  + Dopolnilo
+                </button>
               ))}
-            </ul>
           </li>
         ))}
       </ul>
@@ -1257,6 +1410,17 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           onForget={(id) => voiceAliases.forget(id)}
         />
       )}
+      {signingVisitId && (
+        <SignVisitModal
+          key={signingVisitId}
+          dateLabel={signingDateLabel(patientHistoryEntries, signingVisitId)}
+          items={patientHistoryEntries.find((e) => e.visitId === signingVisitId)?.items ?? []}
+          itemsLoading={patientHistory.loading}
+          initialNote={patientHistoryEntries.find((e) => e.visitId === signingVisitId)?.note ?? ''}
+          onSign={(note) => handleSign(signingVisitId, note)}
+          onClose={() => setSigningVisitId(null)}
+        />
+      )}
       {printingChart && (
         <ChartPrintSheet
           practiceName={practiceName}
@@ -1303,7 +1467,10 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           </button>
           <button
             type="button"
-            onClick={() => setPrintingChart(true)}
+            onClick={() => {
+              setPrintingChart(true);
+              void logPatientAccess(patientId, 'print', { document: 'karta' });
+            }}
             disabled={printingChart}
             title="Natisni karto (A4)"
             aria-label="Natisni karto"
@@ -1340,6 +1507,16 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
               <path d="M12 18v3" />
             </svg>
           </button>
+          <button
+            type="button"
+            onClick={handleSignCurrentVisit}
+            disabled={!visitId}
+            title="Zaključi obisk z zapisom in podpisom — po podpisu ga ni več mogoče spreminjati."
+            className="flex-none rounded-full border border-[var(--ink,#1c2624)] px-3 py-0.5 text-xs font-semibold text-[var(--ink,#1c2624)] hover:border-[var(--accent,#2e6e62)] hover:text-[var(--accent,#2e6e62)] disabled:opacity-50"
+          >
+            Podpiši obisk
+          </button>
+          {signPrepareError && <span className="flex-none text-xs text-[var(--danger,#b3261e)]">{signPrepareError}</span>}
           <span className="flex-none text-xs text-[var(--muted,#6f7c79)]">
             {saveStatus === 'saving' && 'Shranjujem …'}
             {saveStatus === 'saved' && 'Shranjeno'}

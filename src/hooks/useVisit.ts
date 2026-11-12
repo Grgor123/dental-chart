@@ -224,7 +224,7 @@ export function useVisit(patientId: string, visitId: string | null) {
     // is therefore never actually reachable in practice, but keeps
     // TypeScript from seeing `visitId` as possibly-null in the upsert rows
     // built below.
-    if (!loaded || !visitId) return;
+    if (!loaded || !visitId) return true;
     const allFdis = new Set<string>([
       ...Object.keys(surfacesByFdi),
       ...Object.keys(postByFdi),
@@ -251,7 +251,7 @@ export function useVisit(patientId: string, visitId: string | null) {
         notesByFdi[fdi] !== last.notesByFdi[fdi] ||
         bridgeGroupByFdi[fdi] !== last.bridgeGroupByFdi[fdi]
     );
-    if (dirtyFdis.length === 0) return;
+    if (dirtyFdis.length === 0) return true;
     const rows = dirtyFdis.map((fdi) => ({
       visit_id: visitId,
       tooth_id: fdi,
@@ -286,6 +286,8 @@ export function useVisit(patientId: string, visitId: string | null) {
       };
     }
     setSaveStatus(error ? 'error' : 'saved');
+    // True when everything is saved — signing a visit waits for this.
+    return !error;
   }, [
     visitId,
     loaded,
@@ -315,7 +317,7 @@ export function useVisit(patientId: string, visitId: string | null) {
   // call site already does for other reasons.
   const closeVisit = useCallback(async () => {
     if (!visitId) return;
-    await supabase.from('visits').update({ closed_at: new Date().toISOString() }).eq('id', visitId);
+    await supabase.from('visits').update({ closed_at: new Date().toISOString() }).eq('id', visitId).is('closed_at', null);
   }, [visitId]);
 
   return {
