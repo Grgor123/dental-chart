@@ -25,12 +25,14 @@ const ENTITY_LABELS: Record<string, string> = {
   health_questionnaires: 'Vprašalnik o zdravju',
   invoices: 'Račun',
   visit_addenda: 'Dopolnilo obiska',
+  patient_consents: 'Soglasje',
 };
 
 const DOCUMENT_LABELS: Record<string, string> = {
   karta: 'karta (A4)',
   racun: 'račun',
   navodila: 'navodila po posegu',
+  soglasje: 'soglasje',
 };
 
 // The most common field names in plain words; others are shown as stored.
@@ -62,9 +64,12 @@ const FIELD_LABELS: Record<string, string> = {
   service: 'storitev',
   closed_at: 'zaprt',
   signed_at: 'podpis',
+  explained_at: 'pojasnilo',
+  cancelled_at: 'preklic',
+  sent_at: 'poslano',
 };
 // Bookkeeping columns that change with every save — not worth listing.
-const HIDDEN_FIELDS = new Set(['updated_at', 'signed_by', 'signed_by_name']);
+const HIDDEN_FIELDS = new Set(['updated_at', 'signed_by', 'signed_by_name', 'signature_png', 'signer_user_agent', 'signed_via', 'signer_name', 'explained_by', 'explained_by_name', 'expires_at']);
 
 // Repeated changes of the same record by the same person, one after another
 // (the chart saves every 30 seconds), are shown as one row. The log itself

@@ -549,6 +549,34 @@ async function main() {
     check('a browser cannot write the audit log directly', !!auditInsert, auditInsert ? auditInsert.message : 'insert unexpectedly succeeded');
   }
 
+  // 4u. Informed consents (058_patient_consents.sql, 060) — account 2 can't
+  // add a consent form to account 1's library or read it, can't create a
+  // consent for account 1's patient, read its consents, confirm / cancel one,
+  // or get its QR link.
+  if (foreignPatientId && account1PracticeId) {
+    const { error: templateSpoof } = await client2
+      .from('consent_templates')
+      .insert({ practice_id: account1PracticeId, title: 'Spoof', body: 'x' });
+    check("account 2 cannot add a consent form to account 1's library", !!templateSpoof, templateSpoof ? templateSpoof.message : 'insert unexpectedly succeeded');
+    const { data: leakedTemplates } = await client2.from('consent_templates').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's consent forms", !leakedTemplates || leakedTemplates.length === 0, `${leakedTemplates?.length ?? 0} row(s) visible`);
+    const { error: consentSpoof } = await client2
+      .from('patient_consents')
+      .insert({ practice_id: account1PracticeId, patient_id: foreignPatientId, title: 'Spoof', body: 'x' });
+    check("account 2 cannot create a consent for account 1's patient", !!consentSpoof, consentSpoof ? consentSpoof.message : 'insert unexpectedly succeeded');
+    const { data: leakedConsents } = await client2.from('patient_consents').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's patient consents", !leakedConsents || leakedConsents.length === 0, `${leakedConsents?.length ?? 0} row(s) visible`);
+    const { data: account1Consent } = await client1.from('patient_consents').select('id').limit(1).maybeSingle();
+    if (account1Consent) {
+      const { error: explainSpoof } = await client2.rpc('confirm_consent_explained', { p_consent_id: account1Consent.id });
+      check("account 2 cannot confirm account 1's consent", !!explainSpoof, explainSpoof ? explainSpoof.message : 'confirm unexpectedly succeeded');
+      const { error: cancelSpoof } = await client2.rpc('cancel_patient_consent', { p_consent_id: account1Consent.id });
+      check("account 2 cannot cancel account 1's consent", !!cancelSpoof, cancelSpoof ? cancelSpoof.message : 'cancel unexpectedly succeeded');
+      const { error: linkSpoof } = await client2.rpc('prepare_consent_link', { p_consent_id: account1Consent.id });
+      check("account 2 cannot get the link of account 1's consent", !!linkSpoof, linkSpoof ? linkSpoof.message : 'call unexpectedly succeeded');
+    }
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

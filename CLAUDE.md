@@ -142,6 +142,11 @@ src/
                                 # roles, remove — see "Staff users" below
       AuditLogSection.tsx      # Nastavitve → Revizijska sled (owners) —
                                 # see "Signed visits and audit log"
+      ConsentTemplatesSection.tsx # Nastavitve → Soglasja: consent library
+    consents/
+      PatientConsentsPanel.tsx # Patient record → Frame 3 → Soglasja tab
+      SignConsentModal.tsx     # "Podpis soglasja": explained + QR / email
+                                # — both: see "Informed consents"
       TeamSection.tsx          # Nastavitve → Ekipa: team members + rooms —
                                 # see "Team and rooms" below
       WorkingHoursDialog.tsx   # Ekipa → Delovni čas (weekly, special days,
@@ -212,6 +217,7 @@ src/
     useUnsignedVisits.ts        # Patient list's "Nepodpisani obiski"
     useAuditLog.ts              # logPatientAccess() + the log reader — see
                                 # "Signed visits and audit log"
+    useConsents.ts              # Consent library + one patient's consents
     useTherapists.ts            # The practice's team (therapists) — see
                                 # "Team and rooms" below
     useRooms.ts                 # Ordinacije (rooms) — same section
@@ -532,7 +538,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`057_audit_log_less_noise.sql` — all confirmed run (016–019 are the
+`060_consents_qr_only.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -549,9 +555,10 @@ and the clinic's appointment durations, see "Online booking"; 052–055 the
 reminder email's confirm link, the daily confirmation report, requested
 confirmations and the reply address, see "Reminder confirmation" under
 "Native scheduling calendar"; 056–057 signed visits and the audit log, see
-"Signed visits and audit log"). `supabase/schema.sql`
+"Signed visits and audit log"; 058–060 informed consents, see "Informed
+consents (Soglasja)" — 059's signing tablets were removed again by 060). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(057 included; 041's tags deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(060 included; 041's tags and 059's signing tablets deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3246,6 +3253,74 @@ views; production set up after these two.
   practice's visit, read its addenda or log, log access to its patient, or
   write the log) — passed 2026-11-12 (75/75).
 
+### Informed consents (Soglasja)
+
+**Status: built and confirmed by Gregor on localhost (2026-11-12)** —
+migrations 058–060 run; `patient-consent` (`--no-verify-jwt`) and
+`send-patient-consent` deployed. Monika doesn't use written consents yet but
+wants them, mainly for implants and other riskier treatments; built for any
+practice. Gregor's choices: an editable library with drafts written by Claude;
+a drawn signature; the dentist confirms the explanation; signing by **QR code**
+(the patient's phone, or the practice tablet scanning it) **or email** (read
+and sign at home). A qualified (SIGEN-CA) signature is not needed here.
+
+- **Library** — Nastavitve → **Soglasja** (`ConsentTemplatesSection.tsx`,
+  `consent_templates`): list, editor, preview. Six DRAFT texts by Claude
+  (implant, puljenje, endodontija, oralnokirurški poseg, lokalna anestezija,
+  RTG v nosečnosti), "Osnutek — preglejte" until saved — **Monika must
+  review them** (general guidance, not legal advice). "+ Novo soglasje" saves
+  nothing until Shrani (title and text required); an empty form is never
+  offered on the patient record. A new practice adds the drafts with "Dodaj
+  osnutke" (`add_default_consent_templates()`; the signup trigger is
+  untouched).
+- **Patient record → Frame 3 → Soglasja** (`PatientConsentsPanel.tsx`):
+  "+ Novo soglasje" → form + optional "Predvideni poseg" (e.g. "zob 36,
+  implantat") → **Podpis soglasja** window (`SignConsentModal.tsx`): the
+  dentist ticks "Pacientu sem pojasnil(a) …" (`confirm_consent_explained()`,
+  required for both ways), then
+  - **"Podpis zdaj — prikaži kodo QR"** (`prepare_consent_link()`, link valid
+    at least a day) — the window polls every 3 s and shows "✓ Pacient je
+    soglasje podpisal"; "Odpri povezavo na tem računalniku" opens the same
+    page;
+  - **"Pošlji po e-pošti"** (`send-patient-consent`, template
+    `patient_consent` — tab "Soglasje" on E-pošta, manual only; 30-day link;
+    refused for a patient who unsubscribed).
+  The list shows Čaka na podpis / Poslano po e-pošti / Povezava potekla /
+  ✓ Podpisano / Preklicano, "Pojasnil: …", Odpri (text + signature),
+  Natisni (A4, `lib/consentPrint.ts`), Prekliči (`cancel_patient_consent()`).
+- **Signing page**: `docs/patient-consent.html` + `consent-sign.js` /
+  `consent-sign.css` (GitHub Pages) → `patient-consent` function. The patient
+  reads the text, signs with a finger/stylus/mouse and ticks "S posegom
+  soglašam". **The name is not editable** (Gregor): the page shows it, and the
+  server always stores the patient's name from the record.
+- **The patient's copy** (Gregor): right after signing the function makes an
+  A4 **PDF** (`_shared/consentPdf.ts` — pdf-lib + DejaVu Sans fetched from
+  jsdelivr, embedded as a subset for č/š/ž; practice header from Podatki za
+  račune, text, details, signature, "Pacient" / "Pojasnil" with times) —
+  offered on the thank-you screen ("Shrani ali natisni kopijo (PDF)") and
+  emailed as `soglasje.pdf` when the patient has an address and didn't
+  unsubscribe (`_shared/email/sendConsentCopy.ts`, fixed wording, logged as
+  `patient_consent`). A failed copy never undoes the signature.
+- **Database** (`patient_consents`): a frozen copy of title/text/details per
+  consent, 64-hex `token`, `expires_at`, created / sent / explained / signed /
+  cancelled with who and when, `signature_png` (data URL ≤ 400 kB). A signed
+  consent can't be changed or deleted (trigger `guard_patient_consent`); only
+  the explanation can still be added once. Browsers can only insert (fields
+  forced empty by `prepare_patient_consent`); every other change goes through
+  the functions above. Audit log: created / signed (logged as "Podpis") /
+  printed.
+- **Tried and removed (060)**: signing in the app on this device, and paired
+  practice tablets (059 `signing_devices`, `docs/podpis.html`,
+  `signing-device` function — deleted). Gregor kept QR only, then added email
+  back for "explain in the practice, sign at home".
+- **Idea for later** (Gregor): the doctor's qualified SIGEN-CA signature at the
+  "pojasnil sem" step, signing a short declaration (text fingerprint, patient,
+  procedure, time) rather than the PDF; needs a local signing component
+  (e.g. proXSign) on each computer.
+- **Tenant isolation**: section 4u (library and consents not addable/readable
+  across practices; confirm / cancel / QR link refused for another practice's
+  consent) — not yet run.
+
 ### Chart printout (A4)
 
 **Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
@@ -5663,7 +5738,12 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-12, later (Signed visits — "Podpiši obisk", locked
+*Last updated: 2026-11-12, evening (Informed consents — library with draft
+texts, signing by QR code or email after the dentist confirms the explanation,
+PDF copy to the patient — migrations 058–060. See "Informed consents
+(Soglasja)".)*
+
+*Previous entry: 2026-11-12, later (Signed visits — "Podpiši obisk", locked
 after signing, addenda, "Nepodpisano" lists; audit log of changes and views
 with Nastavitve → Revizijska sled — migrations 056–057. See "Signed visits
 and audit log".)*

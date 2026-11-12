@@ -30,6 +30,7 @@ export const TEMPLATE_KEYS = [
   'post_visit',
   'recall',
   'health_questionnaire',
+  'patient_consent',
   'invoice',
   'credit_note',
   'aftercare',
@@ -250,6 +251,23 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     timing: null,
     sendHourDefault: null,
     actionLabel: 'Izpolnite vprašalnik',
+  },
+  patient_consent: {
+    key: 'patient_consent',
+    label: 'Soglasje k posegu',
+    tabLabel: 'Soglasje',
+    description:
+      'Ročno — »Pošlji po e-pošti« pri podpisu soglasja na kartoteki pacienta, ko je zobozdravnik poseg že pojasnil. Pacient soglasje prebere in podpiše doma.',
+    defaultSubject: 'Soglasje k posegu — {ordinacija}',
+    defaultHeading: 'Soglasje k posegu',
+    defaultBody:
+      'Pozdravljeni {ime},\n\nkot smo se dogovorili, vam pošiljamo soglasje k predvidenemu posegu. Prosimo, da ga v miru preberete in podpišete. Če imate kakršnokoli vprašanje, nas pred podpisom pokličite ali nam pišite — z veseljem vam bomo vse pojasnili.\n\nPovezava je veljavna 30 dni.',
+    placeholders: ['ime', 'priimek', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: 'Preberite in podpišite soglasje',
+    manualOnly: true,
   },
   invoice: {
     key: 'invoice',

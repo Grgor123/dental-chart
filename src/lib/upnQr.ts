@@ -14,6 +14,11 @@ export function fursQrSvg(value: string): string {
   return qrSvg(QRCode.create(value, { errorCorrectionLevel: 'M' }));
 }
 
+/** A link as a QR code to scan with a phone (e.g. a consent to sign). */
+export function linkQrSvg(url: string): string {
+  return qrSvg(QRCode.create(url, { errorCorrectionLevel: 'M' }));
+}
+
 function qrSvg(qr: ReturnType<typeof QRCode.create>): string {
   const { size, data } = qr.modules;
   let path = '';

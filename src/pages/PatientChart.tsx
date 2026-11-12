@@ -19,6 +19,7 @@ import { useToothHistory } from '../hooks/useToothHistory';
 import { usePatientHistory, type PatientHistoryEntry } from '../hooks/usePatientHistory';
 import { logPatientAccess } from '../hooks/useAuditLog';
 import { SignVisitModal } from '../components/chart/SignVisitModal';
+import { PatientConsentsPanel } from '../components/consents/PatientConsentsPanel';
 import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
 import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
@@ -490,7 +491,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // PatientPageMockup.tsx, per Gregor's explicit choice to keep this
   // section fabricated (no real imaging/messaging backend).
   const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
-  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sporocila'>('rentgeni');
+  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sporocila' | 'soglasja'>('rentgeni');
   const [messageFilter, setMessageFilter] = useState<'all' | MessageChannel>('all');
   const [openEmail, setOpenEmail] = useState<PatientMessage | null>(null);
   const patientMessages = usePatientMessages(patientId, patientDraft.phone ?? null, infoTab === 'sporocila');
@@ -1207,6 +1208,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
               ['rentgeni', 'Rentgeni'],
               ['fotografije', 'Fotografije'],
               ['sporocila', 'Sporočila'],
+              ['soglasja', 'Soglasja'],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1248,6 +1250,15 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
           </div>
         </div>
+      )}
+      {infoTab === 'soglasja' && (
+        <PatientConsentsPanel
+          patientId={patientId}
+          patientName={`${patientDraft.firstName} ${patientDraft.lastName}`.trim()}
+          patientDob={patientDraft.dob ? formatSlovenianDate(patientDraft.dob) : null}
+          patientEmail={patientDraft.email || null}
+          practiceName={practiceName ?? ''}
+        />
       )}
       {infoTab === 'fotografije' && (
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">

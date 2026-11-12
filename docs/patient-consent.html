@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soglasje k posegu</title>
+<link rel="stylesheet" href="consent-sign.css">
+</head>
+<body>
+  <!-- Static page on GitHub Pages (Supabase Edge Functions can't serve HTML on
+       the shared domain — see sms-consent.html). Opened from the QR code shown
+       in the practice (patient's phone or the practice tablet) or from the
+       emailed link; the signing screen itself is consent-sign.js. -->
+  <div class="wrap" id="app"><div class="card center">Nalaganje …</div></div>
+  <script src="backend.js"></script>
+  <script src="consent-sign.js"></script>
+  <script>
+  (function () {
+    var app = document.getElementById('app');
+    var esc = window.dcConsentEsc;
+    function message(title, text) {
+      app.innerHTML = '<div class="card center"><h1>' + esc(title) + '</h1><p class="meta">' + esc(text) + '</p></div>';
+      window.scrollTo(0, 0);
+    }
+    var token = new URLSearchParams(location.search).get('token') || '';
+    window.dcConsentSign(app, token, {
+      onDone: function (status, result) {
+        if (status === 'signed') {
+          message('Soglasje je podpisano', 'Hvala. Podpisano soglasje je shranjeno v vaši kartoteki.');
+          var card = app.querySelector('.card');
+          if (result && result.emailed) {
+            card.insertAdjacentHTML('beforeend', '<p class="meta">Kopijo smo vam poslali tudi po e-pošti.</p>');
+          }
+          // The signed copy (PDF made by the patient-consent function) — to
+          // save on the phone or print.
+          if (result && result.pdf) {
+            var bytes = Uint8Array.from(atob(result.pdf), function (c) { return c.charCodeAt(0); });
+            var url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+            card.insertAdjacentHTML('beforeend',
+              '<a class="submit" style="display:block;text-decoration:none;max-width:360px;margin:20px auto 0" href="' + url + '" download="soglasje.pdf" target="_blank" rel="noopener">Shrani ali natisni kopijo (PDF)</a>');
+          }
+          return;
+        }
+        else if (status === 'cancelled') message('Soglasje ni več veljavno', 'Ordinacija je to soglasje preklicala. Za več informacij se obrnite nanjo.');
+        else if (status === 'expired') message('Povezava je potekla', 'Za novo povezavo se obrnite na ordinacijo.');
+        else if (status === 'error') message('Napaka', 'Soglasja ni bilo mogoče naložiti. Poskusite znova kasneje.');
+        else message('Povezava ni veljavna', 'Preverite povezavo ali se obrnite na ordinacijo.');
+      }
+    });
+  })();
+  </script>
+</body>
+</html>
