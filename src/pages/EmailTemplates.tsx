@@ -94,7 +94,7 @@ export function EmailTemplates({ onBack, onSignOut, onNavigateCalendar, onNaviga
               const override = overrides[key];
               return {
                 key,
-                label: TEMPLATE_DEFS[key].label,
+                label: TEMPLATE_DEFS[key].tabLabel ?? TEMPLATE_DEFS[key].label,
                 badge: (
                   <>
                     {override && !override.enabled && (

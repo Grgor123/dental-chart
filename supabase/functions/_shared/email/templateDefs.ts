@@ -108,6 +108,8 @@ export interface TemplateDef {
   key: TemplateKey;
   /** Editor list label (Slovene). */
   label: string;
+  /** Shorter name for the E-pošta page's tab; the card title keeps `label`. */
+  tabLabel?: string;
   /** One line under the label in the editor. */
   description: string;
   defaultSubject: string;
@@ -140,6 +142,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   appointment_confirmation: {
     key: 'appointment_confirmation',
     label: 'Potrditev termina',
+    tabLabel: 'Potrditev',
     description: 'Takoj, ko je termin ustvarjen.',
     defaultSubject: 'Termin potrjen — {datum} ob {ura}',
     defaultHeading: 'Termin je potrjen',
@@ -154,6 +157,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   appointment_reminder: {
     key: 'appointment_reminder',
     label: 'Opomnik na termin',
+    tabLabel: 'Opomnik',
     description: 'Nekaj dni pred terminom.',
     defaultSubject: 'Opomnik na termin — {datum} ob {ura}',
     defaultHeading: 'Opomnik na termin',
@@ -171,6 +175,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   appointment_cancelled: {
     key: 'appointment_cancelled',
     label: 'Odpoved termina',
+    tabLabel: 'Odpoved',
     description: 'Takoj, ko je termin odpovedan.',
     defaultSubject: 'Termin odpovedan — {datum} ob {ura}',
     defaultHeading: 'Termin je odpovedan',
@@ -185,6 +190,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   appointment_rescheduled: {
     key: 'appointment_rescheduled',
     label: 'Sprememba termina',
+    tabLabel: 'Sprememba',
     description: 'Takoj, ko je termin prestavljen na drug čas.',
     defaultSubject: 'Termin prestavljen — {datum} ob {ura}',
     defaultHeading: 'Termin je prestavljen',
@@ -199,6 +205,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   post_visit: {
     key: 'post_visit',
     label: 'Zahvala po obisku',
+    tabLabel: 'Zahvala',
     description: 'Po koncu opravljenega termina.',
     defaultSubject: 'Hvala za obisk — {ordinacija}',
     defaultHeading: 'Hvala za obisk',
@@ -213,6 +220,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   recall: {
     key: 'recall',
     label: 'Vabilo na kontrolni pregled',
+    tabLabel: 'Kontrolni pregled',
     description: 'Nekaj mesecev po zadnjem obisku, če pacient nima novega termina.',
     defaultSubject: 'Čas je za kontrolni pregled — {ordinacija}',
     defaultHeading: 'Čas je za kontrolni pregled',
@@ -229,6 +237,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   health_questionnaire: {
     key: 'health_questionnaire',
     label: 'Vprašalnik o zdravju',
+    tabLabel: 'Vprašalnik',
     description:
       'Ko je termin potrjen, če pacient v zadnjih 12 mesecih še ni izpolnil vprašalnika — ali ročno z gumbom »Pošlji vprašalnik« na kartoteki pacienta.',
     defaultSubject: 'Vprašalnik o zdravju — {ordinacija}',
@@ -281,6 +290,7 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
   aftercare: {
     key: 'aftercare',
     label: 'Navodila po posegu',
+    tabLabel: 'Navodila',
     description:
       'Ob izdaji računa, če so na njem označena navodila (tematike) — ali ročno z gumbom »Pošlji znova« na izdanem računu. Pod tem uvodom sledijo označene tematike.',
     defaultSubject: 'Navodila po obisku — {ordinacija}',

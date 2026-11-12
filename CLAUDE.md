@@ -3430,7 +3430,9 @@ fed from one another in any way; don't conflate them.
   is now set at the top of the **E-pošta** page ("Odgovori pacientov prejme",
   suggests the email from Podatki za račune) through the owner-only
   `set_practice_contact_email()`. A move to Podatki za račune with a "drug
-  naslov" checkbox was built and reverted at Gregor's request.
+  naslov" checkbox was built and reverted at Gregor's request. Tenant
+  isolation 4s (another practice's reply address can't be changed) — passed
+  2026-11-11 (69/69).
 - **`MiniCalendar.tsx`** — a small month-picker widget in the sidebar
   (month navigation, Monday-first day grid, today/selected-day
   highlighting), clicking a date jumps the main calendar there. Its own
@@ -3930,7 +3932,23 @@ taller Besedilo box just makes the page scroll). A small teal dot on a tab
 marks a customized email, a red "Izklopljeno" tag a disabled one. The
 selected tab is joined to the card (raised above the card's top border, with
 small concave fillets; the first tab squares the card's top-left corner so
-its left line continues straight down). Layout went through several rounds
+its left line continues straight down). **Tabs carry short names**
+(`TemplateDef.tabLabel` — Potrditev, Opomnik, Odpoved, Sprememba, Zahvala,
+Kontrolni pregled, Vprašalnik, Račun, Dobropis, Navodila; Gregor,
+2026-11-12) so they fit on one row; the card title and everything else keep
+the full `label`. Grouping the emails into 4 tabs with capsules inside the
+card was built and rejected — keep one tab per email.
+
+**Rule for folder tabs (`CardTabs.tsx`, every page that uses them):** when
+the tabs don't fit on one line, they wrap onto more rows **and the row holding
+the selected tab is always drawn against the card**, the other rows above it
+in their usual order — like Windows' multi-row tab dialogs (Gregor,
+2026-11-12: a second row floating above the card read as detached). Rows are
+measured from an invisible copy in the natural order, so a row's contents
+never change, only the order of the rows; the first tab of the bottom row
+squares the card's top-left corner. Don't replace this with capsules,
+grouping or a sideways-scrolling strip; shorten labels first if a row gets
+crowded. Layout went through several rounds
 of Gregor's explicit feedback — don't rearrange it without asking; in
 particular he rejected a vertical-compaction attempt (side-by-side
 subject/heading, shorter body) and asked for the card's bottom edge to be
@@ -5447,7 +5465,8 @@ next:
    request; restoring ("Obnovi") stays one click.
    `CardTabs.tsx` (`src/components/ui/`) is shared with `EmailTemplates.tsx`
    — the folder-tab-onto-a-card look, extracted so both pages stay pixel
-   identical.
+   identical. Tabs that wrap onto several rows follow the multi-row rule under
+   "Email templates (E-pošta)" → Frontend (selected row against the card).
 
    **Chart → invoice: built 2026-10-09 — see "ZZZS šifrant, price-list import
    and chart → invoice". The design notes below are the original record; where
@@ -5574,7 +5593,11 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-11, later (Daily confirmation report at 17:00 —
+*Last updated: 2026-11-12 (Folder tabs: wrapped rows put the selected tab's
+row against the card, like Windows' multi-row tabs; short tab names on
+E-pošta — see "Email templates (E-pošta)" → Frontend.)*
+
+*Previous entry: 2026-11-11, later (Daily confirmation report at 17:00 —
 migration 054; "Pošlji e-pošto in SMS za potrditev termina" when booking,
 email at once and SMS 2 hours later, SMS job every 15 minutes; reply address
 on the E-pošta page — migration 055. See "Reminder confirmation" under
