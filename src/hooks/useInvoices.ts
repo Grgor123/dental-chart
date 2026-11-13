@@ -66,6 +66,8 @@ export interface InvoiceLineDraft {
   discountPercent: number;
   /** The performed service this line bills (migration 033, "Dodaj iz karte"). */
   performedServiceId?: string | null;
+  /** The accepted predračun item this line bills (migration 061, "Dodaj iz predračuna"). */
+  treatmentPlanItemId?: string | null;
 }
 
 export interface InvoiceDetail extends InvoiceSummary {
@@ -332,6 +334,7 @@ export function useInvoice(invoiceId: string) {
         unitPriceEur: Number(l.unit_price_eur),
         discountPercent: Number(l.discount_percent),
         performedServiceId: (l.performed_service_id as string | null) ?? null,
+        treatmentPlanItemId: (l.treatment_plan_item_id as string | null) ?? null,
       }));
     const credit = (creditNotes.data ?? [])[0] as { id: string; number: string | null } | undefined;
     setInvoice({
@@ -421,6 +424,8 @@ export function useInvoice(invoiceId: string) {
             unit_price_eur: l.unitPriceEur,
             discount_percent: l.discountPercent,
             performed_service_id: l.performedServiceId ?? null,
+            // Only sent when set, so saving works before migration 061 too.
+            ...(l.treatmentPlanItemId ? { treatment_plan_item_id: l.treatmentPlanItemId } : {}),
           }))
         );
         if (insertError) return { error: friendlyError(insertError.message) };

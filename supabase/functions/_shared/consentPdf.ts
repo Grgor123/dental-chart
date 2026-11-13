@@ -12,7 +12,8 @@ const FONT_URL = 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaV
 const BOLD_URL = 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSans-Bold.ttf';
 
 let fontCache: Promise<[Uint8Array, Uint8Array]> | null = null;
-function loadFonts(): Promise<[Uint8Array, Uint8Array]> {
+/** DejaVu Sans regular + bold (also used by planPdf.ts). */
+export function loadFonts(): Promise<[Uint8Array, Uint8Array]> {
   if (!fontCache) {
     fontCache = Promise.all(
       [FONT_URL, BOLD_URL].map(async (url) => {
@@ -53,13 +54,13 @@ function dateTime(iso: string): string {
   return new Date(iso).toLocaleString('sl-SI', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Europe/Ljubljana' });
 }
 
-interface Word {
+export interface Word {
   text: string;
   bold: boolean;
 }
 
 /** One paragraph → lines of words (bold runs from **…**, \n forces a break). */
-function layoutParagraph(text: string, regular: PDFFont, bold: PDFFont, size: number, width: number): Word[][] {
+export function layoutParagraph(text: string, regular: PDFFont, bold: PDFFont, size: number, width: number): Word[][] {
   const lines: Word[][] = [];
   for (const hardLine of text.split('\n')) {
     const words: Word[] = [];

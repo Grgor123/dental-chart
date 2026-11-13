@@ -26,6 +26,7 @@ const ENTITY_LABELS: Record<string, string> = {
   invoices: 'Račun',
   visit_addenda: 'Dopolnilo obiska',
   patient_consents: 'Soglasje',
+  treatment_plans: 'Predračun',
 };
 
 const DOCUMENT_LABELS: Record<string, string> = {
@@ -33,6 +34,7 @@ const DOCUMENT_LABELS: Record<string, string> = {
   racun: 'račun',
   navodila: 'navodila po posegu',
   soglasje: 'soglasje',
+  predracun: 'predračun',
 };
 
 // The most common field names in plain words; others are shown as stored.
@@ -67,9 +69,13 @@ const FIELD_LABELS: Record<string, string> = {
   explained_at: 'pojasnilo',
   cancelled_at: 'preklic',
   sent_at: 'poslano',
+  accepted_at: 'sprejem',
+  valid_until: 'veljavnost',
+  title: 'naslov',
+  note: 'opomba',
 };
 // Bookkeeping columns that change with every save — not worth listing.
-const HIDDEN_FIELDS = new Set(['updated_at', 'signed_by', 'signed_by_name', 'signature_png', 'signer_user_agent', 'signed_via', 'signer_name', 'explained_by', 'explained_by_name', 'expires_at']);
+const HIDDEN_FIELDS = new Set(['updated_at', 'signed_by', 'signed_by_name', 'signature_png', 'signer_user_agent', 'signed_via', 'signer_name', 'explained_by', 'explained_by_name', 'expires_at', 'accepted_variant_id', 'accepted_via', 'accepted_by_name', 'token']);
 
 // Repeated changes of the same record by the same person, one after another
 // (the chart saves every 30 seconds), are shown as one row. The log itself

@@ -218,6 +218,7 @@ src/
     useAuditLog.ts              # logPatientAccess() + the log reader — see
                                 # "Signed visits and audit log"
     useConsents.ts              # Consent library + one patient's consents
+    useTreatmentPlans.ts        # Predračuni: list, one plan, accepted items
     useTherapists.ts            # The practice's team (therapists) — see
                                 # "Team and rooms" below
     useRooms.ts                 # Ordinacije (rooms) — same section
@@ -538,7 +539,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`060_consents_qr_only.sql` — all confirmed run (016–019 are the
+`061_treatment_plans.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -556,9 +557,10 @@ reminder email's confirm link, the daily confirmation report, requested
 confirmations and the reply address, see "Reminder confirmation" under
 "Native scheduling calendar"; 056–057 signed visits and the audit log, see
 "Signed visits and audit log"; 058–060 informed consents, see "Informed
-consents (Soglasja)" — 059's signing tablets were removed again by 060). `supabase/schema.sql`
+consents (Soglasja)" — 059's signing tablets were removed again by 060; 061 treatment plans /
+predračun, see "Treatment plans and predračun"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(060 included; 041's tags and 059's signing tablets deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(061 included; 041's tags and 059's signing tablets deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3321,6 +3323,64 @@ and sign at home). A qualified (SIGEN-CA) signature is not needed here.
   across practices; confirm / cancel / QR link refused for another practice's
   consent) — not yet run.
 
+### Treatment plans and predračun
+
+**Status: built and confirmed by Gregor on localhost (2026-11-13)** —
+migration 061 run; `treatment-plan` (`--no-verify-jwt`) and
+`send-treatment-plan` deployed. Roadmap item 4. Gregor's choices: items only
+from the price list, chosen by people (the chart ↔ Cenik links can be wrong;
+an AI agent may later prepare **draft** plans through the API, always
+reviewed); several options per plan; confirmation **by email (one click, no
+signature, no QR code)** or **verbally by phone**; confirmed items go on an
+invoice in one click.
+
+- **Patient record → Frame 3 → Predračuni** (`PatientPlansPanel.tsx`): list
+  with number (PR-YYYY-NNNN per practice and year), status (Osnutek / Poslano
+  pacientu / Sprejet / Preklican / Potekel), totals per option, and for a
+  confirmed one "Še ni zaračunano: N od M storitev". "+ Nov predračun".
+- **Editing is a panel on the patient record** (`TreatmentPlanPanel.tsx`),
+  not a separate page (Gregor): it replaces the right-hand side while the
+  chart stays fully editable on the left (below the chart on narrow screens).
+  Beside the chart the panel ends at the bottom of the window and scrolls on
+  its own (height measured from where it starts — `planFrameRef` in
+  `PatientChart.tsx`; a 100vh max-height and a breakpoint check were tried and
+  didn't work). Autosave ~1 s after a change. Title, valid until (default
+  30 days), note; options (first "Predlagano zdravljenje", "+ Dodaj možnost
+  (alternativo)" — click an option to make it the target for suggestions);
+  items from Cenik (`ServicePicker`, shared with invoices) with tooth,
+  quantity, price, discount.
+- **"Predlogi s karte"** (`lib/planSuggestions.ts`): the LIVE chart's planned
+  marks (caries surfaces → filling by surface count, predvidena ekstrakcija,
+  overlay, zalitje fisur, endo "planned") with the Cenik service linked
+  through "Iz karte" — added only with **Dodaj**; several linked services →
+  a dropdown; none → "izberi iz cenika" (pre-fills the tooth); "✓ na
+  predračunu" once added.
+- **Sending** ("Pošlji pacientu po e-pošti", `send-treatment-plan`, template
+  `treatment_plan` — tab "Predračun" on E-pošta): the predračun as a **PDF
+  attachment** (`_shared/planPdf.ts`, all options) and a button to
+  `docs/treatment-plan.html` — pick an option, tick, **"Potrjujem
+  predračun"** (`treatment-plan` → `sign_treatment_plan()` with no
+  signature); the patient then gets the PDF copy on screen and by email
+  (`_shared/email/sendPdfCopy.ts`, also used by the consent copy).
+  **"Sprejet ustno"** (phone): staff pick the option
+  (`accept_treatment_plan_verbally()`), recorded under their name.
+  "Natisni" = A4 (`lib/planPrint.ts`). A QR code and a drawn signature were
+  built and removed (Gregor: "too extreme").
+- **Confirmed = frozen** (triggers `guard_treatment_plan`,
+  `prepare_treatment_plan_part`): the chosen option ✓, the others "ni
+  izbrano", each item "še ni zaračunano" / "zaračunano (number)". Cancel only
+  while nothing is invoiced; a never-sent draft can be deleted.
+- **Invoice: "Dodaj iz predračuna"** (`PlanItemsDialog.tsx`, next to "Dodaj
+  iz karte"): confirmed items not yet on a non-cancelled invoice, ticked, at
+  the agreed price; `invoice_lines.treatment_plan_item_id`, checked by
+  `check_invoice_line_plan_item` (only the chosen option of a confirmed plan
+  of the same practice). Partial invoicing works; a storno frees the items.
+- **Audit log**: plans created / confirmed ("Podpis") / printed.
+- **Not built**: phases, automatic ticking-off from the chart, an
+  unscheduled-work list, X-ray images beside the plan (imaging, roadmap
+  item 10).
+- **Tenant isolation**: section 4v — not yet run.
+
 ### Chart printout (A4)
 
 **Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
@@ -5716,7 +5776,8 @@ Gregor before starting each item.
    one is built in the app, per practice, at clinic scale.
 4. **Treatment plans and predračun** (spec 2.4) — from the chart's planned
    findings, priced from Cenik, alternative plans, patient acceptance,
-   unscheduled-accepted-treatment worklist.
+   unscheduled-accepted-treatment worklist. **Built 2026-11-13** (see
+   "Treatment plans and predračun"); phases and the worklist not yet.
 5. **Calendar for several dentists + Google Calendar sync** (spec 3.1) —
    working hours, durations, rooms; each practitioner and nurse sees their own
    schedule in their own Google Calendar with **no patient details, initials
@@ -5738,7 +5799,12 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-12, evening (Informed consents — library with draft
+*Last updated: 2026-11-13 (Treatment plans / predračun — options, Cenik items,
+chart suggestions in a panel beside the chart, email with PDF and one-click
+confirmation, "Sprejet ustno", "Dodaj iz predračuna" on invoices — migration
+061. See "Treatment plans and predračun".)*
+
+*Previous entry: 2026-11-12, evening (Informed consents — library with draft
 texts, signing by QR code or email after the dentist confirms the explanation,
 PDF copy to the patient — migrations 058–060. See "Informed consents
 (Soglasja)".)*

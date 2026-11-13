@@ -20,6 +20,8 @@ import { usePatientHistory, type PatientHistoryEntry } from '../hooks/usePatient
 import { logPatientAccess } from '../hooks/useAuditLog';
 import { SignVisitModal } from '../components/chart/SignVisitModal';
 import { PatientConsentsPanel } from '../components/consents/PatientConsentsPanel';
+import { PatientPlansPanel } from '../components/plans/PatientPlansPanel';
+import { TreatmentPlanPanel } from '../components/plans/TreatmentPlanPanel';
 import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
 import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
@@ -254,6 +256,28 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // "Natisni karto": while true, ChartPrintSheet renders the A4 printout and
   // opens the print dialog; it clears this once the dialog closes.
   const [printingChart, setPrintingChart] = useState(false);
+  // The predračun open next to the chart (migration 061; Gregor 2026-11-13):
+  // it takes the right-hand side of the page while the chart stays editable.
+  const [openPlanId, setOpenPlanId] = useState<string | null>(null);
+  // The predračun frame's height when it sits beside the chart: from where it
+  // starts on the page down to the bottom of the window (12 px margin), so it
+  // gets its own scrollbar. Null when it sits below the chart (narrow screen).
+  const planFrameRef = useRef<HTMLDivElement>(null);
+  const [planFrameHeight, setPlanFrameHeight] = useState<number | null>(null);
+  useEffect(() => {
+    if (!openPlanId) return;
+    function measure() {
+      const frame = planFrameRef.current;
+      if (!frame) return;
+      const rect = frame.getBoundingClientRect();
+      const besideChart = rect.left > window.innerWidth / 3;
+      const top = rect.top + window.scrollY;
+      setPlanFrameHeight(besideChart ? Math.max(window.innerHeight - top - 12, 360) : null);
+    }
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [openPlanId]);
   const {
     surfacesByFdi,
     setSurfacesByFdi,
@@ -491,7 +515,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   // PatientPageMockup.tsx, per Gregor's explicit choice to keep this
   // section fabricated (no real imaging/messaging backend).
   const [questionnaireOpen, setQuestionnaireOpen] = useState(false);
-  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sporocila' | 'soglasja'>('rentgeni');
+  const [infoTab, setInfoTab] = useState<'rentgeni' | 'fotografije' | 'sporocila' | 'soglasja' | 'predracuni'>('rentgeni');
   const [messageFilter, setMessageFilter] = useState<'all' | MessageChannel>('all');
   const [openEmail, setOpenEmail] = useState<PatientMessage | null>(null);
   const patientMessages = usePatientMessages(patientId, patientDraft.phone ?? null, infoTab === 'sporocila');
@@ -1202,13 +1226,14 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const rentgeniCardContent = (
     <>
       <div className="mb-3 flex flex-none items-center justify-between border-b border-[var(--line,#ccd6d4)]">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-x-1">
           {(
             [
               ['rentgeni', 'Rentgeni'],
               ['fotografije', 'Fotografije'],
               ['sporocila', 'Sporočila'],
               ['soglasja', 'Soglasja'],
+              ['predracuni', 'Predračuni'],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1250,6 +1275,12 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             {MOCK_RTG_GALLERY[0].opis} · {MOCK_RTG_GALLERY[0].date}
           </div>
         </div>
+      )}
+      {infoTab === 'predracuni' && (
+        <PatientPlansPanel
+          patientId={patientId}
+          onOpenPlan={setOpenPlanId}
+        />
       )}
       {infoTab === 'soglasja' && (
         <PatientConsentsPanel
@@ -1559,10 +1590,14 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
           />
         )}
 
-        <div className="grid grid-cols-1 items-start gap-3 px-3 sm:grid-cols-2 min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
+        <div
+          className={`grid grid-cols-1 items-start gap-3 px-3 sm:grid-cols-2 ${
+            openPlanId ? 'min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]' : 'min-[1400px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]'
+          }`}
+        >
           {/* ---- Left column: Frame 2 (patient info, REAL) + Frame 8
               (Pretekli termini, REAL) ---- */}
-          <div className="contents min-[1400px]:order-1 min-[1400px]:flex min-[1400px]:flex-col min-[1400px]:gap-3">
+          <div className={`contents min-[1400px]:order-1 ${openPlanId ? 'min-[1400px]:hidden' : 'min-[1400px]:flex min-[1400px]:flex-col min-[1400px]:gap-3'}`}>
             <div className="order-0 flex flex-col gap-2 rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 sm:col-span-2 min-[1400px]:col-span-1 min-[1400px]:gap-4">
               <div className="flex items-start justify-between gap-3">
                 <h1 className="text-3xl font-bold text-[var(--ink,#1c2624)]">{patientLabel}</h1>
@@ -1943,7 +1978,7 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                 />
               </div>
 
-              <div className="hidden flex-col gap-3 sm:flex sm:flex-row sm:items-start sm:gap-3 min-[1400px]:hidden">
+              <div className={`hidden flex-col gap-3 sm:flex-row sm:items-start sm:gap-3 min-[1400px]:hidden ${openPlanId ? '' : 'sm:flex'}`}>
                 <div className="flex flex-col gap-3 sm:min-w-0 sm:flex-1">
                   <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
                   <div className="flex h-[271px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{visitHistoryContent}</div>
@@ -2026,11 +2061,34 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             </div>
           </div>
 
-          {/* ---- Right column: Frame 5 (appointment, placeholder) + Frame 3 (Rentgeni tabs, placeholder) ---- */}
-          <div className="order-3 hidden flex-col gap-3 min-[1400px]:flex">
-            <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
-            <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{rentgeniCardContent}</div>
-          </div>
+          {/* ---- Right column: Frame 5 (appointment, placeholder) + Frame 3 (Rentgeni tabs, placeholder) —
+              or, while a predračun is open, the predračun (below the chart on
+              narrower screens). ---- */}
+          {openPlanId ? (
+            <div
+              ref={planFrameRef}
+              className="order-3 col-span-full rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4 min-[1400px]:col-span-1"
+              // Next to the chart it ends at the bottom of the window and
+              // scrolls on its own, so the chart stays in view (Gregor).
+              style={planFrameHeight ? { height: planFrameHeight, overflowY: 'auto' } : undefined}
+            >
+              <TreatmentPlanPanel
+                key={openPlanId}
+                planId={openPlanId}
+                patientId={patientId}
+                patientLabel={`${patientDraft.firstName} ${patientDraft.lastName}`.trim()}
+                patientEmail={patientDraft.email || null}
+                surfacesByFdi={surfacesByFdi}
+                endoByFdi={endoByFdi}
+                onClose={() => setOpenPlanId(null)}
+              />
+            </div>
+          ) : (
+            <div className="order-3 hidden flex-col gap-3 min-[1400px]:flex">
+              <div className="rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{appointmentCardContent}</div>
+              <div className="flex h-[589px] flex-col rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] p-4">{rentgeniCardContent}</div>
+            </div>
+          )}
         </div>
 
         {selectedFdi && (

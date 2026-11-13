@@ -577,6 +577,45 @@ async function main() {
     }
   }
 
+  // 4v. Treatment plans / predračun (061_treatment_plans.sql) — account 2
+  // can't create a plan for account 1's patient, read its plans, variants or
+  // items, accept / cancel one, get its link, or call the patient-side
+  // signing function directly.
+  if (foreignPatientId && account1PracticeId) {
+    const { error: planSpoof } = await client2
+      .from('treatment_plans')
+      .insert({ practice_id: account1PracticeId, patient_id: foreignPatientId });
+    check("account 2 cannot create a predračun for account 1's patient", !!planSpoof, planSpoof ? planSpoof.message : 'insert unexpectedly succeeded');
+    const { data: leakedPlans } = await client2.from('treatment_plans').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's predračuni", !leakedPlans || leakedPlans.length === 0, `${leakedPlans?.length ?? 0} row(s) visible`);
+    const { data: leakedPlanItems } = await client2.from('treatment_plan_items').select('id').eq('practice_id', account1PracticeId);
+    check("account 2 cannot read account 1's predračun items", !leakedPlanItems || leakedPlanItems.length === 0, `${leakedPlanItems?.length ?? 0} row(s) visible`);
+    const { data: account1Plan } = await client1.from('treatment_plans').select('id').limit(1).maybeSingle();
+    if (account1Plan) {
+      const { data: account1Variant } = await client1.from('treatment_plan_variants').select('id').eq('plan_id', account1Plan.id).limit(1).maybeSingle();
+      const { error: variantSpoof } = await client2
+        .from('treatment_plan_variants')
+        .insert({ plan_id: account1Plan.id, practice_id: account1PracticeId, name: 'Spoof' });
+      check("account 2 cannot add a variant to account 1's predračun", !!variantSpoof, variantSpoof ? variantSpoof.message : 'insert unexpectedly succeeded');
+      if (account1Variant) {
+        const { error: acceptSpoof } = await client2.rpc('accept_treatment_plan_verbally', { p_plan_id: account1Plan.id, p_variant_id: account1Variant.id });
+        check("account 2 cannot accept account 1's predračun", !!acceptSpoof, acceptSpoof ? acceptSpoof.message : 'accept unexpectedly succeeded');
+      }
+      const { error: cancelPlanSpoof } = await client2.rpc('cancel_treatment_plan', { p_plan_id: account1Plan.id });
+      check("account 2 cannot cancel account 1's predračun", !!cancelPlanSpoof, cancelPlanSpoof ? cancelPlanSpoof.message : 'cancel unexpectedly succeeded');
+      const { error: planLinkSpoof } = await client2.rpc('prepare_treatment_plan_link', { p_plan_id: account1Plan.id });
+      check("account 2 cannot get the link of account 1's predračun", !!planLinkSpoof, planLinkSpoof ? planLinkSpoof.message : 'call unexpectedly succeeded');
+    }
+    const { error: signRpc } = await client2.rpc('sign_treatment_plan', {
+      p_token: '0'.repeat(64),
+      p_variant_id: '00000000-0000-0000-0000-000000000000',
+      p_signer_name: 'Spoof',
+      p_signature_png: 'data:image/png;base64,x',
+      p_user_agent: 'verify',
+    });
+    check('a browser cannot call the predračun signing function', !!signRpc, signRpc ? signRpc.message : 'call unexpectedly succeeded');
+  }
+
   // 5. Account 2 can create its own patient, and account 1 still can't see it.
   // patients.practice_id has no auto-stamp trigger (it's the root table, no
   // parent row to derive it from) — the real app sets it explicitly via

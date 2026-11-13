@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppNavShell } from '../components/ui/AppNavShell';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { usePracticeContext } from '../contexts/PracticeContext';
@@ -27,6 +27,9 @@ import { renderAftercarePrintHtml } from '../lib/aftercarePrint';
 import { logPatientAccess } from '../hooks/useAuditLog';
 import type { AftercareSendResult } from '../hooks/useInvoices';
 import { ChartBillingDialog, type ChartBillingPick } from '../components/invoices/ChartBillingDialog';
+import { ServicePicker } from '../components/invoices/ServicePicker';
+import { PlanItemsDialog } from '../components/invoices/PlanItemsDialog';
+import type { AcceptedPlanItem } from '../hooks/useTreatmentPlans';
 import { effectiveChartLink, workItemKey } from '../lib/chartBilling';
 import { fillTemplateText } from '../../supabase/functions/_shared/email/templates';
 import { TEMPLATE_DEFS, type TemplateKey, type TemplateVars } from '../../supabase/functions/_shared/email/templateDefs';
@@ -123,6 +126,8 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
   // "Dodaj iz karte" (migration 033): chart work → performed services → lines.
   const zzzsSetting = useZzzsSetting();
   const [chartOpen, setChartOpen] = useState(false);
+  // "Dodaj iz predračuna" (migration 061).
+  const [planItemsOpen, setPlanItemsOpen] = useState(false);
   const chart = useChartBilling(invoice?.patientId ?? null, chartOpen);
   // Perio is billed by extent (how many teeth), so its price is checked by hand.
   const perioServiceIds = useMemo(
@@ -133,6 +138,10 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
 
   const [fields, setFields] = useState<DraftFields>({ serviceDate: todayIso(), paymentMethod: 'cash', note: '', payer: EMPTY_PAYER, aftercareTopicIds: null });
   const [lines, setLines] = useState<InvoiceLineDraft[]>([]);
+  const planItemsOnInvoice = useMemo(
+    () => new Set(lines.map((l) => l.treatmentPlanItemId).filter((id): id is string => !!id)),
+    [lines]
+  );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<'issue' | 'delete' | 'cancel' | null>(null);
@@ -461,6 +470,27 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         unitPriceEur: service.priceEur,
         discountPercent: 0,
       },
+    ]);
+  }
+
+  // "Dodaj iz predračuna": the accepted items at the agreed price (unit price
+  // and discount as on the predračun).
+  function addFromPlan(items: AcceptedPlanItem[]) {
+    setLines((prev) => [
+      ...prev,
+      ...items.map((i) => ({
+        key: newLineKey(),
+        serviceId: i.serviceId,
+        code: i.code,
+        name: i.name,
+        unit: i.unit,
+        vatRate: i.vatRate,
+        toothFdi: i.toothFdi,
+        quantity: i.quantity,
+        unitPriceEur: i.unitPriceEur,
+        discountPercent: i.discountPercent,
+        treatmentPlanItemId: i.id,
+      })),
     ]);
   }
 
@@ -898,6 +928,16 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
                             Dodaj iz karte
                           </button>
                         )}
+                        {invoice.patientId && (
+                          <button
+                            type="button"
+                            onClick={() => setPlanItemsOpen(true)}
+                            title="Dodaj storitve iz sprejetega predračuna po dogovorjeni ceni"
+                            className="whitespace-nowrap rounded border border-[var(--accent,#2e6e62)] px-3 py-1.5 text-sm font-medium text-[var(--accent,#2e6e62)] hover:bg-[#eaf4f1]"
+                          >
+                            Dodaj iz predračuna
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1125,6 +1165,14 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         </div>
       </div>
 
+      {planItemsOpen && invoice?.patientId && (
+        <PlanItemsDialog
+          patientId={invoice.patientId}
+          onThisInvoice={planItemsOnInvoice}
+          onAdd={addFromPlan}
+          onClose={() => setPlanItemsOpen(false)}
+        />
+      )}
       {chartOpen && invoice && (
         <ChartBillingDialog
           // Remount once loaded, so the ticks start from the loaded data.
@@ -1180,87 +1228,5 @@ export function InvoiceEditor(props: InvoiceEditorProps) {
         </ConfirmDialog>
       )}
     </>
-  );
-}
-
-// The permanent last row: type a name or code, pick a price-list service
-// (click, or arrows + Enter) and it becomes a line; the box clears for the next.
-function ServicePicker({ services, onPick }: { services: Service[]; onPick: (service: Service) => void }) {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const active = services.filter((s) => s.isActive);
-    const found = q ? active.filter((s) => s.name.toLowerCase().includes(q) || (s.code ?? '').toLowerCase().includes(q)) : active;
-    return found.slice(0, 8);
-  }, [services, query]);
-
-  function pick(service: Service) {
-    onPick(service);
-    setQuery('');
-    setHighlight(0);
-    inputRef.current?.focus();
-  }
-
-  return (
-    <div className="relative">
-      <input
-        ref={inputRef}
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setHighlight(0);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setHighlight((h) => Math.min(h + 1, matches.length - 1));
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setHighlight((h) => Math.max(h - 1, 0));
-          } else if (e.key === 'Enter' && matches[highlight]) {
-            e.preventDefault();
-            pick(matches[highlight]);
-          } else if (e.key === 'Escape') {
-            setOpen(false);
-          }
-        }}
-        placeholder="+ Dodaj storitev iz cenika (ime ali šifra) …"
-        className={CELL_INPUT + ' placeholder:font-semibold placeholder:text-[var(--accent,#2e6e62)]'}
-      />
-      {open && (
-        <ul className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-md border border-[var(--line,#ccd6d4)] bg-[var(--surface,#fff)] shadow-lg">
-          {matches.length === 0 && (
-            <li className="px-3 py-2 text-sm italic text-[var(--muted,#6f7c79)]">
-              {services.length === 0 ? 'Cenik je prazen — storitve dodajte v Nastavitve → Cenik.' : 'Ni zadetkov.'}
-            </li>
-          )}
-          {matches.map((s, i) => (
-            <li key={s.id}>
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pick(s)}
-                className={`flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm ${
-                  i === highlight ? 'bg-[#eef6f4]' : 'hover:bg-[#f7faf9]'
-                }`}
-              >
-                <span>
-                  {s.code && <span className="mr-2 text-[var(--muted,#6f7c79)]">{s.code}</span>}
-                  {s.name}
-                </span>
-                <span className="whitespace-nowrap text-[var(--ink-soft,#45524f)]">{formatEur(s.priceEur)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }

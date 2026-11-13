@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Predračun</title>
+<link rel="stylesheet" href="consent-sign.css">
+<style>
+  .variant { border: 2px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; cursor: pointer; background: #fff; }
+  .variant.on { border-color: var(--accent); background: #f4f9f8; }
+  .variant h2 { font-size: 1.05rem; margin: 0; display: flex; gap: 10px; align-items: center; }
+  .variant input[type=radio] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; padding: 4px 4px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 4px; border-bottom: 1px solid #eef2f1; vertical-align: top; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .total { text-align: right; font-weight: 700; font-size: 16px; margin-top: 8px; }
+  .note { white-space: pre-wrap; font-size: 15px; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <!-- Static page on GitHub Pages (Supabase Edge Functions can't serve HTML on
+       the shared domain — see sms-consent.html). The patient's predračun
+       (migration 061), opened from the button in the email that sent it (the
+       PDF is attached there): pick one option, "Potrjujem predračun" — no
+       signature (Gregor) — and get the PDF copy. Data and confirmation go
+       through the treatment-plan function. -->
+  <div class="wrap" id="app"><div class="card center">Nalaganje …</div></div>
+  <script src="backend.js"></script>
+  <script src="consent-sign.js"></script>
+  <script>
+  (function () {
+    var app = document.getElementById('app');
+    var esc = window.dcConsentEsc;
+    var token = new URLSearchParams(location.search).get('token') || '';
+    var endpoint = window.dcFunctionUrl('treatment-plan') + '?token=' + encodeURIComponent(token);
+    function eur(v) { return new Intl.NumberFormat('sl-SI', { style: 'currency', currency: 'EUR' }).format(v); }
+    function date(iso) { return new Date(iso.length === 10 ? iso + 'T12:00:00' : iso).toLocaleDateString('sl-SI', { dateStyle: 'long' }); }
+    function message(title, text) {
+      app.innerHTML = '<div class="card center"><h1>' + esc(title) + '</h1><p class="meta">' + esc(text) + '</p></div>';
+      window.scrollTo(0, 0);
+    }
+    function status(s) {
+      if (s === 'accepted') message('Predračun je potrjen', 'Hvala. Potrjeni predračun je shranjen v vaši kartoteki.');
+      else if (s === 'cancelled') message('Predračun ni več veljaven', 'Ordinacija je ta predračun preklicala. Za več informacij se obrnite nanjo.');
+      else if (s === 'expired') message('Predračun je potekel', 'Za nov predračun se obrnite na ordinacijo.');
+      else message('Povezava ni veljavna', 'Preverite povezavo ali se obrnite na ordinacijo.');
+    }
+
+    function render(data) {
+      var many = data.variants.length > 1;
+      var selected = many ? null : data.variants[0].id;
+      var html =
+        '<div class="card">' +
+          '<div class="practice">' + esc(data.practiceName) + '</div>' +
+          '<h1>' + esc(data.title) + ' ' + esc(data.number) + '</h1>' +
+          '<p class="meta">Pacient: ' + esc(data.patientName) + '</p>' +
+          '<p class="meta">Izdano ' + esc(date(data.createdAt)) + ' · velja do ' + esc(date(data.validUntil)) + '</p>' +
+          (data.note ? '<div class="note">' + esc(data.note) + '</div>' : '') +
+        '</div>' +
+        (many ? '<p class="meta" style="margin:0 4px 10px">Izberite možnost zdravljenja, ki vam ustreza:</p>' : '');
+      data.variants.forEach(function (v) {
+        html +=
+          '<div class="variant' + (selected === v.id ? ' on' : '') + '" data-variant="' + esc(v.id) + '">' +
+            '<h2>' + (many ? '<input type="radio" name="variant" value="' + esc(v.id) + '">' : '') + esc(v.name) + '</h2>' +
+            '<table><thead><tr><th>Storitev</th><th>Zob</th><th class="num">Kol.</th><th class="num">Znesek</th></tr></thead><tbody>' +
+            v.items.map(function (i) {
+              return '<tr><td>' + esc(i.name) + (i.discountPercent ? ' <span class="small">(popust ' + esc(String(i.discountPercent)) + ' %)</span>' : '') + '</td>' +
+                '<td>' + esc(i.toothFdi || '') + '</td>' +
+                '<td class="num">' + esc(String(i.quantity)) + '</td>' +
+                '<td class="num">' + esc(eur(i.totalEur)) + '</td></tr>';
+            }).join('') +
+            '</tbody></table>' +
+            '<div class="total">Skupaj: ' + esc(eur(v.totalEur)) + '</div>' +
+          '</div>';
+      });
+      html +=
+        '<div class="card">' +
+          '<p class="small" style="margin-top:0">Zneski vključujejo DDV, kjer se obračuna. Predračun ni račun; končni znesek je odvisen od dejansko opravljenih storitev.</p>' +
+          '<div class="small">Potrjuje</div><div style="font-size:17px;font-weight:600;margin:2px 0 4px">' + esc(data.patientName) + '</div>' +
+          '<label class="confirm"><input type="checkbox" data-agree><span>Seznanjen/a sem s predračunom in sprejemam ' + (many ? 'izbrano možnost' : 'predlagano') + ' zdravljenje.</span></label>' +
+          '<button type="button" class="submit" data-submit disabled>Potrdi predračun</button>' +
+          '<div class="error" data-error></div>' +
+        '</div>';
+      app.innerHTML = html;
+
+      var agree = app.querySelector('[data-agree]');
+      var submit = app.querySelector('[data-submit]');
+      var errorBox = app.querySelector('[data-error]');
+      function update() { submit.disabled = !(agree.checked && selected); }
+      agree.addEventListener('change', update);
+      Array.prototype.forEach.call(app.querySelectorAll('.variant'), function (el) {
+        el.addEventListener('click', function () {
+          if (!many) return;
+          selected = el.getAttribute('data-variant');
+          Array.prototype.forEach.call(app.querySelectorAll('.variant'), function (o) {
+            var on = o === el;
+            o.classList.toggle('on', on);
+            var radio = o.querySelector('input[type=radio]');
+            if (radio) radio.checked = on;
+          });
+          update();
+        });
+      });
+      update();
+
+      submit.addEventListener('click', function () {
+        submit.disabled = true;
+        submit.textContent = 'Shranjujem …';
+        errorBox.textContent = '';
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variantId: selected })
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+          .then(function (res) {
+            if (res.ok && res.body.status === 'accepted') {
+              status('accepted');
+              var card = app.querySelector('.card');
+              if (res.body.emailed) card.insertAdjacentHTML('beforeend', '<p class="meta">Kopijo smo vam poslali tudi po e-pošti.</p>');
+              if (res.body.pdf) {
+                var bytes = Uint8Array.from(atob(res.body.pdf), function (c) { return c.charCodeAt(0); });
+                var url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+                card.insertAdjacentHTML('beforeend',
+                  '<a class="submit" style="display:block;text-decoration:none;max-width:360px;margin:20px auto 0" href="' + url + '" download="predracun.pdf" target="_blank" rel="noopener">Shrani ali natisni kopijo (PDF)</a>');
+              }
+              return;
+            }
+            errorBox.textContent = (res.body && res.body.error) || 'Shranjevanje ni uspelo. Poskusite znova.';
+            submit.textContent = 'Potrdi predračun';
+            update();
+          })
+          .catch(function () {
+            errorBox.textContent = 'Povezava ni uspela. Preverite internet in poskusite znova.';
+            submit.textContent = 'Potrdi predračun';
+            update();
+          });
+      });
+    }
+
+    if (!/^[0-9a-f]{64}$/.test(token)) { status('invalid'); return; }
+    fetch(endpoint)
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.status === 'pending' && data.variants && data.variants.length) render(data); else status(data.status); })
+      .catch(function () { message('Napaka', 'Predračuna ni bilo mogoče naložiti. Poskusite znova kasneje.'); });
+  })();
+  </script>
+</body>
+</html>

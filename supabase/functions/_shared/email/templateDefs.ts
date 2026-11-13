@@ -31,6 +31,7 @@ export const TEMPLATE_KEYS = [
   'recall',
   'health_questionnaire',
   'patient_consent',
+  'treatment_plan',
   'invoice',
   'credit_note',
   'aftercare',
@@ -267,6 +268,22 @@ export const TEMPLATE_DEFS: Record<TemplateKey, TemplateDef> = {
     timing: null,
     sendHourDefault: null,
     actionLabel: 'Preberite in podpišite soglasje',
+    manualOnly: true,
+  },
+  treatment_plan: {
+    key: 'treatment_plan',
+    label: 'Predračun',
+    description:
+      'Ročno — »Pošlji po e-pošti« pri predračunu; predračun je v priponki (PDF). Z gumbom v e-pošti pacient izbere možnost in predračun potrdi.',
+    defaultSubject: 'Predračun — {ordinacija}',
+    defaultHeading: 'Predračun za zdravljenje',
+    defaultBody:
+      'Pozdravljeni {ime},\n\nv priponki vam pošiljamo predračun za predlagano zdravljenje, o katerem smo se pogovorili. Prosimo, da ga v miru preberete. Če se z njim strinjate, kliknite spodnji gumb, izberite možnost, ki vam ustreza, in predračun potrdite.\n\nČe imate kakršnokoli vprašanje, nas pokličite ali nam odgovorite na to sporočilo.',
+    placeholders: ['ime', 'priimek', 'ordinacija'],
+    ics: null,
+    timing: null,
+    sendHourDefault: null,
+    actionLabel: 'Potrdite predračun',
     manualOnly: true,
   },
   invoice: {
