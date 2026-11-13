@@ -110,6 +110,17 @@ export function TreatmentPlanPanel({ planId, patientId, patientLabel, patientEma
   // Autosave shortly after the last change.
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  // Closing the panel some other way ("Nazaj na kartoteko") still saves what
+  // the autosave hasn't yet.
+  const pendingRef = useRef({ dirty, saveDraft });
+  pendingRef.current = { dirty, saveDraft };
+  useEffect(
+    () => () => {
+      const { dirty: unsaved, saveDraft: saveNow } = pendingRef.current;
+      if (unsaved && draftRef.current) void saveNow(draftRef.current);
+    },
+    []
+  );
   useEffect(() => {
     if (!dirty || !draft) return;
     const timer = setTimeout(() => void save(), AUTOSAVE_MS);
@@ -234,6 +245,10 @@ export function TreatmentPlanPanel({ planId, patientId, patientLabel, patientEma
             </button>
           </>
         )}
+        {/* Large screen only, on the buttons' line: the patient's details are
+            hidden there while the predračun is open (a narrow screen still
+            shows them). */}
+        <span className="ml-auto hidden self-center text-lg font-bold text-[var(--ink,#1c2624)] min-[1400px]:flex">{patientLabel}</span>
       </div>
 
       {notice && <p className={`text-sm ${notice.kind === 'error' ? 'text-[var(--danger,#b3261e)]' : 'text-[var(--accent,#2e6e62)]'}`}>{notice.text}</p>}

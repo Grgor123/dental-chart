@@ -1502,10 +1502,12 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
         <div className="flex items-center gap-4 px-4">
           <button
             type="button"
-            onClick={handleBackClick}
+            // With a predračun open, back to the patient record itself
+            // (the panel saves on closing).
+            onClick={openPlanId ? () => setOpenPlanId(null) : handleBackClick}
             className="flex-none text-sm text-[var(--ink-soft,#45524f)] hover:text-[var(--accent,#2e6e62)]"
           >
-            ← Nazaj na seznam pacientov
+            {openPlanId ? '← Nazaj na kartoteko' : '← Nazaj na seznam pacientov'}
           </button>
           <button
             type="button"
