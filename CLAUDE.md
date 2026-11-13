@@ -3321,7 +3321,7 @@ and sign at home). A qualified (SIGEN-CA) signature is not needed here.
   (e.g. proXSign) on each computer.
 - **Tenant isolation**: section 4u (library and consents not addable/readable
   across practices; confirm / cancel / QR link refused for another practice's
-  consent) — not yet run.
+  consent) — passed 2026-11-13 (90/90).
 
 ### Treatment plans and predračun
 
@@ -3379,7 +3379,10 @@ invoice in one click.
 - **Not built**: phases, automatic ticking-off from the chart, an
   unscheduled-work list, X-ray images beside the plan (imaging, roadmap
   item 10).
-- **Tenant isolation**: section 4v — not yet run.
+- **Tenant isolation**: section 4v (plans, options and items not creatable or
+  readable across practices; accept / cancel / link refused for another
+  practice's plan; the signing function closed to browsers) — passed
+  2026-11-13 (90/90).
 
 ### Chart printout (A4)
 
