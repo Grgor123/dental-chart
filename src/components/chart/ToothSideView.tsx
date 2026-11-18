@@ -1,4 +1,4 @@
-import type { Arch } from '../../data/toothMeta';
+import { TOOTH_META, type Arch } from '../../data/toothMeta';
 import { TOOTH_PROFILES, type ToothProfile } from '../../data/toothProfiles';
 import type { ToothStatus } from '../../types/dental';
 import { STATUS_STYLES, ABSENT_SILHOUETTE_COLOR } from '../../data/statusStyles';
@@ -58,6 +58,11 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
 
   const style = status ? STATUS_STYLES[status] : undefined;
   const outlineColor = style?.border ?? '#1f1e20';
+  // The dashed outline (impacted) is set in raw drawing units, which suit the
+  // permanent teeth's traced photos (~2 raw units per screen px). Milk teeth
+  // were traced at a much larger raw scale, so theirs is scaled up to read
+  // the same on screen as a permanent tooth's (Gregor).
+  const dashScale = TOOTH_META[fdi]?.deciduous ? profile.width / profile.displayWidth / 2 : 1;
   const isImplant = status === 'implant';
   // Bridge pontic: no natural tooth structure at all ("brez korenine") —
   // per Monika's explicit request, neither the root NOR the crown are
@@ -192,7 +197,9 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
         {!hidesCrown && (
           <path
             d={profile.silhouette}
-            fill={isAbsentSilhouette ? ABSENT_SILHOUETTE_COLOR : ROOT_COLOR}
+            // Milk teeth are all white, root too (Gregor), to tell them
+            // apart from permanent teeth at a glance.
+            fill={isAbsentSilhouette ? ABSENT_SILHOUETTE_COLOR : TOOTH_META[fdi]?.deciduous ? '#FFFFFF' : ROOT_COLOR}
             stroke="none"
             clipPath={hidesRoot ? `url(#${clipId})` : undefined}
           />
@@ -250,8 +257,8 @@ export function ToothSideViewContent({ fdi, arch, profile, status }: ToothSideVi
           d={profile.silhouette}
           fill="none"
           stroke={outlineColor}
-          strokeWidth={1.5}
-          strokeDasharray="4 2.5"
+          strokeWidth={1.5 * dashScale}
+          strokeDasharray={`${4 * dashScale} ${2.5 * dashScale}`}
           clipPath={hidesRoot ? `url(#${clipId})` : undefined}
         />
       )}

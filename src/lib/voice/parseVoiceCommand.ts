@@ -1,5 +1,5 @@
 import type { EndoStage, Surface, ToothStatus } from '../../types/dental';
-import { ALL_FDI, LOWER_LEFT, LOWER_RIGHT, TOOTH_META, UPPER_LEFT, UPPER_RIGHT } from '../../data/toothMeta';
+import { ALL_FDI_WITH_DECIDUOUS, LOWER_LEFT, LOWER_RIGHT, TOOTH_META, UPPER_LEFT, UPPER_RIGHT } from '../../data/toothMeta';
 
 // Voice entry for the dental chart: one recognised phrase (Slovene, from the
 // browser's speech recognition) → chart commands. Pure, no React — the chart
@@ -105,7 +105,8 @@ function wordNumber(token: string): number | null {
   return null;
 }
 
-const VALID_FDI = new Set(ALL_FDI);
+// Milk teeth too (51–85, migration 062): "zob 54 karies".
+const VALID_FDI = new Set(ALL_FDI_WITH_DECIDUOUS);
 
 interface Token {
   word: string;   // folded

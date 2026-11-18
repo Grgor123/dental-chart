@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { Arch } from '../../data/toothMeta';
+import { TOOTH_META, type Arch } from '../../data/toothMeta';
 import { TOOTH_PROFILES, COLUMN_WIDTH, COLUMN_GAP, PX_PER_MM } from '../../data/toothProfiles';
 import type { GumMargin, ToothStatus } from '../../types/dental';
 import { ToothSideViewContent } from './ToothSideView';
@@ -31,6 +31,9 @@ type GumPoint = Extract<PerioPoint, { kind: 'gum' }>;
 
 interface PerioGraphRowProps {
   fdis: readonly string[];
+  /** The teeth the row heights are taken from — the whole arch (ArchRow), so
+      both halves put the gumline at the same height; defaults to `fdis`. */
+  scaleFdis?: readonly string[];
   arch: Arch;
   /** Gingival margin per tooth (buccal surface), [mesial, mid, distal] mm. Defaults to 0 (at CEJ) for any tooth not given. */
   gumMargin?: Record<string, GumMargin>;
@@ -49,6 +52,9 @@ interface PerioGraphRowProps {
    * small tloris square underneath it.
    */
   onSelect?: (fdi: string) => void;
+  /** Teeth not drawn at all — a permanent tooth not yet erupted on a child's
+      chart (shown only in the tloris view, light grey). */
+  hiddenFdis?: Set<string>;
 }
 
 // Tooth silhouettes + continuous gum-margin line, modeled on Curve Dental's
@@ -58,8 +64,8 @@ interface PerioGraphRowProps {
 // (REC, plain magnitude) just past the root tips. Width/x-positions use the
 // exact same COLUMN_WIDTH/COLUMN_GAP constants ArchRow uses everywhere else,
 // so this lines up with the rows above/below it.
-export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, focusedPoint, onSelect }: PerioGraphRowProps) {
-  const profiles = fdis.map((fdi) => TOOTH_PROFILES[fdi]);
+export function PerioGraphRow({ fdis, scaleFdis, arch, gumMargin, statuses, onPointClick, focusedPoint, onSelect, hiddenFdis }: PerioGraphRowProps) {
+  const profiles = (scaleFdis ?? fdis).map((fdi) => TOOTH_PROFILES[fdi]);
   const maxRootMm = Math.max(...profiles.map((p) => p.rootLengthMm));
   const maxCrownMm = Math.max(...profiles.map((p) => p.crownLengthMm));
 
@@ -149,6 +155,7 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, f
         );
       })}
       {fdis.map((fdi, i) => {
+        if (hiddenFdis?.has(fdi)) return null;
         const profile = TOOTH_PROFILES[fdi];
         const colX = i * (COLUMN_WIDTH + COLUMN_GAP);
         const toothX = colX + (COLUMN_WIDTH - profile.displayWidth) / 2;
@@ -212,8 +219,11 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, f
         // would be for any other tooth, regardless of whether gumMargin
         // actually has an entry for this fdi. Never interactive, though —
         // nothing to probe on a tooth that's never erupted.
+        if (hiddenFdis?.has(fdi)) return null;
         const impacted = statuses?.[fdi] === 'impacted';
-        const gm = impacted ? ([0, 0, 0] as GumMargin) : gumMargin?.[fdi];
+        // Milk teeth: no recession recorded or shown (Gregor).
+        const deciduous = !!TOOTH_META[fdi]?.deciduous;
+        const gm = impacted ? ([0, 0, 0] as GumMargin) : deciduous ? undefined : gumMargin?.[fdi];
         const colX = i * (COLUMN_WIDTH + COLUMN_GAP);
         const xs = POINT_X_FRACTIONS.map((frac) => colX + COLUMN_WIDTH * frac);
         return (
@@ -223,7 +233,7 @@ export function PerioGraphRow({ fdis, arch, gumMargin, statuses, onPointClick, f
             xs={xs}
             y={recRowY}
             gumMm={gm}
-            onPointClick={impacted ? undefined : onPointClick}
+            onPointClick={impacted || deciduous ? undefined : onPointClick}
             focusedPoint={focusedPoint}
           />
         );

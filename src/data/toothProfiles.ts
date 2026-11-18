@@ -12,8 +12,10 @@
 //    "whatever made the layout look tidy."
 import { svgPathProperties } from 'svg-path-properties';
 import tracedTeeth from './tracedTeeth.json';
-import { TOOTH_META, ALL_FDI } from './toothMeta';
-import { TOOTH_ANATOMY_MM } from './toothAnatomy';
+// Milk teeth: Gray's Anatomy (1918) Fig. 1004, public domain — design/deciduous-teeth/.
+import tracedDeciduousTeeth from './tracedDeciduousTeeth.json';
+import { TOOTH_META, ALL_FDI_WITH_DECIDUOUS } from './toothMeta';
+import { DECIDUOUS_ANATOMY_MM, TOOTH_ANATOMY_MM } from './toothAnatomy';
 
 interface TracedTooth {
   d: string;
@@ -22,7 +24,7 @@ interface TracedTooth {
   height: number;
 }
 
-const traced = tracedTeeth as unknown as Record<string, TracedTooth>;
+const traced = { ...(tracedTeeth as unknown as Record<string, TracedTooth>), ...(tracedDeciduousTeeth as unknown as Record<string, TracedTooth>) };
 
 export interface ToothProfile {
   fdi: string;
@@ -85,10 +87,10 @@ function estimateCrownCenterX(pathD: string, crownYMin: number, crownYMax: numbe
 
 function buildProfiles(): Record<string, ToothProfile> {
   const profiles: Record<string, ToothProfile> = {};
-  for (const fdi of ALL_FDI) {
+  for (const fdi of ALL_FDI_WITH_DECIDUOUS) {
     const meta = TOOTH_META[fdi];
     const t = traced[fdi];
-    const anatomy = TOOTH_ANATOMY_MM[meta.arch][meta.position];
+    const anatomy = meta.deciduous ? DECIDUOUS_ANATOMY_MM[meta.arch][meta.position]! : TOOTH_ANATOMY_MM[meta.arch][meta.position];
     const totalLengthMm = anatomy.crownLengthMm + anatomy.rootLengthMm;
     const crownFraction = anatomy.crownLengthMm / totalLengthMm;
 

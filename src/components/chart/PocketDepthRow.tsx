@@ -1,4 +1,5 @@
 import { COLUMN_WIDTH, COLUMN_GAP } from '../../data/toothProfiles';
+import { TOOTH_META } from '../../data/toothMeta';
 import type { PocketDepths, BleedingPoints, ToothStatus } from '../../types/dental';
 import { POINT_X_FRACTIONS, pdColor, BOP_COLOR, samePerioPoint, type PerioPoint } from './perioStyle';
 
@@ -47,7 +48,8 @@ export function PocketDepthRow({ fdis, surface, pockets, bleeding, statuses, onP
         const bop = bleeding?.[fdi];
         // Impacted teeth have never erupted — nothing to probe, same rule
         // PerioGraphRow already applies to REC entry.
-        const interactive = !!onPointClick && statuses?.[fdi] !== 'impacted';
+        // No probing on an unerupted tooth, nor on a milk tooth (Gregor).
+        const interactive = !!onPointClick && statuses?.[fdi] !== 'impacted' && !TOOTH_META[fdi]?.deciduous;
         return (
           <div key={fdi} className="flex flex-none justify-center" style={{ width: `${COLUMN_WIDTH}px`, height: `${ROW_HEIGHT}px` }}>
             <svg width={COLUMN_WIDTH} height={ROW_HEIGHT} viewBox={`0 0 ${COLUMN_WIDTH} ${ROW_HEIGHT}`} role="img" aria-label={`Globina žepka ${fdi}`}>

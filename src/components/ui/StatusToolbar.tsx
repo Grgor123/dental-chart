@@ -73,6 +73,49 @@ interface StatusToolbarProps {
    * panel is unchanged.
    */
   hideHeader?: boolean;
+  /**
+   * Milk teeth (migration 062): set what stands at every selected position —
+   * milk tooth / permanent tooth (erupted) / not yet erupted. Passed only for
+   * a patient with milk teeth; the "Zobovje" group is hidden otherwise.
+   */
+  onSetDentition?: (state: 'deciduous' | 'unerupted' | null) => void;
+  /** Why the last Zobovje click did nothing, if it didn't. */
+  dentitionMessage?: string | null;
+}
+
+const DENTITION_ACTIONS: { state: 'deciduous' | 'unerupted' | null; label: string }[] = [
+  { state: 'deciduous', label: 'Mlečni zob' },
+  { state: null, label: 'Stalni zob (izrasel)' },
+  { state: 'unerupted', label: 'Še ni izrasel' },
+];
+
+// One icon per choice, same 18px size as the status swatches: the milk
+// tooth's teal number, a permanent tooth's plain square, an unerupted one's
+// dashed square.
+function DentitionSwatch({ state }: { state: 'deciduous' | 'unerupted' | null }) {
+  return (
+    <svg width={18} height={18} viewBox="0 0 18 18" aria-hidden="true">
+      {state === 'deciduous' ? (
+        <>
+          <rect x={1} y={1} width={16} height={16} rx={2} fill="none" stroke="var(--accent, #2e6e62)" strokeWidth={1.5} />
+          <text x={9} y={12.5} textAnchor="middle" fontSize={9} fontWeight={700} fill="var(--accent, #2e6e62)">
+            M
+          </text>
+        </>
+      ) : (
+        <rect
+          x={1}
+          y={1}
+          width={16}
+          height={16}
+          rx={2}
+          fill={state === 'unerupted' ? 'none' : '#fff'}
+          stroke={state === 'unerupted' ? '#c3cdca' : '#1f1e20'}
+          strokeWidth={1}
+        />
+      )}
+    </svg>
+  );
 }
 
 // Always-visible status palette for PatientChart.tsx's direct-click
@@ -96,6 +139,8 @@ export function StatusToolbar({
   className = 'w-[260px] flex-none',
   bare = false,
   hideHeader = false,
+  onSetDentition,
+  dentitionMessage,
 }: StatusToolbarProps) {
   const hasSelection = selectionCount > 0;
 
@@ -145,6 +190,25 @@ export function StatusToolbar({
           uniformly here, not just the ones that happen to be a ToothStatus
           internally (see CLAUDE.md's "Uniform service presentation"
           note). */}
+      {onSetDentition && (
+        <div className="flex flex-col gap-1.5 border-b border-[var(--line,#ccd6d4)] pb-2.5">
+          <span className="text-xs font-semibold text-[var(--ink,#1c2624)]">Zobovje — menjava zob</span>
+          <div role="group" aria-label="Zobovje" className="flex flex-wrap gap-1.5">
+            {DENTITION_ACTIONS.map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={() => onSetDentition(a.state)}
+                className="flex items-center gap-1.5 rounded border border-[var(--line,#ccd6d4)] px-2 py-1.5 text-left text-xs"
+              >
+                <DentitionSwatch state={a.state} />
+                <span className="text-[var(--ink,#1c2624)]">{a.label}</span>
+              </button>
+            ))}
+          </div>
+          {dentitionMessage && <p className="text-xs text-[var(--danger,#b3261e)]">{dentitionMessage}</p>}
+        </div>
+      )}
       <div role="group" aria-label="Izberite status" className="flex flex-wrap gap-1.5">
         {STATUS_ORDER.map((status) => (
           <button

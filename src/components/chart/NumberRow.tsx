@@ -1,3 +1,4 @@
+import { TOOTH_META } from '../../data/toothMeta';
 import type { MouseEvent } from 'react';
 import { COLUMN_WIDTH, COLUMN_GAP } from '../../data/toothProfiles';
 
@@ -43,7 +44,14 @@ export function NumberRow({ fdis, onTargetClick, isFdiSelected, onSelect }: Numb
                 onSelect?.(fdi);
               }}
               className="rounded-sm px-0.5 font-mono text-[11px] tabular-nums text-[var(--ink-soft,#45524f)]"
-              style={selected ? { backgroundColor: 'var(--tooth-selected, #2e6e62)', color: '#fff' } : undefined}
+              // Milk tooth numbers in the accent colour (Gregor), bold.
+              style={
+                selected
+                  ? { backgroundColor: 'var(--tooth-selected, #2e6e62)', color: '#fff' }
+                  : TOOTH_META[fdi]?.deciduous
+                    ? { color: 'var(--accent, #2e6e62)', fontWeight: 700 }
+                    : undefined
+              }
               aria-label={`Ciljaj cel zob ${fdi}`}
               aria-pressed={selected}
             >

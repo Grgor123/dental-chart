@@ -195,11 +195,12 @@ function ToothHistoryTab({ patientId, fdi }: { patientId: string; fdi: string })
   return (
     <ul className="flex flex-col gap-2">
       {entries.map((entry, i) => {
-        const lines = describeToothRecord(entry, fdi);
+        const lines = describeToothRecord(entry, entry.toothId);
         return (
           <li key={i} className="rounded-md bg-[#e7e7e7] p-3">
             <div className="flex items-baseline gap-2">
               <span className="font-mono text-xs text-[var(--muted,#6f7c79)]">{formatSlovenianDate(entry.date)}</span>
+              {entry.toothId !== fdi && <span className="text-xs font-semibold text-[var(--ink-soft,#45524f)]">zob {entry.toothId}</span>}
               {entry.closedAt === null && (
                 <span className="text-xs font-semibold text-[var(--accent,#2e6e62)]">(trenutni obisk)</span>
               )}

@@ -539,7 +539,7 @@ multi-tenancy foundation below, then the native scheduling calendar's
 `appointments`/`therapists` tables, then SMS reminders/consent — see
 "Native scheduling calendar" below) landed on the live project as its own
 migrations — `007_restrict_sex_to_mf.sql` through
-`061_treatment_plans.sql` — all confirmed run (016–019 are the
+`062_patient_dentition.sql` — all confirmed run (016–019 are the
 email notifications/opt-out/templates via Amazon SES, see "Email
 notifications" below; 020 the price list; 021–022 the health questionnaire +
 marketing consent, see "Health questionnaire" below; 023–029 invoicing, see
@@ -558,9 +558,10 @@ confirmations and the reply address, see "Reminder confirmation" under
 "Native scheduling calendar"; 056–057 signed visits and the audit log, see
 "Signed visits and audit log"; 058–060 informed consents, see "Informed
 consents (Soglasja)" — 059's signing tablets were removed again by 060; 061 treatment plans /
-predračun, see "Treatment plans and predračun"). `supabase/schema.sql`
+predračun, see "Treatment plans and predračun"; 062 milk teeth, see
+"Milk teeth and mixed dentition"). `supabase/schema.sql`
 itself is kept in sync to bake in everything through the latest migration
-(061 included; 041's tags and 059's signing tablets deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
+(062 included; 041's tags and 059's signing tablets deliberately not baked in), so a brand-new project only ever needs that one file, the Vault secrets `project_url` and `edge_function_service_role_key` (see "Development and production projects") — plus one run of `scripts/sync-zzzs.mjs` to load the ZZZS catalogue (data, not schema).
 **Run migrations in the "Dental charting" project's SQL editor** — the
 Supabase dashboard also lists the booking widget's "Consent storage for
 zobozdravstvogoslar…" project, and running 021 there failed with
@@ -3384,6 +3385,48 @@ invoice in one click.
   practice's plan; the signing function closed to browsers) — passed
   2026-11-13 (90/90).
 
+### Milk teeth and mixed dentition (Mlečno zobovje)
+
+**Status: built and confirmed by Gregor on localhost (2026-11-18)** —
+migration 062 run. Roadmap item 2. Monika treats children.
+
+- **Data**: the chart keeps its 32 positions, keyed by the permanent FDI.
+  `patients.dentition` (jsonb, migration 062) stores only the exceptions:
+  `'deciduous'` (the milk tooth is there — positions 1–5 only, e.g. position
+  14 shows 54) or `'unerupted'` (the permanent tooth hasn't come through).
+  Empty = an adult. A check constraint (`valid_dentition()`) allows only
+  keys 11–48 and these two values. Helpers in `src/lib/dentition.ts`
+  (`chartQuadrants`, `uneruptedPositions`, `childDentition`, `positionOf`,
+  `hasChildDentition`); loaded/saved by `usePatientDentition.ts`
+  (optimistic, reverts on error). Records stay under the tooth's own number
+  (54 vs 14); a position's Zgodovina tab (`useToothHistory.ts`) shows both,
+  each labelled "zob 54".
+- **Starting a child's chart**: "Zobovje: Stalno / Mlečno" in the line
+  above the chart, offered only while nothing is entered on the chart yet.
+  Mlečno = milk teeth at positions 1–5, 6–8 not yet erupted.
+- **Changing teeth** (Gregor): Legenda → **"Zobovje — menjava zob"** (shown
+  only for a patient with milk teeth): select tooth/teeth on the chart
+  (Ctrl for several), then **Mlečni zob / Stalni zob (izrasel) / Še ni
+  izrasel** (`handleSetDentition`, `PatientChart.tsx`; milk is refused at
+  6–8). The selection follows to the new numbers (54 → 14). A small switch
+  after "Izbran zob" does the same for one tooth. When every position is
+  permanent the dentition is `{}` and the chart is an ordinary adult chart.
+- **Drawings**: side views of 51–85 traced from Gray's Anatomy (1918) Fig.
+  1004 (public domain) — `design/deciduous-teeth/` (pipeline + README),
+  `src/data/tracedDeciduousTeeth.json`; real milk-tooth crown/root lengths
+  in `toothAnatomy.ts`. Milk teeth are drawn entirely white (roots too) and
+  their numbers are bold teal (`NumberRow.tsx`). The perio rows are sized
+  from the whole arch (`scaleFdis`), so the gumline lines up across
+  quadrants with milk teeth on one side and permanent on the other.
+- **Not yet erupted** (Gregor, 2026-11-18): not drawn as impacted — no side
+  view at all (`PerioGraphRow` `hiddenFdis`, rows sized without them), only
+  an empty light-grey (`#c3cdca`) tloris template, still clickable as a
+  whole. A real `impacted` status is unchanged.
+- **Perio**: no pocket-depth or recession entry on milk teeth or unerupted
+  positions.
+- **Voice entry** accepts 51–85 ("zob 54 karies").
+- **Not done**: a timeline of eruption dates; ToothDetailPanel switching.
+
 ### Chart printout (A4)
 
 **Status: built, confirmed by Gregor (2026-10-08).** A printer icon right
@@ -5356,7 +5399,8 @@ reintroduce tags without asking.
   `C:\Users\Uporabnik\Documents\Claude code dental calendar` (embeddable on
   the practice's own website) — the two remain independent projects, not
   integrated or synced with each other in any way.
-- Mlečni zobje (primary teeth — 5x/6x/7x/8x series)
+- ~~Mlečni zobje (primary teeth — 5x/6x/7x/8x series)~~ — **built**, see
+  "Milk teeth and mixed dentition"
 - Periodontogram as separate full-screen view
 - SMS/email reminders
 - ~~Multiple staff logins *within* one practice~~ — **built** (invitations,
@@ -5767,7 +5811,7 @@ Gregor before starting each item.
    **Audit log and signed visits built 2026-11-12** (see "Signed visits and
    audit log"); production project and 2FA still to do.
 2. **Deciduous teeth (51–85) and mixed dentition** — Monika treats children
-   (spec 2.2; currently "Out of Scope for Phase 1").
+   (spec 2.2). **Built 2026-11-18** (see "Milk teeth and mixed dentition").
 3. **Clinical notes + MDR/IVDR traceability per ZMedPri-1** (spec 2.5) —
    structured visit notes, signed and then locked (changes only as an
    addendum), and materials/devices recorded per procedure (GS1 / HIBC UDI
@@ -5802,7 +5846,12 @@ Gregor before starting each item.
 
 ---
 
-*Last updated: 2026-11-13 (Treatment plans / predračun — options, Cenik items,
+*Last updated: 2026-11-18 (Milk teeth — 51–85 drawn from Gray's Anatomy,
+"Zobovje: Stalno / Mlečno", "Zobovje — menjava zob" for replacing milk teeth
+and erupting 6–8, unerupted teeth as a light-grey tloris square — migration
+062. See "Milk teeth and mixed dentition".)*
+
+*Previous entry: 2026-11-13 (Treatment plans / predračun — options, Cenik items,
 chart suggestions in a panel beside the chart, email with PDF and one-click
 confirmation, "Sprejet ustno", "Dodaj iz predračuna" on invoices — migration
 061. See "Treatment plans and predračun".)*

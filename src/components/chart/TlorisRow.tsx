@@ -35,6 +35,8 @@ interface TlorisRowProps {
   isTargetSelected?: (fdi: string, target: Surface | 'all') => boolean;
   /** True if ANY target on this tooth is selected — drives this square's own outline, same coarser check NumberRow.tsx's highlight uses, so the two always agree on which tooth is "current" (see PatientChart.tsx's isFdiSelected). */
   isFdiSelected?: (fdi: string) => boolean;
+  /** Positions not yet erupted (milk-teeth patients) — light-grey empty template. */
+  uneruptedFdis?: Set<string>;
 }
 
 // Exported so BridgeRow.tsx can size its overlay cap to match the
@@ -91,6 +93,7 @@ export function TlorisRow({
   onTargetClick,
   isTargetSelected,
   isFdiSelected,
+  uneruptedFdis,
 }: TlorisRowProps) {
   const gapIndices = findProsthesisGapIndices(fdis, surfacesByFdi);
   const totalWidth = fdis.length * COLUMN_WIDTH + (fdis.length - 1) * COLUMN_GAP;
@@ -169,6 +172,7 @@ export function TlorisRow({
                 endoStage={endoByFdi?.[fdi]}
                 onTargetClick={(target, e) => onTargetClick?.(fdi, target, e)}
                 isTargetSelected={(target) => isTargetSelected?.(fdi, target) ?? false}
+                unerupted={uneruptedFdis?.has(fdi)}
               />
             </button>
           </div>

@@ -22,6 +22,9 @@ import { SignVisitModal } from '../components/chart/SignVisitModal';
 import { PatientConsentsPanel } from '../components/consents/PatientConsentsPanel';
 import { PatientPlansPanel } from '../components/plans/PatientPlansPanel';
 import { TreatmentPlanPanel } from '../components/plans/TreatmentPlanPanel';
+import { usePatientDentition } from '../hooks/usePatientDentition';
+import { chartQuadrants, childDentition, hasChildDentition, positionOf, uneruptedPositions, type PositionState } from '../lib/dentition';
+import { deciduousAt } from '../data/toothMeta';
 import { useUpcomingAppointments, useNextFreeSlot, type Appointment, type AppointmentStatus } from '../hooks/useAppointments';
 import { TherapistWeekPicker } from '../components/calendar/TherapistWeekPicker';
 import { ConfirmRequestCheckbox } from '../components/calendar/ConfirmRequestCheckbox';
@@ -113,6 +116,43 @@ function formatSlovenianDate(iso: string): string {
   const [y, m, d] = iso.split('-');
   if (!y || !m || !d) return iso;
   return `${Number(d)}.${Number(m)}.${y}`;
+}
+
+// Milk teeth (migration 062): what's at the selected tooth's position —
+// Mlečni (51–85, positions 1–5 only) / Stalni / Še ni izrasel.
+function DentitionSwitch({
+  position,
+  state,
+  onChange,
+}: {
+  position: string;
+  state: PositionState | null;
+  onChange: (state: PositionState | null) => void;
+}) {
+  const milk = deciduousAt(position);
+  const options: { key: PositionState | null; label: string }[] = [
+    ...(milk ? [{ key: 'deciduous' as const, label: `Mlečni ${milk}` }] : []),
+    { key: null, label: `Stalni ${position}` },
+    { key: 'unerupted', label: 'Še ni izrasel' },
+  ];
+  return (
+    <span className="flex items-center gap-1">
+      {options.map((o) => (
+        <button
+          key={o.label}
+          type="button"
+          onClick={() => o.key !== state && onChange(o.key)}
+          className={`rounded-full border px-2 py-0.5 text-xs ${
+            o.key === state
+              ? 'border-[var(--accent,#2e6e62)] bg-[var(--accent,#2e6e62)] text-white'
+              : 'border-[var(--line,#ccd6d4)] text-[var(--ink-soft,#45524f)] hover:border-[var(--accent,#2e6e62)]'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
 }
 
 // ISO timestamp -> "12. 11. 2026, 14:05" (Ljubljana time).
@@ -253,6 +293,11 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
   const { updatePatient, setSmsConsentStatus, setEmailOptOut, withdrawMarketingConsent, requestMarketingConsent } = usePatients();
   const { practiceName } = usePracticeContext();
   const [selectedFdi, setSelectedFdi] = useState<string | undefined>();
+  // Milk teeth (migration 062): which tooth each position shows.
+  const { dentition, saveDentition } = usePatientDentition(patientId);
+  const chartQuads = useMemo(() => chartQuadrants(dentition), [dentition]);
+  const unerupted = useMemo(() => uneruptedPositions(dentition), [dentition]);
+  const [dentitionError, setDentitionError] = useState<string | null>(null);
   // "Natisni karto": while true, ChartPrintSheet renders the A4 printout and
   // opens the print dialog; it clears this once the dialog closes.
   const [printingChart, setPrintingChart] = useState(false);
@@ -305,6 +350,20 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
     flush,
     closeVisit,
   } = useVisit(patientId, visitId);
+  // Nothing entered on the chart yet (no saved or pending entries) — the
+  // "Zobovje: Stalno / Mlečno" choice is offered only then.
+  const chartIsEmpty = [
+    surfacesByFdi,
+    postByFdi,
+    endoByFdi,
+    pocketsBuccalByFdi,
+    pocketsLingualByFdi,
+    gumMarginByFdi,
+    bleedingBuccalByFdi,
+    bleedingLingualByFdi,
+    notesByFdi,
+    bridgeGroupByFdi,
+  ].every((map) => Object.keys(map).length === 0);
 
   // Voice entry (microphone button next to the print icon): recognised
   // phrases change the same chart state as clicks/typing — see
@@ -828,6 +887,39 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
       for (const fdi of fdis) next[fdi] = !allHavePost;
       return next;
     });
+  }
+
+  // Milk teeth (migration 062): what stands at each selected position — the
+  // milk tooth, the permanent one (it has come through; also positions 6–8
+  // once the molars erupt), or nothing yet. Applies to the whole selection;
+  // the milk-tooth choice skips positions 6–8, which have none. When every
+  // position ends up permanent the dentition is empty again — an adult chart.
+  async function handleSetDentition(state: PositionState | null) {
+    const positions = [...new Set(selection.map((t) => positionOf(t.fdi)))];
+    if (positions.length === 0) {
+      setDentitionError('Najprej izberite zob (ali več zob s Ctrl) na karti.');
+      return;
+    }
+    const applicable = state === 'deciduous' ? positions.filter((p) => deciduousAt(p)) : positions;
+    if (applicable.length === 0) {
+      setDentitionError('Na mestih 6–8 ni mlečnih zob.');
+      return;
+    }
+    const next = { ...dentition };
+    for (const p of applicable) {
+      if (state) next[p] = state;
+      else delete next[p];
+    }
+    setDentitionError(null);
+    const result = await saveDentition(next);
+    if (result.error) {
+      setDentitionError(result.error);
+      return;
+    }
+    // Keep the same positions selected, under the number they show now.
+    const shown = (position: string) => (next[position] === 'deciduous' ? deciduousAt(position) ?? position : position);
+    setSelection((prev) => prev.map((t) => ({ ...t, fdi: shown(positionOf(t.fdi)) })));
+    if (selectedFdi) setSelectedFdi(shown(positionOf(selectedFdi)));
   }
 
   function handleSetEndoStage(stage: EndoStage) {
@@ -1482,6 +1574,8 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             postByFdi,
             endoByFdi,
             bridgeGroupByFdi,
+            quadrants: chartQuads,
+            uneruptedFdis: unerupted,
           }}
           notesByFdi={notesByFdi}
           onDone={() => setPrintingChart(false)}
@@ -1953,9 +2047,50 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
             <div className="flex flex-col gap-3 sm:flex-none min-[1400px]:contents">
               <div className="mx-auto w-full max-[1399px]:max-w-[990px] sm:mx-0 sm:flex-none">
                 <DentalChart
+                  quadrants={chartQuads}
+                  uneruptedFdis={unerupted}
                   instructionText={
-                    <div className="flex items-center justify-between gap-3">
-                      <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {chartIsEmpty && (
+                          // A new patient's first chart: adult or child
+                          // dentition (Gregor) — offered until something is
+                          // entered on the chart.
+                          <label className="flex items-center gap-1.5">
+                            Zobovje
+                            <select
+                              value={hasChildDentition(dentition) ? 'child' : 'adult'}
+                              onChange={async (e) => {
+                                setDentitionError(null);
+                                const result = await saveDentition(e.target.value === 'child' ? childDentition() : {});
+                                if (result.error) setDentitionError(result.error);
+                              }}
+                              className="rounded border border-[var(--line,#ccd6d4)] bg-white px-1.5 py-0.5 text-xs text-[var(--ink,#1c2624)]"
+                            >
+                              <option value="adult">Stalno</option>
+                              <option value="child">Mlečno</option>
+                            </select>
+                          </label>
+                        )}
+                        <span>{selectedFdi ? `Izbran zob: ${selectedFdi}` : 'Kliknite na zob za izbiro in urejanje statusa/storitev spodaj.'}</span>
+                        {selectedFdi && hasChildDentition(dentition) && (
+                          <DentitionSwitch
+                            position={positionOf(selectedFdi)}
+                            state={dentition[positionOf(selectedFdi)] ?? null}
+                            onChange={async (state) => {
+                              const position = positionOf(selectedFdi);
+                              const next = { ...dentition };
+                              if (state) next[position] = state;
+                              else delete next[position];
+                              setDentitionError(null);
+                              const result = await saveDentition(next);
+                              if (result.error) setDentitionError(result.error);
+                              else setSelectedFdi(state === 'deciduous' ? deciduousAt(position) ?? position : position);
+                            }}
+                          />
+                        )}
+                        {dentitionError && <span className="text-[var(--danger,#b3261e)]">{dentitionError}</span>}
+                      </span>
                       <span>Za vnos globine žepka ali umika dlesni kliknite eno od točk ob zobeh.</span>
                     </div>
                   }
@@ -2048,6 +2183,8 @@ export function PatientChart({ patientId, patientLabel, patient, onBack, onSignO
                   onTogglePost={handleTogglePost}
                   onSetEndoStage={handleSetEndoStage}
                   bridgeMessage={bridgeMessage}
+                  onSetDentition={hasChildDentition(dentition) ? handleSetDentition : undefined}
+                  dentitionMessage={dentitionError}
                 />
               )}
 
@@ -2323,7 +2460,7 @@ function StoritvePoZobehTab({ patientId, fdi }: { patientId: string; fdi: string
   if (error) return <p className="text-sm text-[var(--danger,#b3261e)]">Napaka pri nalaganju: {error}</p>;
 
   const rows = entries.flatMap((entry) =>
-    describeToothRecord(entry, fdi).map((line) => ({ date: entry.date, line }))
+    describeToothRecord(entry, entry.toothId).map((line) => ({ date: entry.date, line: entry.toothId !== fdi ? `zob ${entry.toothId}: ${line}` : line }))
   );
   if (rows.length === 0) {
     return <p className="text-sm italic text-[var(--muted,#6f7c79)]">Ni zabeleženih storitev za ta zob.</p>;

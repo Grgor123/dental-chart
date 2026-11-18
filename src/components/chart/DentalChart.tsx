@@ -1,10 +1,16 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
-import { UPPER_LEFT, UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT } from '../../data/toothMeta';
+import { PERMANENT_QUADRANTS, type ChartQuadrants } from '../../lib/dentition';
 import type { Surface, SurfaceMap, PocketDepths, GumMargin, BleedingPoints, EndoStage } from '../../types/dental';
 import type { PerioPoint } from './perioStyle';
 import { ArchRow } from './ArchRow';
 
 interface DentalChartProps {
+  /** The tooth number shown at each position (milk teeth — migration 062);
+      default: the 32 permanent teeth. */
+  quadrants?: ChartQuadrants;
+  /** Positions whose permanent tooth hasn't erupted yet — drawn like an
+      impacted tooth, never stored as a status. */
+  uneruptedFdis?: Set<string>;
   /** Fires on every click inside a tooth's tloris square — see TlorisRow.tsx's own onSelect comment for why its value isn't threaded back down anywhere in this tree. */
   onSelect?: (fdi: string) => void;
   surfacesByFdi?: Record<string, SurfaceMap>;
@@ -82,6 +88,8 @@ interface DentalChartProps {
 }
 
 export function DentalChart({
+  quadrants = PERMANENT_QUADRANTS,
+  uneruptedFdis,
   onSelect,
   surfacesByFdi,
   pocketsBuccal,
@@ -188,8 +196,9 @@ export function DentalChart({
         <ArchRow
           label={hideArchLabels ? undefined : 'Zgornja čeljust — 18→11 · 21→28'}
           arch="upper"
-          leftQuadrant={UPPER_LEFT}
-          rightQuadrant={UPPER_RIGHT}
+          leftQuadrant={quadrants.upperLeft}
+          rightQuadrant={quadrants.upperRight}
+          uneruptedFdis={uneruptedFdis}
           onSelect={onSelect}
           surfacesByFdi={surfacesByFdi}
           pocketsBuccal={pocketsBuccal}
@@ -209,8 +218,9 @@ export function DentalChart({
         <ArchRow
           label={hideArchLabels ? undefined : 'Spodnja čeljust — 48→41 · 31→38'}
           arch="lower"
-          leftQuadrant={LOWER_LEFT}
-          rightQuadrant={LOWER_RIGHT}
+          leftQuadrant={quadrants.lowerLeft}
+          rightQuadrant={quadrants.lowerRight}
+          uneruptedFdis={uneruptedFdis}
           onSelect={onSelect}
           surfacesByFdi={surfacesByFdi}
           pocketsBuccal={pocketsBuccal}

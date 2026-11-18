@@ -112,7 +112,13 @@ interface ToothTopViewProps {
   onTargetClick?: (target: Surface | 'all', e: MouseEvent) => void;
   /** Whether the given target is currently in the active selection — drives the highlight overlay drawn on top of that zone/square. */
   isTargetSelected?: (target: Surface | 'all') => boolean;
+  /** A permanent tooth that hasn't erupted yet (milk-teeth patients,
+      migration 062): only an empty light-grey template is drawn. */
+  unerupted?: boolean;
 }
+
+// Light grey for a not-yet-erupted permanent tooth's empty template.
+const UNERUPTED_LINE = '#c3cdca';
 
 type Zone = 'top' | 'right' | 'bottom' | 'left' | 'center';
 
@@ -213,9 +219,55 @@ function regionFillFor(status: ToothStatus): string {
 // (okluzalna); anterior teeth get 4 regions meeting at a short collapsed
 // line instead of a point (no okluzalna) — geometry traced against
 // dental chart template.jpg.
-export function ToothTopView({ fdi, type, arch, surfaces, hasPost, endoStage, onTargetClick, isTargetSelected }: ToothTopViewProps) {
+export function ToothTopView({ fdi, type, arch, surfaces, hasPost, endoStage, onTargetClick, isTargetSelected, unerupted }: ToothTopViewProps) {
   const anterior = type === 'ant';
   const zones = zoneSurfaces(fdi, arch);
+
+  // Not yet erupted (child patient): just the empty square template in light
+  // grey — no findings shown, the whole square is one click target so the
+  // position can still be selected (e.g. to mark it erupted).
+  if (unerupted) {
+    const lx0 = BAND_X;
+    const rx0 = BAND_X + BAND_W;
+    return (
+      <svg viewBox="0 0 28 28" role="img" aria-label={`Top view ${fdi} (še ni izrasel)`}>
+        <rect
+          x={1}
+          y={1}
+          width={26}
+          height={26}
+          fill="none"
+          stroke={UNERUPTED_LINE}
+          strokeWidth={LINE_WIDTH}
+          style={{ pointerEvents: 'all', cursor: onTargetClick ? 'pointer' : undefined }}
+          onClick={(e) => onTargetClick?.('all', e)}
+        />
+        {anterior ? (
+          <path
+            d={`M1,1 L${lx0},${MID_Y} M27,1 L${rx0},${MID_Y} M27,27 L${rx0},${MID_Y} M1,27 L${lx0},${MID_Y} M${lx0},${MID_Y} L${rx0},${MID_Y}`}
+            stroke={UNERUPTED_LINE}
+            strokeWidth={LINE_WIDTH}
+            fill="none"
+            style={{ pointerEvents: 'none' }}
+          />
+        ) : (
+          <>
+            <path
+              d={`M1,1 L${BAND_X},${BAND_Y} M27,1 L${rx0},${BAND_Y} M27,27 L${rx0},${BAND_Y + BAND_H} M1,27 L${BAND_X},${BAND_Y + BAND_H}`}
+              stroke={UNERUPTED_LINE}
+              strokeWidth={LINE_WIDTH}
+              fill="none"
+              style={{ pointerEvents: 'none' }}
+            />
+            <rect x={BAND_X} y={BAND_Y} width={BAND_W} height={BAND_H} fill="none" stroke={UNERUPTED_LINE} strokeWidth={LINE_WIDTH} style={{ pointerEvents: 'none' }} />
+          </>
+        )}
+        {isTargetSelected?.('all') && (
+          <rect x={1} y={1} width={26} height={26} fill={SELECTED_COLOR} fillOpacity={0.28} stroke="none" style={{ pointerEvents: 'none' }} />
+        )}
+      </svg>
+    );
+  }
 
   const wholeToothStatus = surfaces?.all;
 

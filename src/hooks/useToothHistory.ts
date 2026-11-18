@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { TOOTH_META, deciduousAt } from '../data/toothMeta';
 import type { SurfaceMap, EndoStage } from '../types/dental';
 
 // One tooth_records row for this tooth, from one of this patient's visits —
@@ -11,6 +12,9 @@ import type { SurfaceMap, EndoStage } from '../types/dental';
 // is a reasonable follow-up, not required for this to be useful today).
 export interface ToothHistoryEntry {
   visitId: string;
+  /** Which tooth this record is for — the position's milk tooth and its
+      permanent successor share one history (54 then 14, migration 062). */
+  toothId: string;
   /** visits.date — when this visit was opened. Only as accurate as closing itself: a visit that stayed open across several real calendar days (the common case before closing was wired up) still shows its FIRST day here. */
   date: string;
   /** Whether this entry belongs to the patient's current, still-open visit — lets the UI say "today (v teku)" instead of implying it's finished history. */
@@ -32,6 +36,13 @@ export interface ToothHistoryEntry {
 //
 // Every Supabase call lives here, not in ToothDetailPanel.tsx directly, per
 // CLAUDE.md's own "Coding Conventions" rule.
+/** The teeth that share a chart position: a milk tooth and its successor. */
+function positionTeeth(fdi: string): string[] {
+  const position = TOOTH_META[fdi]?.positionFdi ?? fdi;
+  const milk = deciduousAt(position);
+  return milk ? [position, milk] : [position];
+}
+
 export function useToothHistory(patientId: string, fdi: string) {
   const [entries, setEntries] = useState<ToothHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,8 +60,8 @@ export function useToothHistory(patientId: string, fdi: string) {
       // every tooth_records row regardless of whose patient it belongs to).
       const { data, error: fetchError } = await supabase
         .from('tooth_records')
-        .select('surfaces, post, endo, notes, visits!inner(id, date, closed_at, patient_id)')
-        .eq('tooth_id', fdi)
+        .select('tooth_id, surfaces, post, endo, notes, visits!inner(id, date, closed_at, patient_id)')
+        .in('tooth_id', positionTeeth(fdi))
         .eq('visits.patient_id', patientId)
         .order('date', { foreignTable: 'visits', ascending: false });
       if (cancelled) return;
@@ -66,6 +77,7 @@ export function useToothHistory(patientId: string, fdi: string) {
         const visit = row.visits as unknown as { id: string; date: string; closed_at: string | null };
         return {
           visitId: visit.id,
+          toothId: row.tooth_id as string,
           date: visit.date,
           closedAt: visit.closed_at,
           surfaces: row.surfaces && Object.keys(row.surfaces).length > 0 ? (row.surfaces as SurfaceMap) : null,

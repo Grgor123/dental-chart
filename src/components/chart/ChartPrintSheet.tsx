@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import { createPortal } from 'react-dom';
-import { ALL_FDI } from '../../data/toothMeta';
+import { ALL_FDI_WITH_DECIDUOUS } from '../../data/toothMeta';
 import { DentalChart } from './DentalChart';
 import { StatusLegend } from '../ui/StatusLegend';
 
@@ -24,6 +24,9 @@ type ChartData = Pick<
   | 'postByFdi'
   | 'endoByFdi'
   | 'bridgeGroupByFdi'
+  // Milk teeth (migration 062): the numbers shown per position.
+  | 'quadrants'
+  | 'uneruptedFdis'
 >;
 
 export interface ChartPrintPatient {
@@ -98,7 +101,7 @@ export function ChartPrintSheet({ practiceName, patient, chart, notesByFdi, onDo
     };
   }, [fit]);
 
-  const notes = ALL_FDI.filter((fdi) => notesByFdi[fdi]?.trim()).map((fdi) => [fdi, notesByFdi[fdi].trim()] as const);
+  const notes = ALL_FDI_WITH_DECIDUOUS.filter((fdi) => notesByFdi[fdi]?.trim()).map((fdi) => [fdi, notesByFdi[fdi].trim()] as const);
   const printedOn = new Date().toLocaleDateString('sl-SI');
   const details = [
     `Datum rojstva: ${patient.dob ? formatDate(patient.dob) : '—'}`,

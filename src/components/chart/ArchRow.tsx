@@ -10,6 +10,9 @@ import { TlorisRow, isProsthesisLink } from './TlorisRow';
 import { NumberRow } from './NumberRow';
 
 interface ArchRowProps {
+  /** Positions not yet erupted (milk-teeth patients) — only a light-grey
+      tloris template, no side view. */
+  uneruptedFdis?: Set<string>;
   /** Omit (or pass undefined) to skip the label entirely — see DentalChart.tsx's own hideArchLabels prop. */
   label?: string;
   arch: Arch;
@@ -56,6 +59,7 @@ export function ArchRow({
   isFdiSelected,
   onPerioPointClick,
   focusedPerioPoint,
+  uneruptedFdis,
 }: ArchRowProps) {
   const statuses: Record<string, ToothStatus> = {};
   if (surfacesByFdi) {
@@ -63,6 +67,12 @@ export function ArchRow({
       if (surfaces.all) statuses[fdi] = surfaces.all;
     }
   }
+  // A permanent tooth not yet through the gum (child patients, migration 062)
+  // counts as 'impacted' for the perio rows (no probing, flat gumline) —
+  // display only, never stored. It isn't drawn like one, though: no side
+  // view, just a light-grey tloris template (Gregor).
+  if (uneruptedFdis) for (const fdi of uneruptedFdis) statuses[fdi] = 'impacted';
+  const archFdis = [...leftQuadrant, ...rightQuadrant].filter((fdi) => !uneruptedFdis?.has(fdi));
 
   // The two quadrants meet at the arch's own midline — a prosthesis run can
   // cross it too (e.g. 41-31, or a prosthesis_crown tooth like 42 chained
@@ -120,6 +130,7 @@ export function ArchRow({
       <div className="relative flex min-w-max items-start" style={{ gap: `${COLUMN_GAP}px` }}>
         <QuadrantBlock
           fdis={leftQuadrant}
+          archFdis={archFdis}
           arch={arch}
           onSelect={onSelect}
           surfacesByFdi={surfacesByFdi}
@@ -139,6 +150,7 @@ export function ArchRow({
           isFdiSelected={isFdiSelected}
           onPerioPointClick={onPerioPointClick}
           focusedPerioPoint={focusedPerioPoint}
+          uneruptedFdis={uneruptedFdis}
         />
         <div
           className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-[var(--ink,#1c2624)] opacity-60"
@@ -146,6 +158,7 @@ export function ArchRow({
         />
         <QuadrantBlock
           fdis={rightQuadrant}
+          archFdis={archFdis}
           arch={arch}
           onSelect={onSelect}
           surfacesByFdi={surfacesByFdi}
@@ -165,6 +178,7 @@ export function ArchRow({
           isFdiSelected={isFdiSelected}
           onPerioPointClick={onPerioPointClick}
           focusedPerioPoint={focusedPerioPoint}
+          uneruptedFdis={uneruptedFdis}
         />
       </div>
     </div>
@@ -173,6 +187,10 @@ export function ArchRow({
 
 interface QuadrantBlockProps {
   fdis: readonly string[];
+  /** Both quadrants of the arch — the perio graph sizes its rows (and so the
+      gumline's height) from the whole arch, so the two halves line up even
+      when one side has milk teeth and the other permanent ones. */
+  archFdis: readonly string[];
   arch: Arch;
   onSelect?: (fdi: string) => void;
   surfacesByFdi?: Record<string, SurfaceMap>;
@@ -196,6 +214,7 @@ interface QuadrantBlockProps {
   isFdiSelected?: (fdi: string) => boolean;
   onPerioPointClick?: (point: PerioPoint) => void;
   focusedPerioPoint?: PerioPoint | null;
+  uneruptedFdis?: Set<string>;
 }
 
 // Both views for a whole quadrant. Per Monika's request, pocket depth needs
@@ -221,6 +240,7 @@ interface QuadrantBlockProps {
 // and is no longer accurate if referenced elsewhere as "innermost."
 function QuadrantBlock({
   fdis,
+  archFdis,
   arch,
   onSelect,
   surfacesByFdi,
@@ -242,6 +262,7 @@ function QuadrantBlock({
   isFdiSelected,
   onPerioPointClick,
   focusedPerioPoint,
+  uneruptedFdis,
 }: QuadrantBlockProps) {
   const topPockets = arch === 'upper' ? pocketsBuccal : pocketsLingual;
   const bottomPockets = arch === 'upper' ? pocketsLingual : pocketsBuccal;
@@ -256,12 +277,14 @@ function QuadrantBlock({
   const graph = (
     <PerioGraphRow
       fdis={fdis}
+      scaleFdis={archFdis}
       arch={arch}
       gumMargin={gumMargin}
       statuses={statuses}
       onPointClick={onPerioPointClick}
       focusedPoint={focusedPerioPoint}
       onSelect={onSelect}
+      hiddenFdis={uneruptedFdis}
     />
   );
   const tloris = (
@@ -276,6 +299,7 @@ function QuadrantBlock({
       onTargetClick={onTargetClick}
       isTargetSelected={isTargetSelected}
       isFdiSelected={isFdiSelected}
+      uneruptedFdis={uneruptedFdis}
     />
   );
   // The dental post triangle points outward from the tloris square's own
