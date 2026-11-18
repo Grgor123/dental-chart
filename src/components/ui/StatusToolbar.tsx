@@ -191,9 +191,9 @@ export function StatusToolbar({
           internally (see CLAUDE.md's "Uniform service presentation"
           note). */}
       {onSetDentition && (
-        <div className="flex flex-col gap-1.5 border-b border-[var(--line,#ccd6d4)] pb-2.5">
-          <span className="text-xs font-semibold text-[var(--ink,#1c2624)]">Zobovje — menjava zob</span>
-          <div role="group" aria-label="Zobovje" className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-[var(--line,#ccd6d4)] pb-2.5">
+          <span className="text-xs font-semibold text-[var(--ink,#1c2624)]">Zobovje — menjava zob:</span>
+          <div role="group" aria-label="Zobovje" className="ml-auto flex flex-wrap justify-end gap-1.5">
             {DENTITION_ACTIONS.map((a) => (
               <button
                 key={a.label}
@@ -206,7 +206,7 @@ export function StatusToolbar({
               </button>
             ))}
           </div>
-          {dentitionMessage && <p className="text-xs text-[var(--danger,#b3261e)]">{dentitionMessage}</p>}
+          {dentitionMessage && <p className="w-full text-right text-xs text-[var(--danger,#b3261e)]">{dentitionMessage}</p>}
         </div>
       )}
       <div role="group" aria-label="Izberite status" className="flex flex-wrap gap-1.5">
